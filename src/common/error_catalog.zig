@@ -61,6 +61,21 @@ pub const parser = struct {
     pub const invalid_include_stmt_syntax = ErrorInfo{ .code = "CF2035", .message = "invalid INCLUDE statement syntax" };
     pub const invalid_percent_actual_syntax = ErrorInfo{ .code = "CF2036", .message = "invalid percent-actual argument syntax" };
     pub const invalid_io_stmt_syntax = ErrorInfo{ .code = "CF2037", .message = "invalid I/O statement syntax" };
+    pub const invalid_attribute_stmt_syntax = ErrorInfo{ .code = "CF2038", .message = "invalid attribute declaration statement syntax" };
+    pub const invalid_bind_entity_stmt_syntax = ErrorInfo{ .code = "CF2039", .message = "invalid BIND entity declaration syntax" };
+    pub const invalid_character_decl_syntax = ErrorInfo{ .code = "CF2040", .message = "invalid CHARACTER declaration syntax" };
+    pub const invalid_coarray_syntax = ErrorInfo{ .code = "CF2041", .message = "invalid coarray syntax" };
+    pub const invalid_do_concurrent_syntax = ErrorInfo{ .code = "CF2042", .message = "invalid DO CONCURRENT syntax" };
+    pub const invalid_enum_stmt_syntax = ErrorInfo{ .code = "CF2043", .message = "invalid ENUM statement syntax" };
+    pub const invalid_component_substring_syntax = ErrorInfo{ .code = "CF2044", .message = "invalid component substring syntax" };
+    pub const invalid_defined_operator_syntax = ErrorInfo{ .code = "CF2045", .message = "invalid defined-operator syntax" };
+    pub const invalid_namelist_stmt_syntax = ErrorInfo{ .code = "CF2046", .message = "invalid NAMELIST statement syntax" };
+    pub const invalid_implicit_stmt_syntax = ErrorInfo{ .code = "CF2047", .message = "invalid IMPLICIT statement syntax" };
+    pub const invalid_common_stmt_syntax = ErrorInfo{ .code = "CF2048", .message = "invalid COMMON statement syntax" };
+    pub const invalid_forall_syntax = ErrorInfo{ .code = "CF2049", .message = "invalid FORALL syntax" };
+    pub const invalid_select_rank_syntax = ErrorInfo{ .code = "CF2050", .message = "invalid SELECT RANK syntax" };
+    pub const invalid_procedure_decl_syntax = ErrorInfo{ .code = "CF2051", .message = "invalid PROCEDURE declaration syntax" };
+    pub const invalid_derived_type_decl_syntax = ErrorInfo{ .code = "CF2052", .message = "invalid derived-type declaration syntax" };
     pub const failed_to_understand = ErrorInfo{ .code = "CF2099", .message = "parser failed to understand source" };
 };
 
@@ -144,6 +159,24 @@ pub const semantic = struct {
     pub const function_result_allocatable_attr_mismatch = ErrorInfo{ .code = "CF3177", .message = "function result ALLOCATABLE attribute mismatch" };
     pub const function_result_contiguous_attr_mismatch = ErrorInfo{ .code = "CF3178", .message = "function result CONTIGUOUS attribute mismatch" };
     pub const function_result_procedure_pointer_mismatch = ErrorInfo{ .code = "CF3179", .message = "function result PROCEDURE POINTER mismatch" };
+    pub const assignment_requires_allocatable_or_pointer = ErrorInfo{ .code = "CF3180", .message = "assignment target must be ALLOCATABLE or POINTER" };
+    pub const pointer_assignment_requires_pointer = ErrorInfo{ .code = "CF3181", .message = "pointer association requires POINTER entity" };
+    pub const select_type_requires_polymorphic = ErrorInfo{ .code = "CF3182", .message = "selector must be polymorphic" };
+    pub const invalid_variable_definition_context = ErrorInfo{ .code = "CF3183", .message = "invalid variable definition context" };
+    pub const do_variable_requires_scalar_integer = ErrorInfo{ .code = "CF3184", .message = "DO variable must be scalar INTEGER" };
+    pub const assignment_requires_pointer = ErrorInfo{ .code = "CF3185", .message = "assignment target must be a POINTER" };
+    pub const double_precision_required = ErrorInfo{ .code = "CF3186", .message = "double precision entity required" };
+    pub const invalid_class_is_specification = ErrorInfo{ .code = "CF3187", .message = "invalid CLASS IS specification" };
+    pub const assignment_requires_allocatable = ErrorInfo{ .code = "CF3188", .message = "assignment target must be ALLOCATABLE" };
+    pub const invalid_allocate_designator_subscript = ErrorInfo{ .code = "CF3189", .message = "invalid subscript in allocation designator" };
+    pub const invalid_associate_selector_subscript = ErrorInfo{ .code = "CF3190", .message = "invalid subscript in ASSOCIATE selector" };
+    pub const invalid_pointer_designator_subscript = ErrorInfo{ .code = "CF3191", .message = "invalid subscript in pointer association designator" };
+    pub const invalid_data_reference_subscript = ErrorInfo{ .code = "CF3192", .message = "invalid subscript in data reference" };
+    pub const parameter_named_constant_not_folded = ErrorInfo{ .code = "CF3193", .message = "PARAMETER named constant expression not folded" };
+    pub const parameter_array_inquiry_not_folded = ErrorInfo{ .code = "CF3194", .message = "PARAMETER array inquiry expression not folded" };
+    pub const parameter_array_constructor_not_folded = ErrorInfo{ .code = "CF3195", .message = "PARAMETER array constructor expression not folded" };
+    pub const parameter_conversion_not_folded = ErrorInfo{ .code = "CF3196", .message = "PARAMETER conversion expression not folded" };
+    pub const parameter_intrinsic_not_folded = ErrorInfo{ .code = "CF3197", .message = "PARAMETER intrinsic expression not folded" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -339,6 +372,21 @@ pub const doc_entries = [_]DocEntry{
     doc(parser.invalid_include_stmt_syntax, "parser"),
     doc(parser.invalid_percent_actual_syntax, "parser"),
     doc(parser.invalid_io_stmt_syntax, "parser"),
+    doc(parser.invalid_attribute_stmt_syntax, "parser"),
+    doc(parser.invalid_bind_entity_stmt_syntax, "parser"),
+    doc(parser.invalid_character_decl_syntax, "parser"),
+    doc(parser.invalid_coarray_syntax, "parser"),
+    doc(parser.invalid_do_concurrent_syntax, "parser"),
+    doc(parser.invalid_enum_stmt_syntax, "parser"),
+    doc(parser.invalid_component_substring_syntax, "parser"),
+    doc(parser.invalid_defined_operator_syntax, "parser"),
+    doc(parser.invalid_namelist_stmt_syntax, "parser"),
+    doc(parser.invalid_implicit_stmt_syntax, "parser"),
+    doc(parser.invalid_common_stmt_syntax, "parser"),
+    doc(parser.invalid_forall_syntax, "parser"),
+    doc(parser.invalid_select_rank_syntax, "parser"),
+    doc(parser.invalid_procedure_decl_syntax, "parser"),
+    doc(parser.invalid_derived_type_decl_syntax, "parser"),
     doc(parser.failed_to_understand, "parser"),
     doc(semantic.missing_unit_scope, "semantic"),
     doc(semantic.missing_scope, "semantic"),
@@ -419,6 +467,15 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.function_result_allocatable_attr_mismatch, "semantic"),
     doc(semantic.function_result_contiguous_attr_mismatch, "semantic"),
     doc(semantic.function_result_procedure_pointer_mismatch, "semantic"),
+    doc(semantic.assignment_requires_allocatable_or_pointer, "semantic"),
+    doc(semantic.pointer_assignment_requires_pointer, "semantic"),
+    doc(semantic.select_type_requires_polymorphic, "semantic"),
+    doc(semantic.invalid_variable_definition_context, "semantic"),
+    doc(semantic.do_variable_requires_scalar_integer, "semantic"),
+    doc(semantic.assignment_requires_pointer, "semantic"),
+    doc(semantic.double_precision_required, "semantic"),
+    doc(semantic.invalid_class_is_specification, "semantic"),
+    doc(semantic.assignment_requires_allocatable, "semantic"),
     doc(semantic.generic, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),

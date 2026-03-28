@@ -1,7 +1,7 @@
-error[CF3108]: in variable definition context
+error[CF3183]: in variable definition context
   --> tests/diagnostic_golden_cc/semantic_variable_definition_context.f90:7:12
    = stage: semantic
-   = help: see docs/errors.md#CF3108
+   = help: see docs/errors.md#CF3183
   |
 7 |   call foo(1)
   |            ^ non-definable actual argument here

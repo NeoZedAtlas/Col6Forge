@@ -223,6 +223,81 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: parser
 - Default message: invalid I/O statement syntax
 
+## CF2038
+
+- Stage: parser
+- Default message: invalid attribute declaration statement syntax
+
+## CF2039
+
+- Stage: parser
+- Default message: invalid BIND entity declaration syntax
+
+## CF2040
+
+- Stage: parser
+- Default message: invalid CHARACTER declaration syntax
+
+## CF2041
+
+- Stage: parser
+- Default message: invalid coarray syntax
+
+## CF2042
+
+- Stage: parser
+- Default message: invalid DO CONCURRENT syntax
+
+## CF2043
+
+- Stage: parser
+- Default message: invalid ENUM statement syntax
+
+## CF2044
+
+- Stage: parser
+- Default message: invalid component substring syntax
+
+## CF2045
+
+- Stage: parser
+- Default message: invalid defined-operator syntax
+
+## CF2046
+
+- Stage: parser
+- Default message: invalid NAMELIST statement syntax
+
+## CF2047
+
+- Stage: parser
+- Default message: invalid IMPLICIT statement syntax
+
+## CF2048
+
+- Stage: parser
+- Default message: invalid COMMON statement syntax
+
+## CF2049
+
+- Stage: parser
+- Default message: invalid FORALL syntax
+
+## CF2050
+
+- Stage: parser
+- Default message: invalid SELECT RANK syntax
+
+## CF2051
+
+- Stage: parser
+- Default message: invalid PROCEDURE declaration syntax
+
+## CF2052
+
+- Stage: parser
+- Default message: invalid derived-type declaration syntax
+
 ## CF2099
 
 - Stage: parser
@@ -622,6 +697,51 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 
 - Stage: semantic
 - Default message: function result PROCEDURE POINTER mismatch
+
+## CF3180
+
+- Stage: semantic
+- Default message: assignment target must be ALLOCATABLE or POINTER
+
+## CF3181
+
+- Stage: semantic
+- Default message: pointer association requires POINTER entity
+
+## CF3182
+
+- Stage: semantic
+- Default message: selector must be polymorphic
+
+## CF3183
+
+- Stage: semantic
+- Default message: invalid variable definition context
+
+## CF3184
+
+- Stage: semantic
+- Default message: DO variable must be scalar INTEGER
+
+## CF3185
+
+- Stage: semantic
+- Default message: assignment target must be a POINTER
+
+## CF3186
+
+- Stage: semantic
+- Default message: double precision entity required
+
+## CF3187
+
+- Stage: semantic
+- Default message: invalid CLASS IS specification
+
+## CF3188
+
+- Stage: semantic
+- Default message: assignment target must be ALLOCATABLE
 
 ## CF3199
 

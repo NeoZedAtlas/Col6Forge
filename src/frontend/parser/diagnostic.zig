@@ -332,6 +332,19 @@ fn refineParseCode(code: []const u8, message: []const u8, line_text: []const u8)
         return catalog.parser.invalid_visibility_statement.code;
     }
     if (std.ascii.indexOfIgnoreCase(message, "Syntax error in ABSTRACT INTERFACE statement") != null) return catalog.parser.invalid_abstract_interface_stmt_syntax.code;
+    if (isAttributeStmtLine(line_text)) return catalog.parser.invalid_attribute_stmt_syntax.code;
+    if (isBindEntityStmtLine(line_text)) return catalog.parser.invalid_bind_entity_stmt_syntax.code;
+    if (isCharacterDeclLine(line_text)) return catalog.parser.invalid_character_decl_syntax.code;
+    if (hasCoarraySyntax(line_text)) return catalog.parser.invalid_coarray_syntax.code;
+    if (isDoConcurrentLine(line_text)) return catalog.parser.invalid_do_concurrent_syntax.code;
+    if (isEnumStmtLine(line_text)) return catalog.parser.invalid_enum_stmt_syntax.code;
+    if (hasComponentSubstringSyntax(line_text)) return catalog.parser.invalid_component_substring_syntax.code;
+    if (hasDefinedOperatorSyntax(line_text)) return catalog.parser.invalid_defined_operator_syntax.code;
+    if (isNamelistStmtLine(line_text)) return catalog.parser.invalid_namelist_stmt_syntax.code;
+    if (isImplicitStmtLine(line_text)) return catalog.parser.invalid_implicit_stmt_syntax.code;
+    if (isCommonStmtLine(line_text)) return catalog.parser.invalid_common_stmt_syntax.code;
+    if (isForallStmtLine(line_text)) return catalog.parser.invalid_forall_syntax.code;
+    if (isSelectRankStmtLine(line_text)) return catalog.parser.invalid_select_rank_syntax.code;
     if (isEndStmtLine(line_text)) return catalog.parser.invalid_end_stmt_syntax.code;
     if (isNamedConstructStmtLine(line_text)) return catalog.parser.invalid_named_construct_stmt_syntax.code;
     if (startsWithWord(line_text, "include")) return catalog.parser.invalid_include_stmt_syntax.code;
@@ -340,6 +353,8 @@ fn refineParseCode(code: []const u8, message: []const u8, line_text: []const u8)
     if (isOperatorDeclLine(line_text, message)) return catalog.parser.unexpected_token_operator_decl.code;
     if (isProcedureHeadLine(line_text)) return catalog.parser.unexpected_token_proc_head.code;
     if (isComponentDeclLine(line_text, message)) return catalog.parser.unexpected_token_component_decl.code;
+    if (isProcedureDeclLine(line_text)) return catalog.parser.invalid_procedure_decl_syntax.code;
+    if (isDerivedTypeDeclLine(line_text)) return catalog.parser.invalid_derived_type_decl_syntax.code;
     if (isDeclarationHeadLine(line_text)) return catalog.parser.unexpected_token_decl_head.code;
     return catalog.parser.unexpected_token_stmt_recovery.code;
 }
@@ -429,6 +444,76 @@ fn isIoStmtLine(line_text: []const u8) bool {
         startsWithWord(line_text, "rewind") or
         startsWithWord(line_text, "backspace") or
         startsWithWord(line_text, "endfile");
+}
+
+fn isAttributeStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "asynchronous") or
+        startsWithWord(line_text, "target") or
+        startsWithWord(line_text, "value") or
+        startsWithWord(line_text, "volatile") or
+        startsWithWord(line_text, "protected");
+}
+
+fn isBindEntityStmtLine(line_text: []const u8) bool {
+    return std.ascii.startsWithIgnoreCase(std.mem.trimLeft(u8, line_text, " \t"), "bind(");
+}
+
+fn isCharacterDeclLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "character(") or
+        startsWithWord(line_text, "character*");
+}
+
+fn hasCoarraySyntax(line_text: []const u8) bool {
+    return std.mem.indexOfScalar(u8, line_text, '[') != null and
+        std.mem.indexOfScalar(u8, line_text, ']') != null;
+}
+
+fn isDoConcurrentLine(line_text: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(line_text, "do concurrent") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "do, concurrent") != null;
+}
+
+fn isEnumStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "enum");
+}
+
+fn hasComponentSubstringSyntax(line_text: []const u8) bool {
+    return std.mem.indexOf(u8, line_text, ")(") != null and
+        std.mem.indexOfScalar(u8, line_text, '%') != null;
+}
+
+fn hasDefinedOperatorSyntax(line_text: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(line_text, ".op.") != null;
+}
+
+fn isNamelistStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "namelist");
+}
+
+fn isImplicitStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "implicit");
+}
+
+fn isCommonStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "common");
+}
+
+fn isForallStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "forall");
+}
+
+fn isSelectRankStmtLine(line_text: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(line_text, "select rank") != null;
+}
+
+fn isProcedureDeclLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "procedure");
+}
+
+fn isDerivedTypeDeclLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "type(") or
+        startsWithWord(line_text, "type (") or
+        (startsWithWord(line_text, "type") and containsDoubleColon(line_text));
 }
 
 fn startsWithWord(line_text: []const u8, keyword: []const u8) bool {
@@ -544,4 +629,92 @@ test "parser diagnostic refines I/O statement syntax" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.parser.invalid_io_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines attribute statement syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(12, 16, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  asynchronous :: a");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_attribute_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines coarray syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(13, 21, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  allocate(o%i(4, 5)[*], source=6)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_coarray_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines do concurrent syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(14, 6, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  do concurrent (i = 1:10)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_do_concurrent_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines namelist statement syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(15, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  namelist /nml/ x");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_namelist_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines implicit statement syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(16, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  implicit real(kind=8) (a-h,o-z)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_implicit_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines forall syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(17, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  forall (i=1:n) a(i) = i");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_forall_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines procedure declaration syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(18, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  procedure(real), pointer :: p");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_procedure_decl_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines derived type declaration syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(19, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  type(t) :: x");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_derived_type_decl_syntax.code, diag.code);
 }

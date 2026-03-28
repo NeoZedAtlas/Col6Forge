@@ -82,7 +82,7 @@ pub const Bag = struct {
         helps: []const common_diag.DiagnosticMessage,
         secondary_spans: []const common_diag.DiagnosticSpan,
     ) void {
-        const refined_code = refineSemanticCode(code, message);
+        const refined_code = refineSemanticCode(code, message, line_text);
         const owned = self.makeOwned(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
         if (self.items.items.len != 0 and semanticDiagnosticEqual(self.items.items[self.items.items.len - 1], owned)) {
             self.freeOwned(owned);
@@ -358,7 +358,7 @@ pub fn setStructured(
     helps: []const common_diag.DiagnosticMessage,
     secondary_spans: []const common_diag.DiagnosticSpan,
 ) void {
-    const refined_code = refineSemanticCode(code, message);
+    const refined_code = refineSemanticCode(code, message, line_text);
     const next = makeCompatStorage(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
     storage.clear();
     storage = next;
@@ -423,12 +423,18 @@ pub fn releaseTakenFallbackSource(_: FallbackSource) void {
     fallback_storage.clear();
 }
 
-fn refineSemanticCode(code: []const u8, message: []const u8) []const u8 {
+fn refineSemanticCode(code: []const u8, message: []const u8, line_text: []const u8) []const u8 {
     if (std.mem.eql(u8, code, catalog.semantic.invalid_argument_count.code)) {
         return refineInvalidArgumentCode(message);
     }
     if (std.mem.eql(u8, code, catalog.semantic.invalid_subscript.code)) {
-        return refineInvalidSubscriptCode(message);
+        return refineInvalidSubscriptCode(message, line_text);
+    }
+    if (std.mem.eql(u8, code, catalog.semantic.assignment_type_mismatch.code)) {
+        return refineAssignmentMismatchCode(message);
+    }
+    if (std.mem.eql(u8, code, catalog.semantic.parameter_not_constant.code)) {
+        return refineParameterNotConstantCode(message, line_text);
     }
     return code;
 }
@@ -508,7 +514,13 @@ fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     return codeForFallback(catalog.semantic.invalid_argument_count.code);
 }
 
-fn refineInvalidSubscriptCode(message: []const u8) []const u8 {
+fn refineInvalidSubscriptCode(message: []const u8, line_text: []const u8) []const u8 {
+    if (std.mem.eql(u8, message, catalog.semantic.invalid_subscript.message)) {
+        if (containsOneOf(line_text, &.{ "ALLOCATE", "allocate", "DEALLOCATE", "deallocate" })) return catalog.semantic.invalid_allocate_designator_subscript.code;
+        if (containsOneOf(line_text, &.{ "ASSOCIATE", "associate" })) return catalog.semantic.invalid_associate_selector_subscript.code;
+        if (std.mem.indexOf(u8, line_text, "=>") != null) return catalog.semantic.invalid_pointer_designator_subscript.code;
+        return catalog.semantic.invalid_data_reference_subscript.code;
+    }
     if (std.mem.indexOf(u8, message, "count") != null) return catalog.semantic.invalid_subscript_count.code;
     if (std.mem.indexOf(u8, message, "integer") != null or std.mem.indexOf(u8, message, "INTEGER") != null) return catalog.semantic.invalid_subscript_type.code;
     if (std.mem.indexOf(u8, message, "triplet") != null or std.mem.indexOf(u8, message, "section") != null) return catalog.semantic.invalid_subscript_section.code;
@@ -525,6 +537,53 @@ fn refineInvalidSubscriptCode(message: []const u8) []const u8 {
     }
     if (std.mem.indexOf(u8, message, "subscriptable") != null) return catalog.semantic.invalid_subscript_target.code;
     return codeForFallback(catalog.semantic.invalid_subscript.code);
+}
+
+fn refineAssignmentMismatchCode(message: []const u8) []const u8 {
+    if (std.mem.eql(u8, message, catalog.semantic.assignment_type_mismatch.message)) {
+        return codeForFallback(catalog.semantic.assignment_type_mismatch.code);
+    }
+    if (std.mem.indexOf(u8, message, "must be ALLOCATABLE or a POINTER") != null) return catalog.semantic.assignment_requires_allocatable_or_pointer.code;
+    if (std.mem.indexOf(u8, message, "Non-POINTER in pointer association context") != null) return catalog.semantic.pointer_assignment_requires_pointer.code;
+    if (std.mem.indexOf(u8, message, "Selector shall be polymorphic") != null) return catalog.semantic.select_type_requires_polymorphic.code;
+    if (std.mem.indexOf(u8, message, "variable definition context") != null) return catalog.semantic.invalid_variable_definition_context.code;
+    if (std.mem.indexOf(u8, message, "DO variable must be a scalar INTEGER") != null) return catalog.semantic.do_variable_requires_scalar_integer.code;
+    if (std.mem.indexOf(u8, message, "must be a POINTER") != null) return catalog.semantic.assignment_requires_pointer.code;
+    if (std.mem.indexOf(u8, message, "must be double precision") != null) return catalog.semantic.double_precision_required.code;
+    if (std.mem.indexOf(u8, message, "error in CLASS IS specification") != null) return catalog.semantic.invalid_class_is_specification.code;
+    if (std.mem.indexOf(u8, message, "must be ALLOCATABLE") != null) return catalog.semantic.assignment_requires_allocatable.code;
+    return codeForFallback(catalog.semantic.assignment_type_mismatch.code);
+}
+
+fn refineParameterNotConstantCode(message: []const u8, line_text: []const u8) []const u8 {
+    if (!isParameterNotConstantMessage(message)) return codeForFallback(catalog.semantic.parameter_not_constant.code);
+
+    if (containsOneOf(line_text, &.{ "= c_", "=C_", "= omp_", "=OMP_" })) return catalog.semantic.parameter_named_constant_not_folded.code;
+    if (containsOneOf(line_text, &.{ "lbound(", "LBOUND(", "ubound(", "UBOUND(", "shape(", "SHAPE(", "size(", "SIZE(" })) {
+        return catalog.semantic.parameter_array_inquiry_not_folded.code;
+    }
+    if (containsOneOf(line_text, &.{ "reshape", "RESHAPE", "(/", "[/" })) return catalog.semantic.parameter_array_constructor_not_folded.code;
+    if ((containsOneOf(line_text, &.{ "real(", "REAL(", "int(", "INT(", "cmplx(", "CMPLX(", "dble(", "DBLE(" })) and
+        containsOneOf(line_text, &.{ "z'", "Z'", "b'", "B'", "o'", "O'" }))
+    {
+        return catalog.semantic.parameter_conversion_not_folded.code;
+    }
+    if (containsOneOf(line_text, &.{ "kind(", "KIND(", "bes", "BES", "trailz(", "TRAILZ(", "leadz(", "LEADZ(", "popcnt(", "POPCNT(", "poppar(", "POPPAR(" })) {
+        return catalog.semantic.parameter_intrinsic_not_folded.code;
+    }
+    return codeForFallback(catalog.semantic.parameter_not_constant.code);
+}
+
+fn isParameterNotConstantMessage(message: []const u8) bool {
+    return std.mem.startsWith(u8, message, "PARAMETER '") and
+        std.mem.endsWith(u8, message, "' value is not a constant expression");
+}
+
+fn containsOneOf(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, haystack, needle) != null) return true;
+    }
+    return false;
 }
 
 fn codeForFallback(code: []const u8) []const u8 {
@@ -619,6 +678,17 @@ test "semantic diagnostic refines invalid component reference" {
     try testing.expectEqualStrings(catalog.semantic.invalid_component_reference.code, diag.code);
 }
 
+test "semantic diagnostic keeps fallback code for generic invalid subscript" {
+    const testing = std.testing;
+
+    clear();
+    set(14, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      call x(1)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_data_reference_subscript.code, diag.code);
+}
+
 test "semantic diagnostic refines missing actual argument" {
     const testing = std.testing;
 
@@ -650,4 +720,125 @@ test "semantic diagnostic refines function result shape mismatch" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.semantic.function_result_shape_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines pointer association requirement" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(17, 3, catalog.semantic.assignment_type_mismatch.code, "must be ALLOCATABLE or a POINTER", "      p => x", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_requires_allocatable_or_pointer.code, diag.code);
+}
+
+test "semantic diagnostic refines selector polymorphic requirement" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(18, 3, catalog.semantic.assignment_type_mismatch.code, "Selector shall be polymorphic", "      select type (x)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.select_type_requires_polymorphic.code, diag.code);
+}
+
+test "semantic diagnostic keeps fallback code for generic assignment mismatch" {
+    const testing = std.testing;
+
+    clear();
+    set(19, 3, catalog.semantic.assignment_type_mismatch.code, catalog.semantic.assignment_type_mismatch.message, "      x = y");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_type_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines allocate designator subscript" {
+    const testing = std.testing;
+
+    clear();
+    set(20, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      allocate(a(i))");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_allocate_designator_subscript.code, diag.code);
+}
+
+test "semantic diagnostic refines associate selector subscript" {
+    const testing = std.testing;
+
+    clear();
+    set(21, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      associate(x => obj%state(i))");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_associate_selector_subscript.code, diag.code);
+}
+
+test "semantic diagnostic refines pointer designator subscript" {
+    const testing = std.testing;
+
+    clear();
+    set(22, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      p => a(i)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_pointer_designator_subscript.code, diag.code);
+}
+
+test "semantic diagnostic refines named constant parameter folding" {
+    const testing = std.testing;
+
+    clear();
+    set(23, 3, catalog.semantic.parameter_not_constant.code, "PARAMETER 'it' value is not a constant expression", "integer, parameter :: it = c_int");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.parameter_named_constant_not_folded.code, diag.code);
+}
+
+test "semantic diagnostic refines array inquiry parameter folding" {
+    const testing = std.testing;
+
+    clear();
+    set(24, 3, catalog.semantic.parameter_not_constant.code, "PARAMETER 'i' value is not a constant expression", "integer, parameter :: i = lbound(arr,1)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.parameter_array_inquiry_not_folded.code, diag.code);
+}
+
+test "semantic diagnostic refines array constructor parameter folding" {
+    const testing = std.testing;
+
+    clear();
+    set(25, 3, catalog.semantic.parameter_not_constant.code, "PARAMETER 'a' value is not a constant expression", "real, parameter :: a = reshape((/(i, i = 1, 9)/), (/3, 3/))");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.parameter_array_constructor_not_folded.code, diag.code);
+}
+
+test "semantic diagnostic refines conversion parameter folding" {
+    const testing = std.testing;
+
+    clear();
+    set(26, 3, catalog.semantic.parameter_not_constant.code, "PARAMETER 'inf' value is not a constant expression", "real, parameter :: inf = real(z'7F800000')");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.parameter_conversion_not_folded.code, diag.code);
+}
+
+test "semantic diagnostic refines intrinsic parameter folding" {
+    const testing = std.testing;
+
+    clear();
+    set(27, 3, catalog.semantic.parameter_not_constant.code, "PARAMETER 'k2' value is not a constant expression", "integer, parameter :: k2 = kind(BESJ0(Qarg1))");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.parameter_intrinsic_not_folded.code, diag.code);
 }
