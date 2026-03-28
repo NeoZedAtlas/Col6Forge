@@ -2,15 +2,45 @@ const std = @import("std");
 const diag = @import("../../common/diagnostic.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const pipeline = @import("mod.zig");
-const diagnostics = @import("diagnostics.zig");
 const runPipelineWithOptions = pipeline.runPipelineWithOptions;
 const runPipelineWithOptionsAndDiagnostics = pipeline.runPipelineWithOptionsAndDiagnostics;
 const runPipelineToWriterWithOptionsAndDiagnostics = pipeline.runPipelineToWriterWithOptionsAndDiagnostics;
-const takeLastDiagnostic = pipeline.takeLastDiagnostic;
-const releaseLastDiagnostic = pipeline.releaseLastDiagnostic;
-const clearLastDiagnostic = diagnostics.clearLastDiagnostic;
-const setLastDiagnostic = diagnostics.setLastDiagnostic;
-const setLastDiagnosticDetailed = diagnostics.setLastDiagnosticDetailed;
+
+const PipelineDiagCapture = struct {
+    bag: diag.Bag,
+
+    fn init(allocator: std.mem.Allocator) PipelineDiagCapture {
+        return .{ .bag = diag.Bag.init(allocator) };
+    }
+
+    fn deinit(self: *PipelineDiagCapture) void {
+        self.bag.deinit();
+    }
+
+    fn expectError(
+        self: *PipelineDiagCapture,
+        allocator: std.mem.Allocator,
+        input_path: []const u8,
+        emit: pipeline.EmitKind,
+        options: pipeline.PipelineOptions,
+        expected_err: anyerror,
+    ) !diag.Diagnostic {
+        self.bag.clear();
+        try std.testing.expectError(
+            expected_err,
+            runPipelineWithOptionsAndDiagnostics(allocator, input_path, emit, options, &self.bag),
+        );
+        return self.bag.take() orelse error.TestExpectedEqual;
+    }
+
+    fn release(self: *PipelineDiagCapture, diag_info: diag.Diagnostic) void {
+        self.bag.release(diag_info);
+    }
+
+    fn expectNone(self: *PipelineDiagCapture) !void {
+        try std.testing.expect(!self.bag.has());
+    }
+};
 
 fn writeTempSourceFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) ![]u8 {
     var file = try tmp.dir.createFile(file_name, .{ .truncate = true });
@@ -37,9 +67,10 @@ test "runPipeline reports parse diagnostics against the original continued sourc
     const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnexpectedToken);
+    defer diag_capture.release(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 8), diag_info.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
@@ -61,9 +92,10 @@ test "runPipeline reports semantic declaration diagnostics against the original 
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_decl_error.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidCharLen, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidCharLen);
+    defer diag_capture.release(diag_info);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
@@ -101,9 +133,10 @@ test "runPipeline compat diagnostic preserves long source lines without truncati
     const file_path = try writeTempSourceFile(&tmp, allocator, "long_diag_line.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnexpectedToken);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqualStrings(long_line[0 .. long_line.len - 1], diag_info.line_text);
@@ -124,9 +157,10 @@ test "runPipeline reports semantic expression diagnostics against the original s
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_expr_error.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArithmeticOperands, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArithmeticOperands);
+    defer diag_capture.release(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_arithmetic_operands.code, diag_info.code);
@@ -148,9 +182,10 @@ test "runPipeline reports semantic duplicate declaration with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_duplicate_decl.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("      REAL A", diag_info.line_text);
     try testing.expectEqualStrings("redeclared here", diag_info.primary_label);
@@ -181,9 +216,10 @@ test "runPipeline reports explicit interface arity mismatch with related source"
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_interface_arity.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("      X=F(1)", diag_info.line_text);
     try testing.expectEqualStrings("call site conflicts here", diag_info.primary_label);
@@ -218,9 +254,10 @@ test "runPipeline reports ambiguous interfaces with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_ambiguous_interfaces.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    module procedure sub_b", diag_info.line_text);
     try testing.expectEqualStrings("ambiguous specific here", diag_info.primary_label);
@@ -262,9 +299,10 @@ test "runPipeline reports ambiguous reference with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_ambiguous_reference.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("  print *, my_fun(a)", diag_info.line_text);
     try testing.expectEqualStrings("ambiguous reference here", diag_info.primary_label);
@@ -307,9 +345,10 @@ test "runPipeline reports declaration-side ambiguous interfaces with multiple re
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_ambiguous_interfaces_multi.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    module procedure sub_c", diag_info.line_text);
     try testing.expectEqualStrings("ambiguous specific here", diag_info.primary_label);
@@ -352,9 +391,10 @@ test "runPipeline reports visible prelude generic specific reuse with related so
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_prelude_interface_reuse.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    subroutine bar(x)", diag_info.line_text);
     try testing.expectEqualStrings("duplicate specific here", diag_info.primary_label);
@@ -387,9 +427,10 @@ test "runPipeline reports mixed generic specific kinds with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_mixed_generic_kinds.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    function fun_b(y)", diag_info.line_text);
     try testing.expectEqualStrings("conflicting specific kind here", diag_info.primary_label);
@@ -417,9 +458,10 @@ test "runPipeline reports non-procedure generic specific with related declaratio
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_non_procedure_specific.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnknownSymbol, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnknownSymbol);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    procedure x", diag_info.line_text);
     try testing.expectEqualStrings("referenced non-procedure here", diag_info.primary_label);
@@ -446,9 +488,10 @@ test "runPipeline reports unknown generic specific procedure" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_unknown_specific_procedure.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnknownSymbol, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnknownSymbol);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    procedure missing_proc", diag_info.line_text);
     try testing.expectEqualStrings("unknown procedure entry here", diag_info.primary_label);
@@ -472,9 +515,10 @@ test "runPipeline reports ABSTRACT INTERFACE bind-name misuse with related end s
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_bind_name.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    subroutine foo() bind(c, name=\"bar\")", diag_info.line_text);
     try testing.expectEqualStrings("invalid BIND(C) NAME here", diag_info.primary_label);
@@ -504,9 +548,10 @@ test "runPipeline reports ABSTRACT INTERFACE module procedure misuse" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_module_procedure.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    module procedure foo", diag_info.line_text);
     try testing.expectEqualStrings("invalid MODULE PROCEDURE here", diag_info.primary_label);
@@ -531,9 +576,10 @@ test "runPipeline reports deferred-shape interface function result" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_deferred_result_shape.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    function foo() result(r)", diag_info.line_text);
     try testing.expectEqualStrings("invalid deferred-shape result here", diag_info.primary_label);
@@ -566,9 +612,10 @@ test "runPipeline reports known procedure result type mismatch with related visi
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_known_result_type_mismatch.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("    real function f(x)", diag_info.line_text);
     try testing.expectEqualStrings("function result type conflicts here", diag_info.primary_label);
@@ -601,9 +648,10 @@ test "runPipeline reports interface derived type use before later host definitio
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_interface_late_derived_type.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnexpectedTypeDecl, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnexpectedTypeDecl);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("    subroutine foo(x)", diag_info.line_text);
     try testing.expectEqualStrings("uses derived type before definition here", diag_info.primary_label);
@@ -638,9 +686,10 @@ test "runPipeline reports call-site ambiguous interfaces with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_call_ambiguous_interfaces.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.DuplicateDeclaration);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("  call foo(1)", diag_info.line_text);
     try testing.expectEqualStrings("call site conflicts here", diag_info.primary_label);
@@ -674,9 +723,10 @@ test "runPipeline reports procedure actual mismatch with related interface sourc
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_actual_type_mismatch.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("  call foo(1.0)", diag_info.line_text);
     try testing.expectEqualStrings("actual argument conflicts here", diag_info.primary_label);
@@ -703,9 +753,10 @@ test "runPipeline reports implicit external type mismatch with related previous 
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_implicit_external_type_mismatch.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("  x = foo(1.0)", diag_info.line_text);
     try testing.expectEqualStrings("implicit external actual conflicts here", diag_info.primary_label);
@@ -732,9 +783,10 @@ test "runPipeline reports implicit external argument-count mismatch with related
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_implicit_external_arity_mismatch.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("  x = foo(1, 2)", diag_info.line_text);
     try testing.expectEqualStrings("implicit external call conflicts here", diag_info.primary_label);
@@ -771,9 +823,10 @@ test "runPipeline reports procedure actual mismatch with actual procedure declar
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_actual_procedure_result_mismatch.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expectEqualStrings("  call outer(actual)", diag_info.line_text);
     try testing.expectEqualStrings("actual argument conflicts here", diag_info.primary_label);
@@ -807,9 +860,10 @@ test "runPipeline reports variable definition context with related interface sou
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_variable_definition_context.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.AssignmentTypeMismatch, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.AssignmentTypeMismatch);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.assignment_type_mismatch.code, diag_info.code);
     try testing.expectEqualStrings("  call foo(1)", diag_info.line_text);
     try testing.expectEqualStrings("non-definable actual argument here", diag_info.primary_label);
@@ -847,9 +901,10 @@ test "runPipeline reports abstract passed-object actual with related type source
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_passed_object.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.InvalidArgumentCount);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
     try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
     try testing.expectEqualStrings("    call obj%abstract_t%p()", diag_info.line_text);
@@ -880,9 +935,10 @@ test "runPipeline reports concrete abstract-type declaration with related type s
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_concrete_abstract_type_decl.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnexpectedTypeDecl, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnexpectedTypeDecl);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.unexpected_type_decl.code, diag_info.code);
     try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
     try testing.expectEqualStrings("    type(base_t) :: x", diag_info.line_text);
@@ -913,9 +969,10 @@ test "runPipeline reports COMMON mismatch with related source" {
     const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_common_mismatch.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.CommonBlockMismatch, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.CommonBlockMismatch);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.semantic.common_block_mismatch.code, diag_info.code);
     try testing.expectEqualStrings("      COMMON /BLK/ A", diag_info.line_text);
     try testing.expectEqualStrings("conflicting COMMON layout here", diag_info.primary_label);
@@ -941,9 +998,10 @@ test "runPipeline reports free-form continued parse diagnostics against the orig
     const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f90", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.UnexpectedToken);
+    defer diag_capture.release(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 3), diag_info.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
@@ -966,7 +1024,6 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
 
     var diag_bag = diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    clearLastDiagnostic();
 
     try testing.expectError(
         error.InvalidCharLen,
@@ -980,7 +1037,6 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
     try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
     try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
-    try testing.expect(takeLastDiagnostic() == null);
 }
 
 test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assignment" {
@@ -1290,7 +1346,6 @@ test "runPipelineWithOptionsAndDiagnostics rejects abstract type array construct
 
     var diag_bag = diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    clearLastDiagnostic();
 
     try testing.expectError(
         error.AssignmentTypeMismatch,
@@ -1703,19 +1758,6 @@ test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 with 
     try std.testing.expect(diag_bag.take() == null);
 }
 
-test "releaseLastDiagnostic clears compat storage after take" {
-    const testing = std.testing;
-
-    clearLastDiagnostic();
-    setLastDiagnostic("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line", &.{.{ .text = "note" }}, &.{.{ .text = "help" }});
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings("x.f", diag_info.file_path);
-    try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
-    try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
-    releaseLastDiagnostic(diag_info);
-    try testing.expect(takeLastDiagnostic() == null);
-}
-
 test "runPipeline reports continuation-related secondary span for missing identifier" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1731,9 +1773,10 @@ test "runPipeline reports continuation-related secondary span for missing identi
     const file_path = try writeTempSourceFile(&tmp, allocator, "continued_missing_name.f", source);
     defer allocator.free(file_path);
 
-    try testing.expectError(error.MissingName, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(allocator, file_path, .llvm, .{}, error.MissingName);
+    defer diag_capture.release(diag_info);
     try testing.expectEqualStrings(catalog.parser.missing_name.code, diag_info.code);
     try testing.expectEqualStrings("identifier required here", diag_info.primary_label);
     try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
@@ -1741,38 +1784,20 @@ test "runPipeline reports continuation-related secondary span for missing identi
     try testing.expectEqualStrings("continuation started here", diag_info.secondary_spans[0].label);
 }
 
-test "setLastDiagnosticDetailed preserves secondary spans in compat storage" {
-    const testing = std.testing;
-
-    clearLastDiagnostic();
-    setLastDiagnosticDetailed("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line", "label", &.{}, &.{}, &.{.{
-        .file_path = "x.f",
-        .line = 1,
-        .column = 5,
-        .end_column = 8,
-        .line_text = "abc",
-        .label = "origin",
-    }});
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
-    try testing.expectEqualStrings("label", diag_info.primary_label);
-    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
-    try testing.expectEqualStrings("origin", diag_info.secondary_spans[0].label);
-}
-
-test "repository semantic decl char len golden input keeps compat notes" {
+test "repository semantic decl char len golden input keeps explicit notes" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    clearLastDiagnostic();
-    try testing.expectError(
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    const diag_info = try diag_capture.expectError(
+        allocator,
+        "tests/diagnostic_golden/semantic_decl_char_len.f",
+        .llvm,
+        .{ .target = "x86_64-linux-gnu" },
         error.InvalidCharLen,
-        runPipelineWithOptions(allocator, "tests/diagnostic_golden/semantic_decl_char_len.f", .llvm, .{
-            .target = "x86_64-linux-gnu",
-        }),
     );
-    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    defer releaseLastDiagnostic(diag_info);
+    defer diag_capture.release(diag_info);
     try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
     try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
 }
@@ -1827,3 +1852,4 @@ test "runPipelineWithOptionsAndDiagnostics compiles ENTRY function alternate res
     try testing.expect(std.mem.indexOf(u8, result.output, "@rf513_") != null);
     try testing.expect(std.mem.indexOf(u8, result.output, "@ef852_") != null);
 }
+
