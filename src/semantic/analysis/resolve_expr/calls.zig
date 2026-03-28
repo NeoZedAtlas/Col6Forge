@@ -137,6 +137,11 @@ pub fn resolveCallOrSubscriptExpr(
                 if (sym.kind == .variable) sym.kind = .function;
                 sym.is_external = true;
                 self.symbols.items[idx] = sym;
+            } else if (canTreatTypedScalarReferenceAsFunction(sym, call.args)) {
+                kind = .call;
+                if (sym.kind == .variable) sym.kind = .function;
+                sym.is_external = true;
+                self.symbols.items[idx] = sym;
             } else {
                 return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
             }
@@ -219,6 +224,11 @@ pub fn resolveComponentExpr(
             }
             try validateProcedureComponentCall(self, expr_node, comp.base, component, comp.args, deps);
             try deps.cacheExprType(self, expr_node, try procedureComponentResultTypeSpec(self, component));
+            return;
+        }
+        if (isCharacterComponentSubstringRef(component, comp)) {
+            try validateCharacterComponentSubstringArgs(self, expr_node, comp.args, deps);
+            try deps.cacheExprType(self, expr_node, component.type_spec);
             return;
         }
         try validateComponentArgs(self, expr_node, component.dims, comp.args, deps);
@@ -355,6 +365,19 @@ fn isStatementFunctionDefinitionTarget(
     if (args.len == 0) return false;
     for (args) |arg| if (arg.* != .identifier) return false;
     return true;
+}
+
+fn hasDimRangeActual(args: []*ast.Expr) bool {
+    for (args) |arg| if (arg.* == .dim_range) return true;
+    return false;
+}
+
+fn canTreatTypedScalarReferenceAsFunction(sym: symbols.Symbol, args: []*ast.Expr) bool {
+    if (!sym.type_explicit) return false;
+    if (sym.dims.len != 0) return false;
+    if (args.len == 0) return false;
+    if (hasDimRangeActual(args)) return false;
+    return sym.kind == .variable or sym.kind == .function;
 }
 
 fn hasProcedureActualExprArgs(self: *context.Context, args: []*ast.Expr) bool {
@@ -585,6 +608,42 @@ fn appendStructureConstructorComponentSpecs(
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
     return sym.dims.len != 0 and sub.args.len == 0;
+}
+
+pub fn isCharacterComponentSubstringRef(
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+    comp: ast.ComponentExpr,
+) bool {
+    if (component.procedure) return false;
+    if (component.type_spec.lowered_kind != .character) return false;
+    if (component.dims.len != 0) return false;
+    if (!comp.has_parens) return false;
+    if (comp.args.len != 1) return false;
+    return comp.args[0].* == .dim_range;
+}
+
+pub fn validateCharacterComponentSubstringArgs(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) ResolveError!void {
+    if (args.len != 1) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_count.code, "Subscript count mismatch");
+    const range = switch (args[0].*) {
+        .dim_range => |range| range,
+        else => return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context"),
+    };
+    if (range.lower) |lower| {
+        const lower_ty = try deps.resolvedExprType(self, lower);
+        if (lower_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
+    }
+    if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+        const upper_ty = try deps.resolvedExprType(self, range.upper);
+        if (upper_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
+    }
+    if (range.stride != null) {
+        return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+    }
 }
 
 fn validateComponentArgs(

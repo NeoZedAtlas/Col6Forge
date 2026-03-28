@@ -5,6 +5,7 @@ const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
 const constants = @import("../resolve_const.zig");
 const resolve_expr = @import("../resolve_expr.zig");
+const resolve_calls = @import("../resolve_expr/calls.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
 const procedure_interfaces = @import("procedure_interfaces.zig");
@@ -211,6 +212,12 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                         .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
                     });
                     return try resolve_expr.exprType(self, expr);
+                }
+                if (resolve_calls.isCharacterComponentSubstringRef(component, comp)) {
+                    try resolve_calls.validateCharacterComponentSubstringArgs(self, expr, comp.args, .{
+                        .resolvedExprType = resolve_expr.exprType,
+                    });
+                    return .character;
                 }
                 if (component.dims.len == 0 and comp.args.len != 0) {
                     self.setCurrentSource(self.sourceForExpr(expr));

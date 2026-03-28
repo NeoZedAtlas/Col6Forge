@@ -40,6 +40,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "SHAPE", .integer },
     .{ "SIZE", .integer },
     .{ "ACHAR", .character },
+    .{ "REPEAT", .character },
     .{ "TRIM", .character },
     .{ "DBLE", .double_precision },
     .{ "DINT", .double_precision },
@@ -123,6 +124,7 @@ pub fn resultDependsOnArgs(name: []const u8) bool {
     for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
     const upper = upper_buf[0..name.len];
     if (std.mem.eql(u8, upper, "ABS")) return true;
+    if (std.mem.eql(u8, upper, "REPEAT")) return true;
     if (IntrinsicSameArgMap.has(upper)) return true;
     if (IntrinsicHomogeneousArgsMap.has(upper)) return true;
     return false;
@@ -154,6 +156,11 @@ pub fn inferResultType(
     if (std.mem.eql(u8, upper, "ABS")) {
         if (args.len == 0) return current;
         return absReturnType(args[0]);
+    }
+
+    if (std.mem.eql(u8, upper, "REPEAT")) {
+        if (args.len == 0) return current;
+        return repeatReturnType(args[0], current);
     }
 
     if (IntrinsicSameArgMap.has(upper)) {
@@ -196,6 +203,11 @@ fn sameArgReturnType(arg: symbols.TypeSpec, current: symbols.TypeSpec) symbols.T
         .complex_double => arg,
         else => current,
     };
+}
+
+fn repeatReturnType(arg: symbols.TypeSpec, current: symbols.TypeSpec) symbols.TypeSpec {
+    if (arg.lowered_kind != .character) return current;
+    return symbols.TypeSpec.fromResolvedKind(.character, .character, arg.kind_value).withCharacterLength(.deferred, null);
 }
 
 fn homogeneousArgsReturnType(args: []const symbols.TypeSpec) !symbols.TypeSpec {

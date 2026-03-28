@@ -6,6 +6,7 @@ const context = @import("context.zig");
 const resolve_units = @import("resolve_units.zig");
 const check_units = @import("check_units.zig");
 const diag = @import("../diagnostic.zig");
+const fixed_form = @import("../../frontend/fixed_form.zig");
 const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const split_api = @import("../split/api/mod.zig");
@@ -2265,4 +2266,50 @@ test "pure procedure rejects impure procedure component calls" {
     _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.indexOf(u8, got.message, "Reference to impure function") != null);
+}
+
+test "typed explicit scalar reference resolves as legacy function call in expression context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      DOUBLE PRECISION D1MACH, X\n" ++
+        "      X = D1MACH(4)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "character component substring resolves as character expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: t\n" ++
+        "    character(6) :: name\n" ++
+        "  end type\n" ++
+        "  type(t) :: a\n" ++
+        "  character(2) :: part\n" ++
+        "  part = a%name(2:3)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
 }

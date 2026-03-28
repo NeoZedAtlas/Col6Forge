@@ -38,13 +38,15 @@ pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
             break :blk isCharacterExpr(ctx, ctor.items[0]);
         },
         .call_or_subscript => |call_or_sub| blk: {
+            if (isRepeatIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 2) break :blk true;
             const sym = ctx.findSymbol(call_or_sub.name) orelse break :blk false;
             break :blk sym.isCharacter();
         },
         .substring => true,
         .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
         .binary => |bin| bin.op == .concat,
-        .component => |comp| comp.has_parens and typeBoundCharacterResultLen(ctx, comp) != null,
+        .component => |comp| characterComponentLayout(ctx, comp) != null or
+            (comp.has_parens and typeBoundCharacterResultLen(ctx, comp) != null),
         .implied_do => |implied| implied.items.len != 0 and isCharacterExpr(ctx, implied.items[0]),
         else => false,
     };
@@ -64,6 +66,13 @@ pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
         .call_or_subscript => |call_or_sub| {
             if (isInternalLiteralSubstringName(call_or_sub.name)) {
                 return internalLiteralSubstringConstLen(ctx, call_or_sub.args, null);
+            }
+            if (isRepeatIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 2) {
+                const base_len = constantCharacterLenForExpr(ctx, call_or_sub.args[0]) orelse return null;
+                const repeat_count = int_eval.intLiteralValue(call_or_sub.args[1]) orelse return null;
+                if (repeat_count < 0) return null;
+                const repeat_usize = std.math.cast(usize, repeat_count) orelse return null;
+                return std.math.mul(usize, base_len, repeat_usize) catch null;
             }
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
@@ -96,6 +105,10 @@ pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             return left_len + right_len;
         },
         .component => |comp| {
+            if (characterComponentLayout(ctx, comp)) |component| {
+                if (isCharacterComponentSubstringRef(component, comp)) return componentSubstringLen(ctx, comp, component);
+                return componentCharacterConstLen(component);
+            }
             if (!comp.has_parens) return null;
             return typeBoundCharacterResultLen(ctx, comp);
         },
@@ -246,6 +259,9 @@ pub fn emitCharacterValuePlanImpl(
             if (isInternalLiteralSubstringName(call_or_sub.name)) {
                 return emitInternalLiteralSubstringPlan(ctx, builder, call_or_sub.args);
             }
+            if (isRepeatIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 2) {
+                return emitRepeatCharacterPlan(ctx, builder, call_or_sub.args[0], call_or_sub.args[1], subst_depth);
+            }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
                 const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
                 return try emitTrimmedCharacterPlan(ctx, builder, base_plan);
@@ -386,6 +402,9 @@ pub fn emitCharacterValuePlanImpl(
             });
         },
         .component => |comp| {
+            if (characterComponentLayout(ctx, comp)) |component| {
+                return try emitCharacterComponentPlan(ctx, builder, comp, component);
+            }
             if (!comp.has_parens) return null;
             const info = typeBoundCharacterResultInfo(ctx, comp) orelse return null;
             const actuals = try resolution.buildTypeBoundProcedureActuals(ctx, comp, info.binding);
@@ -538,6 +557,10 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
                 const plan = (try emitInternalLiteralSubstringPlan(ctx, builder, call_or_sub.args)) orelse return null;
                 return plan.logical_len;
             }
+            if (isRepeatIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 2) {
+                const plan = (try emitRepeatCharacterPlan(ctx, builder, call_or_sub.args[0], call_or_sub.args[1], subst_depth)) orelse return null;
+                return plan.logical_len;
+            }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
                 const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
                 const trimmed = try emitTrimmedCharacterPlan(ctx, builder, base_plan);
@@ -588,6 +611,9 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             return try binary.emitAdd(ctx, builder, left_len, right_len);
         },
         .component => |comp| {
+            if (characterComponentLayout(ctx, comp)) |component| {
+                return emitCharacterComponentLenValue(ctx, builder, comp, component);
+            }
             if (!comp.has_parens) return null;
             const result_len = typeBoundCharacterResultLen(ctx, comp) orelse return null;
             return try ctx.constI32(@intCast(result_len));
@@ -603,6 +629,176 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
 fn coerceCharacterLenToI32(ctx: *Context, builder: anytype, len_val: ValueRef) EmitError!ValueRef {
     if (len_val.ty == .i32) return len_val;
     return casting.coerceCheckedI32(ctx, builder, len_val);
+}
+
+fn characterComponentLayout(ctx: *Context, comp: ast.ComponentExpr) ?cg_context.DerivedComponentLayout {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return null;
+    const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return null;
+    if (component.procedure) return null;
+    if (component.type_spec.lowered_kind != .character) return null;
+    return component;
+}
+
+fn componentCharacterConstLen(component: cg_context.DerivedComponentLayout) ?usize {
+    return component.type_spec.char_len;
+}
+
+fn isCharacterComponentSubstringRef(component: cg_context.DerivedComponentLayout, comp: ast.ComponentExpr) bool {
+    if (component.dims.len != 0) return false;
+    if (!comp.has_parens) return false;
+    if (comp.args.len != 1) return false;
+    return comp.args[0].* == .dim_range;
+}
+
+fn emitCharacterComponentPlan(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: cg_context.DerivedComponentLayout,
+) EmitError!CharacterValuePlan {
+    const ptr = try memory.emitComponentPtr(ctx, builder, comp);
+    const len_val = try emitCharacterComponentLenValue(ctx, builder, comp, component) orelse return error.NonConstantCharacterLength;
+    const const_len = if (isCharacterComponentSubstringRef(component, comp))
+        componentSubstringLen(ctx, comp, component)
+    else
+        componentCharacterConstLen(component);
+    return try shared.validatedCharacterValuePlan(.{
+        .ptr = ptr,
+        .logical_len = len_val,
+        .storage_len = len_val,
+        .logical_len_const = const_len,
+        .storage_len_const = const_len,
+        .kind = if (isCharacterComponentSubstringRef(component, comp)) .substring_view else .direct_symbol,
+    });
+}
+
+fn emitCharacterComponentLenValue(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: cg_context.DerivedComponentLayout,
+) EmitError!?ValueRef {
+    if (!isCharacterComponentSubstringRef(component, comp)) {
+        const char_len = componentCharacterConstLen(component) orelse return null;
+        return try ctx.constI32(@intCast(char_len));
+    }
+    const range = comp.args[0].dim_range;
+    const base_len = componentCharacterConstLen(component) orelse return null;
+    var end_val = try ctx.constI32(@intCast(base_len));
+    if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+        end_val = try coerceCharacterLenToI32(ctx, builder, try memory.emitIndex(ctx, builder, range.upper));
+    }
+    var start_val = try ctx.constI32(1);
+    if (range.lower) |lower| {
+        start_val = try coerceCharacterLenToI32(ctx, builder, try memory.emitIndex(ctx, builder, lower));
+    }
+    const diff = try binary.emitSub(ctx, builder, end_val, start_val);
+    return try binary.emitAdd(ctx, builder, diff, utils.oneValue());
+}
+
+fn componentSubstringLen(
+    ctx: *Context,
+    comp: ast.ComponentExpr,
+    component: cg_context.DerivedComponentLayout,
+) ?usize {
+    _ = ctx;
+    if (!isCharacterComponentSubstringRef(component, comp)) return componentCharacterConstLen(component);
+    const base_len_usize = componentCharacterConstLen(component) orelse return null;
+    const base_len = std.math.cast(i64, base_len_usize) orelse return null;
+    const range = comp.args[0].dim_range;
+    const start_val = if (range.lower) |start_expr| int_eval.intLiteralValue(start_expr) orelse return null else 1;
+    const end_val = if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size)
+        base_len
+    else
+        int_eval.intLiteralValue(range.upper) orelse return null;
+    const span = int_eval.checkedSub(end_val, start_val) orelse return null;
+    const length = int_eval.checkedAdd(span, 1) orelse return null;
+    if (length <= 0) return null;
+    return std.math.cast(usize, length);
+}
+
+fn emitRepeatCharacterPlan(
+    ctx: *Context,
+    builder: anytype,
+    value_expr: *Expr,
+    count_expr: *Expr,
+    subst_depth: usize,
+) EmitError!?CharacterValuePlan {
+    const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, value_expr, subst_depth)) orelse return null;
+    const base_len_i32 = try coerceCharacterLenToI32(ctx, builder, base_plan.logical_len);
+    var count_i32 = try coerceCharacterLenToI32(ctx, builder, try memory.emitIndex(ctx, builder, count_expr));
+    const zero_i32 = utils.zeroValue(.i32);
+    const neg_tmp = try ctx.nextTemp();
+    try builder.compare(neg_tmp, "icmp", "slt", .i32, count_i32, zero_i32);
+    const clamped_tmp = try ctx.nextTemp();
+    try builder.select(clamped_tmp, .i32, .{ .name = neg_tmp, .ty = .i1, .is_ptr = false }, zero_i32, count_i32);
+    count_i32 = .{ .name = clamped_tmp, .ty = .i32, .is_ptr = false };
+
+    const total_len = try binary.emitMul(ctx, builder, base_len_i32, count_i32);
+    const buf_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(buf_name, .i8, total_len);
+    const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i32);
+    try builder.store(zero_i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_cond = try ctx.nextLabel("repeat_cond");
+    const loop_body = try ctx.nextLabel("repeat_body");
+    const loop_inc = try ctx.nextLabel("repeat_inc");
+    const loop_end = try ctx.nextLabel("repeat_end");
+
+    try builder.br(loop_cond);
+
+    try builder.label(loop_cond);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i32, .is_ptr = false };
+    const cmp_tmp = try ctx.nextTemp();
+    try builder.compare(cmp_tmp, "icmp", "slt", .i32, idx_val, total_len);
+    try builder.brCond(.{ .name = cmp_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
+
+    try builder.label(loop_body);
+    const src_idx = if (base_plan.logical_len_const == 1)
+        zero_i32
+    else blk: {
+        const rem_tmp = try ctx.nextTemp();
+        try builder.binary(rem_tmp, "srem", .i32, idx_val, base_len_i32);
+        break :blk ValueRef{ .name = rem_tmp, .ty = .i32, .is_ptr = false };
+    };
+    const src_gep = try ctx.nextTemp();
+    try builder.gep(src_gep, .i8, base_plan.ptr, src_idx);
+    const src_tmp = try ctx.nextTemp();
+    try builder.load(src_tmp, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
+    const dst_gep = try ctx.nextTemp();
+    try builder.gep(dst_gep, .i8, buf_ptr, idx_val);
+    try builder.store(.{ .name = src_tmp, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_inc);
+
+    try builder.label(loop_inc);
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i32, idx_val, utils.oneValue());
+    try builder.store(.{ .name = next_tmp, .ty = .i32, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_cond);
+
+    try builder.label(loop_end);
+
+    const total_len_const = blk: {
+        const base_const = base_plan.logical_len_const orelse break :blk null;
+        const repeat_const = int_eval.intLiteralValue(count_expr) orelse break :blk null;
+        if (repeat_const < 0) break :blk 0;
+        const repeat_usize = std.math.cast(usize, repeat_const) orelse break :blk null;
+        break :blk std.math.mul(usize, base_const, repeat_usize) catch null;
+    };
+
+    return try shared.validatedCharacterValuePlan(.{
+        .ptr = buf_ptr,
+        .logical_len = total_len,
+        .storage_len = total_len,
+        .logical_len_const = total_len_const,
+        .storage_len_const = total_len_const,
+        .kind = .concat_temp,
+    });
 }
 
 fn emitTrimmedCharacterPlan(
@@ -708,6 +904,10 @@ fn typeBoundCharacterResultInfo(ctx: *Context, comp: ast.ComponentExpr) ?TypeBou
 
 fn isInternalLiteralSubstringName(name: []const u8) bool {
     return std.mem.eql(u8, name, "__col6forge_substring");
+}
+
+fn isRepeatIntrinsicName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "repeat");
 }
 
 fn internalLiteralSubstringArgOmitted(expr_node: *Expr) bool {
