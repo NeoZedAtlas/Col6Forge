@@ -177,6 +177,13 @@ pub const semantic = struct {
     pub const parameter_array_constructor_not_folded = ErrorInfo{ .code = "CF3195", .message = "PARAMETER array constructor expression not folded" };
     pub const parameter_conversion_not_folded = ErrorInfo{ .code = "CF3196", .message = "PARAMETER conversion expression not folded" };
     pub const parameter_intrinsic_not_folded = ErrorInfo{ .code = "CF3197", .message = "PARAMETER intrinsic expression not folded" };
+    pub const assignment_pointer_designator_mismatch = ErrorInfo{ .code = "CF3200", .message = "pointer assignment designator mismatch" };
+    pub const assignment_c_interop_pointer_mismatch = ErrorInfo{ .code = "CF3201", .message = "C interoperability pointer assignment mismatch" };
+    pub const assignment_repeat_result_mismatch = ErrorInfo{ .code = "CF3202", .message = "REPEAT result assignment mismatch" };
+    pub const assignment_intrinsic_result_mismatch = ErrorInfo{ .code = "CF3203", .message = "intrinsic result assignment mismatch" };
+    pub const invalid_data_stmt_reference = ErrorInfo{ .code = "CF3204", .message = "invalid DATA statement designator reference" };
+    pub const invalid_component_data_reference = ErrorInfo{ .code = "CF3205", .message = "invalid derived-component data reference" };
+    pub const invalid_function_like_data_reference = ErrorInfo{ .code = "CF3206", .message = "invalid function-like data reference" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -476,7 +483,23 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.double_precision_required, "semantic"),
     doc(semantic.invalid_class_is_specification, "semantic"),
     doc(semantic.assignment_requires_allocatable, "semantic"),
+    doc(semantic.invalid_allocate_designator_subscript, "semantic"),
+    doc(semantic.invalid_associate_selector_subscript, "semantic"),
+    doc(semantic.invalid_pointer_designator_subscript, "semantic"),
+    doc(semantic.invalid_data_reference_subscript, "semantic"),
+    doc(semantic.parameter_named_constant_not_folded, "semantic"),
+    doc(semantic.parameter_array_inquiry_not_folded, "semantic"),
+    doc(semantic.parameter_array_constructor_not_folded, "semantic"),
+    doc(semantic.parameter_conversion_not_folded, "semantic"),
+    doc(semantic.parameter_intrinsic_not_folded, "semantic"),
     doc(semantic.generic, "semantic"),
+    doc(semantic.assignment_pointer_designator_mismatch, "semantic"),
+    doc(semantic.assignment_c_interop_pointer_mismatch, "semantic"),
+    doc(semantic.assignment_repeat_result_mismatch, "semantic"),
+    doc(semantic.assignment_intrinsic_result_mismatch, "semantic"),
+    doc(semantic.invalid_data_stmt_reference, "semantic"),
+    doc(semantic.invalid_component_data_reference, "semantic"),
+    doc(semantic.invalid_function_like_data_reference, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),
     doc(codegen.common_block_mismatch, "codegen"),

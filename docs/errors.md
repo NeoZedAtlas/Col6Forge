@@ -743,10 +743,90 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: semantic
 - Default message: assignment target must be ALLOCATABLE
 
+## CF3189
+
+- Stage: semantic
+- Default message: invalid subscript in allocation designator
+
+## CF3190
+
+- Stage: semantic
+- Default message: invalid subscript in ASSOCIATE selector
+
+## CF3191
+
+- Stage: semantic
+- Default message: invalid subscript in pointer association designator
+
+## CF3192
+
+- Stage: semantic
+- Default message: invalid subscript in data reference
+
+## CF3193
+
+- Stage: semantic
+- Default message: PARAMETER named constant expression not folded
+
+## CF3194
+
+- Stage: semantic
+- Default message: PARAMETER array inquiry expression not folded
+
+## CF3195
+
+- Stage: semantic
+- Default message: PARAMETER array constructor expression not folded
+
+## CF3196
+
+- Stage: semantic
+- Default message: PARAMETER conversion expression not folded
+
+## CF3197
+
+- Stage: semantic
+- Default message: PARAMETER intrinsic expression not folded
+
 ## CF3199
 
 - Stage: semantic
 - Default message: semantic analysis failed
+
+## CF3200
+
+- Stage: semantic
+- Default message: pointer assignment designator mismatch
+
+## CF3201
+
+- Stage: semantic
+- Default message: C interoperability pointer assignment mismatch
+
+## CF3202
+
+- Stage: semantic
+- Default message: REPEAT result assignment mismatch
+
+## CF3203
+
+- Stage: semantic
+- Default message: intrinsic result assignment mismatch
+
+## CF3204
+
+- Stage: semantic
+- Default message: invalid DATA statement designator reference
+
+## CF3205
+
+- Stage: semantic
+- Default message: invalid derived-component data reference
+
+## CF3206
+
+- Stage: semantic
+- Default message: invalid function-like data reference
 
 ## CF4101
 

@@ -431,7 +431,7 @@ fn refineSemanticCode(code: []const u8, message: []const u8, line_text: []const 
         return refineInvalidSubscriptCode(message, line_text);
     }
     if (std.mem.eql(u8, code, catalog.semantic.assignment_type_mismatch.code)) {
-        return refineAssignmentMismatchCode(message);
+        return refineAssignmentMismatchCode(message, line_text);
     }
     if (std.mem.eql(u8, code, catalog.semantic.parameter_not_constant.code)) {
         return refineParameterNotConstantCode(message, line_text);
@@ -519,6 +519,9 @@ fn refineInvalidSubscriptCode(message: []const u8, line_text: []const u8) []cons
         if (containsOneOf(line_text, &.{ "ALLOCATE", "allocate", "DEALLOCATE", "deallocate" })) return catalog.semantic.invalid_allocate_designator_subscript.code;
         if (containsOneOf(line_text, &.{ "ASSOCIATE", "associate" })) return catalog.semantic.invalid_associate_selector_subscript.code;
         if (std.mem.indexOf(u8, line_text, "=>") != null) return catalog.semantic.invalid_pointer_designator_subscript.code;
+        if (containsOneOf(line_text, &.{ "DATA ", "data " })) return catalog.semantic.invalid_data_stmt_reference.code;
+        if (std.mem.indexOf(u8, line_text, "%") != null) return catalog.semantic.invalid_component_data_reference.code;
+        if (containsFunctionLikeDesignator(line_text)) return catalog.semantic.invalid_function_like_data_reference.code;
         return catalog.semantic.invalid_data_reference_subscript.code;
     }
     if (std.mem.indexOf(u8, message, "count") != null) return catalog.semantic.invalid_subscript_count.code;
@@ -539,8 +542,16 @@ fn refineInvalidSubscriptCode(message: []const u8, line_text: []const u8) []cons
     return codeForFallback(catalog.semantic.invalid_subscript.code);
 }
 
-fn refineAssignmentMismatchCode(message: []const u8) []const u8 {
+fn refineAssignmentMismatchCode(message: []const u8, line_text: []const u8) []const u8 {
     if (std.mem.eql(u8, message, catalog.semantic.assignment_type_mismatch.message)) {
+        if (std.mem.indexOf(u8, line_text, "=>") != null) return catalog.semantic.assignment_pointer_designator_mismatch.code;
+        if (containsOneOf(line_text, &.{ "c_loc(", "C_LOC(", "c_funloc(", "C_FUNLOC(", "c_null_ptr", "C_NULL_PTR", "c_null_funptr", "C_NULL_FUNPTR" })) {
+            return catalog.semantic.assignment_c_interop_pointer_mismatch.code;
+        }
+        if (containsOneOf(line_text, &.{ "repeat(", "REPEAT(" })) return catalog.semantic.assignment_repeat_result_mismatch.code;
+        if (containsOneOf(line_text, &.{ "pack(", "PACK(", "eoshift(", "EOSHIFT(", "cshift(", "CSHIFT(", "matmul(", "MATMUL(", "transfer(", "TRANSFER(", "char(", "CHAR(" })) {
+            return catalog.semantic.assignment_intrinsic_result_mismatch.code;
+        }
         return codeForFallback(catalog.semantic.assignment_type_mismatch.code);
     }
     if (std.mem.indexOf(u8, message, "must be ALLOCATABLE or a POINTER") != null) return catalog.semantic.assignment_requires_allocatable_or_pointer.code;
@@ -584,6 +595,15 @@ fn containsOneOf(haystack: []const u8, needles: []const []const u8) bool {
         if (std.mem.indexOf(u8, haystack, needle) != null) return true;
     }
     return false;
+}
+
+fn containsFunctionLikeDesignator(line_text: []const u8) bool {
+    const open = std.mem.indexOfScalar(u8, line_text, '(') orelse return false;
+    if (open == 0) return false;
+    const prefix = std.mem.trimRight(u8, line_text[0..open], " \t");
+    if (prefix.len == 0) return false;
+    const last = prefix[prefix.len - 1];
+    return std.ascii.isAlphabetic(last) or std.ascii.isDigit(last) or last == '_' or last == '%';
 }
 
 fn codeForFallback(code: []const u8) []const u8 {
@@ -841,4 +861,81 @@ test "semantic diagnostic refines intrinsic parameter folding" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.semantic.parameter_intrinsic_not_folded.code, diag.code);
+}
+
+test "semantic diagnostic refines generic data statement subscript" {
+    const testing = std.testing;
+
+    clear();
+    set(28, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      data (hm(md)%re, md=1,2)/1.0, 2.0/");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_data_stmt_reference.code, diag.code);
+}
+
+test "semantic diagnostic refines generic component data reference" {
+    const testing = std.testing;
+
+    clear();
+    set(29, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      foo%bar = 1");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_component_data_reference.code, diag.code);
+}
+
+test "semantic diagnostic refines generic function-like data reference" {
+    const testing = std.testing;
+
+    clear();
+    set(30, 3, catalog.semantic.invalid_subscript.code, catalog.semantic.invalid_subscript.message, "      x = d1mach(4)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_function_like_data_reference.code, diag.code);
+}
+
+test "semantic diagnostic refines generic pointer assignment mismatch" {
+    const testing = std.testing;
+
+    clear();
+    set(31, 3, catalog.semantic.assignment_type_mismatch.code, catalog.semantic.assignment_type_mismatch.message, "      p => x(:)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_pointer_designator_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines generic C interop assignment mismatch" {
+    const testing = std.testing;
+
+    clear();
+    set(32, 3, catalog.semantic.assignment_type_mismatch.code, catalog.semantic.assignment_type_mismatch.message, "      file%gsl_file = c_loc(tgt)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_c_interop_pointer_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines generic repeat assignment mismatch" {
+    const testing = std.testing;
+
+    clear();
+    set(33, 3, catalog.semantic.assignment_type_mismatch.code, catalog.semantic.assignment_type_mismatch.message, "      c = repeat('X', i08)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_repeat_result_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines generic intrinsic assignment mismatch" {
+    const testing = std.testing;
+
+    clear();
+    set(34, 3, catalog.semantic.assignment_type_mismatch.code, catalog.semantic.assignment_type_mismatch.message, "      z = matmul(x, x)");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.assignment_intrinsic_result_mismatch.code, diag.code);
 }
