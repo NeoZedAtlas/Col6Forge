@@ -264,6 +264,30 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const constraints_check = b.addExecutable(.{
+        .name = "constraints_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("devtools/constraints/constraints_check.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "constraints_devtools", .module = constraints_devtools },
+            },
+        }),
+    });
+
+    const constraints_docgen = b.addExecutable(.{
+        .name = "constraints_docgen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("devtools/constraints/constraints_docgen.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "constraints_devtools", .module = constraints_devtools },
+            },
+        }),
+    });
+
     const architecture_audit = b.addExecutable(.{
         .name = "architecture_audit",
         .root_module = b.createModule(.{
@@ -303,6 +327,8 @@ pub fn build(b: *std.Build) void {
     const install_perf_compare = b.addInstallArtifact(perf_compare, .{});
     const install_perf_dashboard = b.addInstallArtifact(perf_dashboard, .{});
     const install_error_catalog_docgen = b.addInstallArtifact(error_catalog_docgen, .{});
+    const install_constraints_check = b.addInstallArtifact(constraints_check, .{});
+    const install_constraints_docgen = b.addInstallArtifact(constraints_docgen, .{});
     const install_architecture_audit = b.addInstallArtifact(architecture_audit, .{});
 
     const tools_step = b.step("tools", "Install all developer runner tools");
@@ -317,6 +343,8 @@ pub fn build(b: *std.Build) void {
     tools_step.dependOn(&install_perf_compare.step);
     tools_step.dependOn(&install_perf_dashboard.step);
     tools_step.dependOn(&install_error_catalog_docgen.step);
+    tools_step.dependOn(&install_constraints_check.step);
+    tools_step.dependOn(&install_constraints_docgen.step);
     tools_step.dependOn(&install_architecture_audit.step);
 
     // This creates a top level step. Top level steps have a name and can be
@@ -411,10 +439,14 @@ pub fn build(b: *std.Build) void {
     tools_check_step.dependOn(&perf_compare.step);
     tools_check_step.dependOn(&perf_dashboard.step);
     tools_check_step.dependOn(&error_catalog_docgen.step);
+    tools_check_step.dependOn(&constraints_check.step);
+    tools_check_step.dependOn(&constraints_docgen.step);
     tools_check_step.dependOn(&architecture_audit.step);
 
     const architecture_audit_step = b.step("architecture-audit", "Run architecture guardrail audit");
     const errors_docs_check_step = b.step("errors-docs-check", "Verify docs/errors.md matches the source error catalog");
+    const constraints_check_step = b.step("constraints-check", "Validate the code-native constraints registry");
+    const constraints_docs_check_step = b.step("constraints-docs-check", "Verify docs/constraints.md matches the code-native constraints registry");
     const run_errors_docs_check = b.addRunArtifact(error_catalog_docgen);
     run_errors_docs_check.addArg("--check");
     errors_docs_check_step.dependOn(&run_errors_docs_check.step);
@@ -424,8 +456,22 @@ pub fn build(b: *std.Build) void {
     run_errors_docs_write.addArg("--write");
     errors_docs_step.dependOn(&run_errors_docs_write.step);
 
+    const run_constraints_check = b.addRunArtifact(constraints_check);
+    constraints_check_step.dependOn(&run_constraints_check.step);
+
+    const constraints_docs_step = b.step("constraints-docs", "Regenerate docs/constraints.md from the code-native constraints registry");
+    const run_constraints_docs_write = b.addRunArtifact(constraints_docgen);
+    run_constraints_docs_write.addArg("--write");
+    constraints_docs_step.dependOn(&run_constraints_docs_write.step);
+
+    const run_constraints_docs_check = b.addRunArtifact(constraints_docgen);
+    run_constraints_docs_check.addArg("--check");
+    constraints_docs_check_step.dependOn(&run_constraints_docs_check.step);
+
     const run_architecture_audit = b.addRunArtifact(architecture_audit);
     architecture_audit_step.dependOn(&run_errors_docs_check.step);
+    architecture_audit_step.dependOn(&run_constraints_check.step);
+    architecture_audit_step.dependOn(&run_constraints_docs_check.step);
     architecture_audit_step.dependOn(&run_architecture_audit.step);
 
     const golden_step = b.step("golden", "Run golden file tests");
