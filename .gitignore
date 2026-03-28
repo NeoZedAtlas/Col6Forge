@@ -4,3 +4,5 @@
 /tests/MINPACK/zig-out/
 /tests/MINPACK/zig-cache/
 /tests/MINPACK/.zig-cache/
+/artifacts/
+/scratch/
