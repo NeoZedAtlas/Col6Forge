@@ -1,6 +1,7 @@
 const _std = @import("std");
 const _ast = @import("../../../../input.zig");
 const _sema = @import("../../../../../semantic/mod.zig");
+const codegen_diag = @import("../../../../diagnostic.zig");
 const ir = @import("../../../../ir.zig");
 const _context = @import("../../context/mod.zig");
 const _builder_mod = @import("../../builder.zig");
@@ -67,6 +68,7 @@ pub const TestHarness = struct {
     defined: std.StringHashMap(void),
     intrinsic_wrappers: std.StringHashMap(_context.IntrinsicWrapperKind),
     known_procedure_sigs: _context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig),
+    diag_bag: codegen_diag.Bag,
     ctx: Context,
 
     pub fn init(allocator: std.mem.Allocator) !TestHarness {
@@ -133,7 +135,8 @@ pub const TestHarness = struct {
         var string_pool = _context.StringPool.init(a);
         var intrinsic_wrappers = std.StringHashMap(_context.IntrinsicWrapperKind).init(a);
         var known_procedure_sigs = _context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
-        var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+        var diag_bag = codegen_diag.Bag.init(a);
+        var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{}, &diag_bag);
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR", .{ .name = "%arr", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR2", .{ .name = "%arr2", .ty = .ptr, .is_ptr = true });
@@ -147,6 +150,7 @@ pub const TestHarness = struct {
             .defined = defined,
             .intrinsic_wrappers = intrinsic_wrappers,
             .known_procedure_sigs = known_procedure_sigs,
+            .diag_bag = diag_bag,
             .ctx = ctx,
         };
     }
@@ -157,6 +161,7 @@ pub const TestHarness = struct {
         self.defined.deinit();
         self.intrinsic_wrappers.deinit();
         self.known_procedure_sigs.deinit();
+        self.diag_bag.deinit();
         self.arena.deinit();
     }
 };

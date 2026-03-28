@@ -37,8 +37,11 @@ pub fn expectParseErrorInvariant(source: []const u8, expected_err: anyerror, exp
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expectError(expected_err, parser.parseProgram(arena.allocator(), lines));
-    const diag = parser.takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_bag = parser.diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    try testing.expectError(expected_err, parser.parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, expected_code));
 }
 

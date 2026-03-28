@@ -200,7 +200,6 @@ test "parseStatementWithDiagnostics captures lexer errors in explicit bag" {
     defer diag_bag.release(diag);
     try testing.expectEqualStrings(catalog.lexer.unexpected_character.code, diag.code);
     try testing.expectEqual(@as(usize, 1), diag.line);
-    try testing.expect(parse_diag.take() == null);
 }
 
 test "parseStatement handles READ with UNIT equals star" {

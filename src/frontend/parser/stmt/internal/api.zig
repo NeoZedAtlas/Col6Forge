@@ -71,11 +71,7 @@ pub fn parseStatement(
         array_names,
         &diag_bag,
         &lex_diag_bag,
-    ) catch |err| {
-        parse_diag.publishCompatFromBag(&diag_bag);
-        lexer.publishCompatFromBag(&lex_diag_bag);
-        return err;
-    };
+    );
 }
 
 pub fn parseStatementWithDiagnostics(
@@ -234,11 +230,7 @@ pub fn parseIfBlock(
         array_names,
         &diag_bag,
         &lex_diag_bag,
-    ) catch |err| {
-        parse_diag.publishCompatFromBag(&diag_bag);
-        lexer.publishCompatFromBag(&lex_diag_bag);
-        return err;
-    };
+    );
 }
 
 pub fn parseIfBlockWithDiagnostics(

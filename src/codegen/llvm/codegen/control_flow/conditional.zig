@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
+const codegen_diag = @import("../../../diagnostic.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const common = @import("../common.zig");
 const context = @import("../context/mod.zig");
@@ -489,6 +490,7 @@ const TestHarness = struct {
     string_pool: context.StringPool,
     intrinsic_wrappers: std.StringHashMap(context.IntrinsicWrapperKind),
     known_procedure_sigs: context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig),
+    diag_bag: codegen_diag.Bag,
     ctx: Context,
 
     fn init(allocator: std.mem.Allocator) !TestHarness {
@@ -519,6 +521,7 @@ const TestHarness = struct {
         var string_pool = context.StringPool.init(a);
         var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
         var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
+        var diag_bag = codegen_diag.Bag.init(a);
         var ctx = try Context.init(
             a,
             "test.f",
@@ -532,6 +535,7 @@ const TestHarness = struct {
             &intrinsic_wrappers,
             &known_procedure_sigs,
             .{},
+            &diag_bag,
         );
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
 
@@ -546,6 +550,7 @@ const TestHarness = struct {
             .string_pool = string_pool,
             .intrinsic_wrappers = intrinsic_wrappers,
             .known_procedure_sigs = known_procedure_sigs,
+            .diag_bag = diag_bag,
             .ctx = ctx,
         };
     }
@@ -559,6 +564,7 @@ const TestHarness = struct {
         self.string_pool.deinit();
         self.intrinsic_wrappers.deinit();
         self.known_procedure_sigs.deinit();
+        self.diag_bag.deinit();
         self.arena.deinit();
     }
 };

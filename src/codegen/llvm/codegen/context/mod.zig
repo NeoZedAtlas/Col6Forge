@@ -82,7 +82,7 @@ pub const Context = struct {
     options: CodegenOptions,
     current_source: ?ast.SourceRef,
     current_stmt: ?input.Stmt,
-    diag_bag: ?*diag.Bag,
+    diag_bag: *diag.Bag,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -97,38 +97,7 @@ pub const Context = struct {
         intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
         known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
         options: CodegenOptions,
-    ) !Context {
-        return initWithDiagnostics(
-            allocator,
-            source_name,
-            unit,
-            sem,
-            decls,
-            defined,
-            formats,
-            inline_formats,
-            string_pool,
-            intrinsic_wrappers,
-            known_procedure_sigs,
-            options,
-            null,
-        );
-    }
-
-    pub fn initWithDiagnostics(
-        allocator: std.mem.Allocator,
-        source_name: []const u8,
-        unit: ProgramUnit,
-        sem: *const input.SemanticUnit,
-        decls: *std.StringHashMap(IRDecl),
-        defined: *std.StringHashMap(void),
-        formats: *const std.StringHashMap(FormatInfo),
-        inline_formats: *const std.AutoHashMap(usize, FormatInfo),
-        string_pool: *StringPool,
-        intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
-        known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
-        options: CodegenOptions,
-        diag_bag: ?*diag.Bag,
+        diag_bag: *diag.Bag,
     ) !Context {
         var ctx = Context{
             .allocator = allocator,
@@ -198,8 +167,7 @@ pub const Context = struct {
     }
 
     pub fn hasDiagnostic(self: *const Context) bool {
-        if (self.diag_bag) |bag| return bag.has();
-        return diag.has();
+        return self.diag_bag.has();
     }
 
     pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
@@ -216,24 +184,15 @@ pub const Context = struct {
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
     ) void {
-        if (self.diag_bag) |bag| {
-            bag.setDetailed(line, column, code, message, line_text, notes, helps);
-            return;
-        }
-        diag.setDetailed(line, column, code, message, line_text, notes, helps);
+        self.diag_bag.setDetailed(line, column, code, message, line_text, notes, helps);
     }
 
     pub fn noteFallback(self: *Context, line: usize, column: usize, line_text: []const u8) void {
-        if (self.diag_bag) |bag| {
-            bag.noteFallbackSource(line, column, line_text);
-            return;
-        }
-        diag.noteFallbackSource(line, column, line_text);
+        self.diag_bag.noteFallbackSource(line, column, line_text);
     }
 
     pub fn fallbackSource(self: *const Context) ?diag.FallbackSource {
-        if (self.diag_bag) |bag| return bag.fallbackSource();
-        return diag.fallbackSource();
+        return self.diag_bag.fallbackSource();
     }
 
     pub fn setDiagnosticFromStmt(self: *Context, stmt: input.Stmt, err: anyerror) void {

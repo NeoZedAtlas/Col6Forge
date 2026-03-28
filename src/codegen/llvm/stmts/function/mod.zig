@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
+const codegen_diag = @import("../../../diagnostic.zig");
 const context = @import("../../codegen/context/mod.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const builder_mod = @import("../../codegen/builder.zig");
@@ -121,9 +122,11 @@ test "emitFunction emits a simple assignment" {
     var string_pool = context.StringPool.init(a);
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(sema.KnownProcedureSig).initContext(a, .{});
+    var diag_bag = codegen_diag.Bag.init(a);
     defer intrinsic_wrappers.deinit();
     defer known_procedure_sigs.deinit();
-    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    defer diag_bag.deinit();
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{}, &diag_bag);
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);
@@ -184,11 +187,13 @@ test "emitFunction lowers default INTEGER to i64 when target layout widens it" {
     var string_pool = context.StringPool.init(a);
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(sema.KnownProcedureSig).initContext(a, .{});
+    var diag_bag = codegen_diag.Bag.init(a);
     defer intrinsic_wrappers.deinit();
     defer known_procedure_sigs.deinit();
+    defer diag_bag.deinit();
     var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{
         .target_layout = .{ .default_integer_bits = 64 },
-    });
+    }, &diag_bag);
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);

@@ -16,22 +16,13 @@ pub const CodegenBreakdownSample = llvm.CodegenBreakdownSample;
 pub fn emitModule(allocator: @import("std").mem.Allocator, program: input.Program, sem: input.sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var diag_bag = diagnostic.Bag.init(allocator);
     defer diag_bag.deinit();
-    const output = emitModuleWithOptionsAndDiagnostics(allocator, program, sem, source_name, .{}, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
-    return output;
+    return emitModuleWithOptionsAndDiagnostics(allocator, program, sem, source_name, .{}, &diag_bag);
 }
 
 pub fn emitModuleToWriter(writer: anytype, allocator: @import("std").mem.Allocator, program: input.Program, sem: input.sema.SemanticProgram, source_name: []const u8) !void {
     var diag_bag = diagnostic.Bag.init(allocator);
     defer diag_bag.deinit();
-    emitModuleToWriterWithOptionsAndDiagnostics(writer, allocator, program, sem, source_name, .{}, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
+    return emitModuleToWriterWithOptionsAndDiagnostics(writer, allocator, program, sem, source_name, .{}, &diag_bag);
 }
 
 pub fn emitModuleWithOptions(
@@ -43,12 +34,7 @@ pub fn emitModuleWithOptions(
 ) ![]const u8 {
     var diag_bag = diagnostic.Bag.init(allocator);
     defer diag_bag.deinit();
-    const output = emitModuleWithOptionsAndDiagnostics(allocator, program, sem, source_name, options, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
-    return output;
+    return emitModuleWithOptionsAndDiagnostics(allocator, program, sem, source_name, options, &diag_bag);
 }
 
 pub fn emitModuleToWriterWithOptions(
@@ -61,11 +47,7 @@ pub fn emitModuleToWriterWithOptions(
 ) !void {
     var diag_bag = diagnostic.Bag.init(allocator);
     defer diag_bag.deinit();
-    emitModuleToWriterWithOptionsAndDiagnostics(writer, allocator, program, sem, source_name, options, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
+    return emitModuleToWriterWithOptionsAndDiagnostics(writer, allocator, program, sem, source_name, options, &diag_bag);
 }
 
 pub fn emitModuleWithOptionsAndDiagnostics(
@@ -91,14 +73,6 @@ pub fn emitModuleToWriterWithOptionsAndDiagnostics(
 ) !void {
     diag_bag.clear();
     return llvm.emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, diag_bag);
-}
-
-pub fn takeDiagnostic() ?diagnostic.CodegenDiagnostic {
-    return diagnostic.take();
-}
-
-pub fn takeFallbackSource() ?diagnostic.FallbackSource {
-    return diagnostic.takeFallbackSource();
 }
 
 pub fn takeLastBreakdownSample() ?CodegenBreakdownSample {
@@ -142,5 +116,4 @@ test "emitModuleWithOptionsAndDiagnostics keeps codegen diagnostics in explicit 
     defer diag_bag.release(diag);
     try testing.expectEqualStrings(catalog.codegen.invalid_intrinsic_call.code, diag.code);
     try testing.expectEqual(@as(usize, 2), diag.line);
-    try testing.expect(diagnostic.take() == null);
 }

@@ -42,12 +42,7 @@ pub fn emitModule(
 ) ![]const u8 {
     var diag_bag = codegen_diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    const output = emitModuleWithDiagnostics(allocator, program, sem, source_name, options, &diag_bag) catch |err| {
-        codegen_diag.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    codegen_diag.publishCompatFromBag(&diag_bag);
-    return output;
+    return emitModuleWithDiagnostics(allocator, program, sem, source_name, options, &diag_bag);
 }
 
 pub fn emitModuleWithDiagnostics(
@@ -75,11 +70,7 @@ pub fn emitModuleToWriter(
 ) !void {
     var diag_bag = codegen_diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, &diag_bag) catch |err| {
-        codegen_diag.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    codegen_diag.publishCompatFromBag(&diag_bag);
+    return emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, &diag_bag);
 }
 
 pub fn emitModuleToWriterWithDiagnostics(
@@ -177,7 +168,7 @@ pub fn emitModuleToWriterWithDiagnostics(
 
         const unit_emit_start = breakdown_mod.nowNs();
         const codegen_unit = try unit_prep.prepareCodegenUnitWithOwnerDecls(scratch, program, unit);
-        var ctx = try context.Context.initWithDiagnostics(
+        var ctx = try context.Context.init(
             scratch,
             source_name,
             codegen_unit,

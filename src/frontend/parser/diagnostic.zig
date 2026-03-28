@@ -1,7 +1,6 @@
 const std = @import("std");
 const catalog = @import("../../common/error_catalog.zig");
 const common_diag = @import("../../common/diagnostic.zig");
-const compat = @import("../../common/compat_diagnostic_storage.zig");
 const owned_diag = @import("../../common/owned_diagnostic_bag.zig");
 
 pub const ParseDiagnostic = struct {
@@ -18,96 +17,6 @@ pub const ParseDiagnostic = struct {
 
 pub const FallbackSource = owned_diag.FallbackSource;
 pub const Bag = owned_diag.Bag(ParseDiagnostic, .{ .refine_code_fn = refineParseCode });
-
-threadlocal var storage: compat.Storage = .{};
-threadlocal var has_diag: bool = false;
-threadlocal var fallback_storage: compat.Storage = .{};
-threadlocal var has_fallback: bool = false;
-
-pub fn publishCompatFromBag(bag: *Bag) void {
-    clear();
-    if (bag.take()) |diag| {
-        defer bag.release(diag);
-        set(diag.line, diag.column, diag.code, diag.message, diag.line_text);
-    }
-    if (bag.fallbackSource()) |source| {
-        noteFallbackSource(source.line, source.column, source.line_text);
-    }
-}
-
-pub fn clear() void {
-    has_diag = false;
-    has_fallback = false;
-    storage.clear();
-    fallback_storage.clear();
-}
-
-pub fn has() bool {
-    return has_diag;
-}
-
-pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    const refined_code = refineParseCode(code, message, line_text);
-    const next = compat.makeStorage(line, column, refined_code, message, line_text) catch return;
-    storage.clear();
-    storage = next;
-    has_diag = true;
-}
-
-pub fn setDetailed(
-    line: usize,
-    column: usize,
-    code: []const u8,
-    message: []const u8,
-    line_text: []const u8,
-    _: []const common_diag.DiagnosticMessage,
-    _: []const common_diag.DiagnosticMessage,
-) void {
-    set(line, column, code, message, line_text);
-}
-
-pub fn take() ?ParseDiagnostic {
-    if (!has_diag) return null;
-    has_diag = false;
-    return .{
-        .line = storage.line,
-        .column = storage.column,
-        .code = storage.code orelse "",
-        .message = storage.message orelse "",
-        .line_text = storage.line_text orelse "",
-        .primary_label = "",
-    };
-}
-
-pub fn releaseTaken(_: ParseDiagnostic) void {
-    storage.clear();
-}
-
-pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) void {
-    const next = compat.makeFallbackStorage(line, column, line_text) catch return;
-    fallback_storage.clear();
-    fallback_storage = next;
-    has_fallback = true;
-}
-
-pub fn fallbackSource() ?FallbackSource {
-    if (!has_fallback) return null;
-    return .{
-        .line = fallback_storage.line,
-        .column = fallback_storage.column,
-        .line_text = fallback_storage.line_text orelse "",
-    };
-}
-
-pub fn takeFallbackSource() ?FallbackSource {
-    const source = fallbackSource() orelse return null;
-    has_fallback = false;
-    return source;
-}
-
-pub fn releaseTakenFallbackSource(_: FallbackSource) void {
-    fallback_storage.clear();
-}
 
 pub fn errorInfo(err: anyerror) catalog.ErrorInfo {
     return catalog.parserInfoFor(err);
@@ -319,200 +228,94 @@ fn startsWithWord(line_text: []const u8, keyword: []const u8) bool {
     return std.ascii.startsWithIgnoreCase(trimmed, keyword);
 }
 
+fn expectBagCode(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8, expected_code: []const u8) !void {
+    const testing = std.testing;
+    var bag = Bag.init(testing.allocator);
+    defer bag.deinit();
+
+    bag.set(line, column, code, message, line_text);
+    const diag = bag.take() orelse return error.TestExpectedEqual;
+    defer bag.release(diag);
+
+    try testing.expectEqualStrings(expected_code, diag.code);
+}
+
 test "parser diagnostic fallback remembers last noted source" {
     const testing = std.testing;
+    var bag = Bag.init(testing.allocator);
+    defer bag.deinit();
 
-    clear();
-    noteFallbackSource(4, 9, "      X =");
-    const source = fallbackSource() orelse return error.TestExpectedEqual;
+    bag.noteFallbackSource(4, 9, "      X =");
+    const source = bag.fallbackSource() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 4), source.line);
     try testing.expectEqual(@as(usize, 9), source.column);
     try testing.expectEqualStrings("      X =", source.line_text);
 }
 
 test "parser diagnostic refines declaration-head unexpected token" {
-    const testing = std.testing;
-
-    clear();
-    set(3, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      integer :: a(");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.unexpected_token_decl_head.code, diag.code);
+    try expectBagCode(3, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      integer :: a(", catalog.parser.unexpected_token_decl_head.code);
 }
 
 test "parser diagnostic refines procedure-head unexpected token" {
-    const testing = std.testing;
-
-    clear();
-    set(4, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      recursive function f(x");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.unexpected_token_proc_head.code, diag.code);
+    try expectBagCode(4, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      recursive function f(x", catalog.parser.unexpected_token_proc_head.code);
 }
 
 test "parser diagnostic refines submodule statement recovery" {
-    const testing = std.testing;
-
-    clear();
-    set(5, 7, catalog.parser.unexpected_token.code, "Syntax error in SUBMODULE statement", "submodule (m) s");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_submodule_stmt_syntax.code, diag.code);
+    try expectBagCode(5, 7, catalog.parser.unexpected_token.code, "Syntax error in SUBMODULE statement", "submodule (m) s", catalog.parser.invalid_submodule_stmt_syntax.code);
 }
 
 test "parser diagnostic refines end-program recovery" {
-    const testing = std.testing;
-
-    clear();
-    set(6, 7, catalog.parser.unexpected_token.code, "Expecting END PROGRAM statement", "end module");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.expected_end_program_recovery.code, diag.code);
+    try expectBagCode(6, 7, catalog.parser.unexpected_token.code, "Expecting END PROGRAM statement", "end module", catalog.parser.expected_end_program_recovery.code);
 }
 
 test "parser diagnostic refines end-interface recovery" {
-    const testing = std.testing;
-
-    clear();
-    set(7, 1, catalog.parser.unexpected_token.code, "Expecting END INTERFACE", "end module");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.expected_end_interface_recovery.code, diag.code);
+    try expectBagCode(7, 1, catalog.parser.unexpected_token.code, "Expecting END INTERFACE", "end module", catalog.parser.expected_end_interface_recovery.code);
 }
 
 test "parser diagnostic refines visibility statement recovery" {
-    const testing = std.testing;
-
-    clear();
-    set(8, 1, catalog.parser.unexpected_token.code, "PRIVATE attribute", "private");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_visibility_statement.code, diag.code);
+    try expectBagCode(8, 1, catalog.parser.unexpected_token.code, "PRIVATE attribute", "private", catalog.parser.invalid_visibility_statement.code);
 }
 
 test "parser diagnostic refines include statement syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(9, 9, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "include \"bom_include.inc\"");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_include_stmt_syntax.code, diag.code);
+    try expectBagCode(9, 9, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "include \"bom_include.inc\"", catalog.parser.invalid_include_stmt_syntax.code);
 }
 
 test "parser diagnostic refines percent actual syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(10, 18, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      CALL DOIT( %VAL( P ) )");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_percent_actual_syntax.code, diag.code);
+    try expectBagCode(10, 18, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      CALL DOIT( %VAL( P ) )", catalog.parser.invalid_percent_actual_syntax.code);
 }
 
 test "parser diagnostic refines I/O statement syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(11, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "   read*, i");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_io_stmt_syntax.code, diag.code);
+    try expectBagCode(11, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "   read*, i", catalog.parser.invalid_io_stmt_syntax.code);
 }
 
 test "parser diagnostic refines attribute statement syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(12, 16, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  asynchronous :: a");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_attribute_stmt_syntax.code, diag.code);
+    try expectBagCode(12, 16, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  asynchronous :: a", catalog.parser.invalid_attribute_stmt_syntax.code);
 }
 
 test "parser diagnostic refines coarray syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(13, 21, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  allocate(o%i(4, 5)[*], source=6)");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_coarray_syntax.code, diag.code);
+    try expectBagCode(13, 21, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  allocate(o%i(4, 5)[*], source=6)", catalog.parser.invalid_coarray_syntax.code);
 }
 
 test "parser diagnostic refines do concurrent syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(14, 6, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  do concurrent (i = 1:10)");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_do_concurrent_syntax.code, diag.code);
+    try expectBagCode(14, 6, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  do concurrent (i = 1:10)", catalog.parser.invalid_do_concurrent_syntax.code);
 }
 
 test "parser diagnostic refines namelist statement syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(15, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  namelist /nml/ x");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_namelist_stmt_syntax.code, diag.code);
+    try expectBagCode(15, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  namelist /nml/ x", catalog.parser.invalid_namelist_stmt_syntax.code);
 }
 
 test "parser diagnostic refines implicit statement syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(16, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  implicit real(kind=8) (a-h,o-z)");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_implicit_stmt_syntax.code, diag.code);
+    try expectBagCode(16, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  implicit real(kind=8) (a-h,o-z)", catalog.parser.invalid_implicit_stmt_syntax.code);
 }
 
 test "parser diagnostic refines forall syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(17, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  forall (i=1:n) a(i) = i");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_forall_syntax.code, diag.code);
+    try expectBagCode(17, 10, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  forall (i=1:n) a(i) = i", catalog.parser.invalid_forall_syntax.code);
 }
 
 test "parser diagnostic refines procedure declaration syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(18, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  procedure(real), pointer :: p");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_procedure_decl_syntax.code, diag.code);
+    try expectBagCode(18, 12, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  procedure(real), pointer :: p", catalog.parser.invalid_procedure_decl_syntax.code);
 }
 
 test "parser diagnostic refines derived type declaration syntax" {
-    const testing = std.testing;
-
-    clear();
-    set(19, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  type(t) :: x");
-    const diag = take() orelse return error.TestExpectedEqual;
-    defer releaseTaken(diag);
-
-    try testing.expectEqualStrings(catalog.parser.invalid_derived_type_decl_syntax.code, diag.code);
+    try expectBagCode(19, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "  type(t) :: x", catalog.parser.invalid_derived_type_decl_syntax.code);
 }

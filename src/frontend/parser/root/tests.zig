@@ -846,9 +846,11 @@ test "parseProgram reports continued declaration parse errors on the real source
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
-    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
-    defer parse_diag.release(diag);
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -870,9 +872,11 @@ test "parseProgram reports continued IF parse errors on the real source line" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
-    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
-    defer parse_diag.release(diag);
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -893,9 +897,11 @@ test "parseProgram reports free-form continued declaration parse errors on the r
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
-    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
-    defer parse_diag.release(diag);
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -1478,7 +1484,6 @@ test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
     try testing.expectEqualStrings("  )", diag.line_text);
-    try testing.expect(parse_diag.take() == null);
 }
 
 test "parseProgramWithDiagnostics reports missing operator generic import from module prelude" {

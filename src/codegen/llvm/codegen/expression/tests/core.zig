@@ -2,6 +2,7 @@ const h = @import("harness.zig");
 const std = h.std;
 const ast = h.ast;
 const sema = h.sema;
+const codegen_diag = @import("../../../../diagnostic.zig");
 const context = h.context;
 const builder_mod = h.builder_mod;
 const IRType = h.IRType;
@@ -177,8 +178,10 @@ test "emitExpr prefers component subscripting over type-bound call when componen
     defer intrinsic_wrappers.deinit();
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
     defer known_procedure_sigs.deinit();
+    var diag_bag = codegen_diag.Bag.init(a);
+    defer diag_bag.deinit();
 
-    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{}, &diag_bag);
     defer ctx.deinit();
 
     try ctx.locals.put("F", .{ .name = "%fslot", .ty = .ptr, .is_ptr = true });
@@ -259,8 +262,10 @@ test "emitExpr loads bare procedure component pointer" {
     defer intrinsic_wrappers.deinit();
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
     defer known_procedure_sigs.deinit();
+    var diag_bag = codegen_diag.Bag.init(a);
+    defer diag_bag.deinit();
 
-    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{}, &diag_bag);
     defer ctx.deinit();
 
     try ctx.locals.put("OBJ", .{ .name = "%objslot", .ty = .ptr, .is_ptr = true });
@@ -350,8 +355,10 @@ test "emitExpr calls procedure component indirectly" {
     defer intrinsic_wrappers.deinit();
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
     defer known_procedure_sigs.deinit();
+    var diag_bag = codegen_diag.Bag.init(a);
+    defer diag_bag.deinit();
 
-    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{}, &diag_bag);
     defer ctx.deinit();
 
     try ctx.locals.put("OBJ", .{ .name = "%objslot", .ty = .ptr, .is_ptr = true });

@@ -27,12 +27,7 @@ const ModulePreludeMap = root_prelude.ModulePreludeMap;
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var diag_bag = parse_diag.Bag.init(arena_allocator);
     defer diag_bag.deinit();
-    const program = parseProgramWithDiagnostics(arena_allocator, lines, &diag_bag) catch |err| {
-        parse_diag.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    parse_diag.publishCompatFromBag(&diag_bag);
-    return program;
+    return parseProgramWithDiagnostics(arena_allocator, lines, &diag_bag);
 }
 
 pub fn parseProgramWithDiagnostics(
