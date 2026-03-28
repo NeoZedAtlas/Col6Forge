@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const RuleKind = enum {
     forbidden_text,
+    forbidden_import_path_fragment,
     bare_error_code_literal,
     error_catalog_consistency,
 };
@@ -167,6 +168,55 @@ pub const file_rules = [_]AuditRule{
         .exclude_tests = true,
         .excluded_exact_paths = &.{"src/common/error_catalog.zig"},
     },
+    .{
+        .id = "AR-IMP-001",
+        .title = "semantic layer must not import driver code",
+        .kind = .forbidden_import_path_fragment,
+        .scope = .{ .prefix = "src/semantic" },
+        .needle = "driver/",
+    },
+    .{
+        .id = "AR-IMP-002",
+        .title = "codegen layer must not import driver code",
+        .kind = .forbidden_import_path_fragment,
+        .scope = .{ .prefix = "src/codegen" },
+        .needle = "driver/",
+    },
+    .{
+        .id = "AR-IMP-003",
+        .title = "semantic analysis must not import compat diagnostic storage",
+        .kind = .forbidden_import_path_fragment,
+        .scope = .{ .prefix = "src/semantic/analysis" },
+        .needle = "compat_diagnostic_storage.zig",
+    },
+    .{
+        .id = "AR-IMP-004",
+        .title = "codegen must not import compat diagnostic storage",
+        .kind = .forbidden_import_path_fragment,
+        .scope = .{ .prefix = "src/codegen" },
+        .needle = "compat_diagnostic_storage.zig",
+    },
+    .{
+        .id = "AR-IMP-005",
+        .title = "compiler mainline must not import tooling code",
+        .kind = .forbidden_import_path_fragment,
+        .scope = .{ .prefix = "src" },
+        .needle = "tools/",
+        .excluded_exact_paths = &.{
+            "src/tools/error_catalog_docgen.zig",
+            "src/tools/golden_runner.zig",
+            "src/tools/diagnostic_golden_runner.zig",
+            "src/tools/verify_runner.zig",
+            "src/tools/gcc_dg_runner.zig",
+            "src/tools/blas_runner.zig",
+            "src/tools/lapack_runner.zig",
+            "src/tools/test_harness.zig",
+            "src/tools/perf_bench.zig",
+            "src/tools/perf_compare.zig",
+            "src/tools/perf_dashboard.zig",
+            "src/tools/fallback_policy.zig",
+        },
+    },
 };
 
 pub const project_rules = [_]AuditRule{
@@ -201,6 +251,7 @@ fn validateRule(rule: AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
         .forbidden_text => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
+        .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
         .bare_error_code_literal => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
         .error_catalog_consistency => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
     }

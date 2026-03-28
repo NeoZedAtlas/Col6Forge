@@ -65,6 +65,10 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
+        .forbidden_import_path_fragment => {
+            const fragment = rule.needle orelse return error.AuditRuleMissingNeedle;
+            try scanForbiddenImportPathFragment(rule, rel_path, text, fragment, failures);
+        },
         .bare_error_code_literal => {
             scanBareErrorCodeLiterals(rule, rel_path, text, failures);
         },
@@ -88,6 +92,45 @@ fn scanBareErrorCodeLiterals(
         reportViolation(rel_path, text, idx, rule.id, rule.title, text[idx + 1 .. idx + 7]);
         failures.* += 1;
     }
+}
+
+fn scanForbiddenImportPathFragment(
+    rule: registry.AuditRule,
+    rel_path: []const u8,
+    text: []const u8,
+    fragment: []const u8,
+    failures: *usize,
+) !void {
+    var cursor: usize = 0;
+    while (findImportLiteral(text, cursor)) |match| {
+        cursor = match.next_cursor;
+        if (std.mem.indexOf(u8, match.literal, fragment) == null) continue;
+        reportViolation(rel_path, text, match.start_idx, rule.id, rule.title, match.literal);
+        failures.* += 1;
+    }
+}
+
+const ImportMatch = struct {
+    start_idx: usize,
+    literal: []const u8,
+    next_cursor: usize,
+};
+
+fn findImportLiteral(text: []const u8, from: usize) ?ImportMatch {
+    const needle = "@import(\"";
+    const start = std.mem.indexOfPos(u8, text, from, needle) orelse return null;
+    const literal_start = start + needle.len;
+    var idx = literal_start;
+    while (idx < text.len) : (idx += 1) {
+        if (text[idx] == '"' and text[idx - 1] != '\\') {
+            return .{
+                .start_idx = start,
+                .literal = text[literal_start..idx],
+                .next_cursor = idx + 1,
+            };
+        }
+    }
+    return null;
 }
 
 fn runProjectRules(failures: *usize) !void {
@@ -133,4 +176,14 @@ fn reportViolation(
 ) void {
     const line = 1 + std.mem.count(u8, text[0..idx], "\n");
     std.log.err("{s}:{d}: [{s}] forbidden {s}: `{s}`", .{ rel_path, line, rule_id, title, detail });
+}
+
+test "findImportLiteral parses import strings" {
+    const text =
+        "const a = @import(\"foo/bar.zig\");\n" ++
+        "const b = @import(\"baz.zig\");\n";
+    const first = findImportLiteral(text, 0) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("foo/bar.zig", first.literal);
+    const second = findImportLiteral(text, first.next_cursor) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("baz.zig", second.literal);
 }
