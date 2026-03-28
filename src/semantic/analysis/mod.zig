@@ -911,6 +911,52 @@ test "defined assignment declared with procedure is accepted for incompatible in
     try testing.expectEqual(@as(usize, 4), sem.units.len);
 }
 
+test "intrinsic assignment accepts double precision to complex conversion" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  complex*16 :: z\n" ++
+        "  double precision :: zero\n" ++
+        "  zero = 0.0d0\n" ++
+        "  z = zero\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try @import("../split/api/mod.zig").analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+}
+
+test "where assignment accepts double precision values for complex array targets" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  logical :: mask(2)\n" ++
+        "  complex*16 :: z(2)\n" ++
+        "  double precision :: values(2)\n" ++
+        "  mask = .true.\n" ++
+        "  values = 1.0d0\n" ++
+        "  where (mask) z = values\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try @import("../split/api/mod.zig").analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+}
+
 test "non-abstract type rejects deferred binding" {
     const testing = std.testing;
     const allocator = testing.allocator;

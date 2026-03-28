@@ -43,8 +43,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
-            if ((!expr_semantics.isAssignmentCompatible(target_ty, value_ty) or
-                !dummyArgTypeCompatible(self, target_spec, value_spec)) and
+            if ((!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec)) and
                 !expr_semantics.isDefinedAssignmentCompatible(self, assign.target, assign.value, .{
                     .dummyArgTypeCompatible = dummyArgTypeCompatible,
                 }))
@@ -350,8 +349,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
-            if (!expr_semantics.isAssignmentCompatible(target_ty, value_ty) or
-                !dummyArgTypeCompatible(self, target_spec, value_spec))
+            if (!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec))
             {
                 self.setCurrentSource(self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
@@ -392,6 +390,26 @@ fn dummyArgTypeCompatible(
         resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
     else
         resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
+}
+
+fn intrinsicAssignmentTypeCompatible(
+    self: *context.Context,
+    target_ty: ast.TypeKind,
+    value_ty: ast.TypeKind,
+    target_spec: symbols.TypeSpec,
+    value_spec: symbols.TypeSpec,
+) bool {
+    if (!expr_semantics.isAssignmentCompatible(target_ty, value_ty)) return false;
+
+    if (target_spec.polymorphic or value_spec.polymorphic) {
+        return dummyArgTypeCompatible(self, target_spec, value_spec);
+    }
+
+    if (target_spec.lowered_kind == .derived or value_spec.lowered_kind == .derived) {
+        return dummyArgTypeCompatible(self, target_spec, value_spec);
+    }
+
+    return true;
 }
 
 fn isLegacyDialectDoControlKind(kind: ast.TypeKind) bool {
