@@ -22,6 +22,7 @@ const ConstCallKind = enum {
     max,
     selected_real_kind,
     selected_int_kind,
+    selected_char_kind,
     kind,
     bit_size,
     storage_size,
@@ -51,6 +52,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "MAX", .max },
     .{ "SELECTED_REAL_KIND", .selected_real_kind },
     .{ "SELECTED_INT_KIND", .selected_int_kind },
+    .{ "SELECTED_CHAR_KIND", .selected_char_kind },
     .{ "KIND", .kind },
     .{ "BIT_SIZE", .bit_size },
     .{ "STORAGE_SIZE", .storage_size },
@@ -170,6 +172,15 @@ pub fn evalConstCall(
                 else => return null,
             };
             return .{ .integer = selectedIntKindForDigits(p) };
+        },
+        .selected_char_kind => {
+            if (call.args.len != 1) return null;
+            const selector = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const text = switch (selector) {
+                .string => |v| v,
+                else => return null,
+            };
+            return .{ .integer = selectedCharKind(text) };
         },
         .kind => {
             if (call.args.len != 1) return null;
@@ -303,6 +314,15 @@ fn selectedIntKindForDigits(precision: i64) i64 {
     if (precision <= 4) return 2;
     if (precision <= 9) return 4;
     if (precision <= 18) return 8;
+    return -1;
+}
+
+fn selectedCharKind(selector: []const u8) i64 {
+    const trimmed = std.mem.trim(u8, selector, &std.ascii.whitespace);
+    if (trimmed.len == 0) return -1;
+    if (std.ascii.eqlIgnoreCase(trimmed, "ascii")) return 1;
+    if (std.ascii.eqlIgnoreCase(trimmed, "default")) return 1;
+    if (std.ascii.eqlIgnoreCase(trimmed, "iso_10646")) return 4;
     return -1;
 }
 

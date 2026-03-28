@@ -3805,3 +3805,25 @@ test "emitModuleToWriter lowers character component substring and repeat assignm
     var writer = buffer.writer();
     try emitModuleToWriter(&writer, allocator, program, sem_prog, "char_component_repeat.f", .{});
 }
+
+test "emitModuleToWriter lowers INT and REAL intrinsics with KIND actual" {
+    const source =
+        \\program p
+        \\  integer, parameter :: k8 = 8
+        \\  integer(kind=8) :: i
+        \\  real(kind=8) :: x
+        \\  i = int(3.5, kind=k8)
+        \\  x = real(2, kind=k8)
+        \\end program p
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    defer buf.deinit();
+
+    try emitModuleToWriter(source, arena.allocator(), buf.writer());
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "fptosi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "sitofp") != null);
+}

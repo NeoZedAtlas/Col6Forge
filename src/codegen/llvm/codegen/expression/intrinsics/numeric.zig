@@ -140,7 +140,10 @@ pub fn emitIntrinsicDcmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitE
 
 pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
-    const target_ty: IRType = if (args.len == 2) .f64 else .f32;
+    const target_ty: IRType = if (args.len == 2)
+        (realKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        .f32;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(value.ty)) {
         const complex_ty: IRType = if (target_ty == .f64) .complex_f64 else .complex_f32;
@@ -156,7 +159,7 @@ pub fn emitIntrinsicLogical(ctx: *Context, builder: anytype, args: []*Expr) Emit
     if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (args.len == 2) {
-        _ = evalConstIntArg(ctx, args[1]);
+        _ = integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType;
     }
     return emitLogicalTruthValue(ctx, builder, value);
 }
@@ -351,19 +354,34 @@ pub fn emitMinMaxNInt(ctx: *Context, builder: anytype, args: []*Expr, is_max: bo
 }
 
 pub fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(value.ty)) {
         const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
         value = try complex.coerceToComplex(ctx, builder, value, target);
         value = try complex.extractComplex(ctx, builder, value, 0);
     }
-    const int_ty = ctx.defaultIntegerIRType();
+    const int_ty = if (args.len == 2)
+        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        ctx.defaultIntegerIRType();
     if (value.ty == int_ty) return value;
-    if (value.ty == .i64 or value.ty == .f32 or value.ty == .f64) {
+    if (isIntegerType(value.ty) or isRealType(value.ty)) {
         return casting.coerce(ctx, builder, value, int_ty);
     }
     return error.UnsupportedIntrinsicType;
+}
+
+fn integerKindToIRType(kind_value: i64) ?IRType {
+    if (kind_value <= 0) return null;
+    if (kind_value >= 8) return .i64;
+    return .i32;
+}
+
+fn realKindToIRType(kind_value: i64) ?IRType {
+    if (kind_value <= 0) return null;
+    if (kind_value >= 8) return .f64;
+    return .f32;
 }
 
 pub fn emitIntrinsicIdint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {

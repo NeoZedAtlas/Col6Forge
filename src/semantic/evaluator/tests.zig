@@ -132,6 +132,60 @@ test "const call dispatch handles SELECTED_INT_KIND" {
     }
 }
 
+test "const call dispatch handles SELECTED_CHAR_KIND" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const selector = try a.create(ast.Expr);
+    selector.* = .{ .literal = .{ .kind = .string, .text = "'ISO_10646'" } };
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = selector;
+
+    const call = try a.create(ast.Expr);
+    call.* = .{ .call_or_subscript = .{ .name = "selected_char_kind", .args = args } };
+
+    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 4), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch trims and rejects unsupported SELECTED_CHAR_KIND names" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const default_selector = try a.create(ast.Expr);
+    default_selector.* = .{ .literal = .{ .kind = .string, .text = "'default     '" } };
+    const default_args = try a.alloc(*ast.Expr, 1);
+    default_args[0] = default_selector;
+    const default_call = try a.create(ast.Expr);
+    default_call.* = .{ .call_or_subscript = .{ .name = "selected_char_kind", .args = default_args } };
+
+    const invalid_selector = try a.create(ast.Expr);
+    invalid_selector.* = .{ .literal = .{ .kind = .string, .text = "'foo'" } };
+    const invalid_args = try a.alloc(*ast.Expr, 1);
+    invalid_args[0] = invalid_selector;
+    const invalid_call = try a.create(ast.Expr);
+    invalid_call.* = .{ .call_or_subscript = .{ .name = "selected_char_kind", .args = invalid_args } };
+
+    const default_value = (try evalConst(default_call, null)) orelse return error.TestExpectedEqual;
+    switch (default_value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 1), v),
+        else => return error.TestExpectedEqual,
+    }
+
+    const invalid_value = (try evalConst(invalid_call, null)) orelse return error.TestExpectedEqual;
+    switch (invalid_value) {
+        .integer => |v| try testing.expectEqual(@as(i64, -1), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "const call dispatch handles BIT_SIZE with named kind suffix" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
