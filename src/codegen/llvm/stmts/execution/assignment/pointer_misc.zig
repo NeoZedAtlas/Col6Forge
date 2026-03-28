@@ -69,6 +69,10 @@ fn emitNullifyComponentItem(ctx: *Context, builder: anytype, comp: ast.Component
 
     const storage_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, comp);
     try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = true }, storage_ptr);
+    if (component.type_spec.lowered_kind == .character and component.type_spec.char_len == null) {
+        const len_slot = try expr_memory.emitComponentCharacterLenPtr(ctx, builder, comp);
+        try builder.store(character_mod.constI64(ctx, 0), len_slot);
+    }
 
     for (0..component.dims.len) |dim_idx| {
         const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);

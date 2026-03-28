@@ -907,7 +907,10 @@ pub const Context = struct {
     fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         const direct = try self.componentDirectElemSizeAlign(type_decl, item);
         if (!(type_decl.pointer or type_decl.allocatable)) return direct;
-        const descriptor_bytes = componentDescriptorBytes(item.dims.len);
+        const descriptor_bytes = componentDescriptorBytes(
+            item.dims.len,
+            direct.type_spec.lowered_kind == .character and direct.type_spec.char_len == null,
+        );
         return .{
             .type_spec = direct.type_spec,
             .sig = null,
@@ -958,7 +961,19 @@ pub const Context = struct {
         }
         if (type_decl.type_kind == .character) {
             const char_len = if (item.char_len_deferred) null else inferConstantCharLen(self, item.char_len);
-            if (char_len == null) return error.NonConstantCharacterLength;
+            if (char_len == null) {
+                if (type_decl.pointer or type_decl.allocatable) {
+                    spec = spec.withCharacterLength(.deferred, null);
+                    return .{
+                        .type_spec = spec,
+                        .sig = null,
+                        .storage_size = 1,
+                        .element_size = 1,
+                        .alignment = 1,
+                    };
+                }
+                return error.NonConstantCharacterLength;
+            }
             spec = spec.withCharacterLength(.constant, char_len.?);
             return .{
                 .type_spec = spec,
@@ -1072,9 +1087,11 @@ pub const Context = struct {
     }
 };
 
-fn componentDescriptorBytes(rank: usize) usize {
-    if (rank == 0) return 0;
-    return rank * 3 * @sizeOf(i64);
+fn componentDescriptorBytes(rank: usize, has_char_len_slot: bool) usize {
+    var bytes: usize = if (has_char_len_slot) @sizeOf(i64) else 0;
+    if (rank == 0) return bytes;
+    bytes += rank * 3 * @sizeOf(i64);
+    return bytes;
 }
 
 const SizeAlign = struct {

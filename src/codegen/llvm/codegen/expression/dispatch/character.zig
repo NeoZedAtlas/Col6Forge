@@ -678,13 +678,22 @@ fn emitCharacterComponentLenValue(
     comp: ast.ComponentExpr,
     component: cg_context.DerivedComponentLayout,
 ) EmitError!?ValueRef {
+    const base_len_val = if (componentCharacterConstLen(component)) |const_len|
+        try ctx.constI32(@intCast(const_len))
+    else if (component.pointer or component.allocatable) blk: {
+        const len_slot = try memory.emitComponentCharacterLenPtr(ctx, builder, comp);
+        const len_name = try ctx.nextTemp();
+        try builder.load(len_name, .i64, len_slot);
+        var len_val = ValueRef{ .name = len_name, .ty = .i64, .is_ptr = false };
+        if (len_val.ty != .i32) len_val = try coerceCharacterLenToI32(ctx, builder, len_val);
+        break :blk len_val;
+    } else null;
+
     if (!isCharacterComponentSubstringRef(component, comp)) {
-        const char_len = componentCharacterConstLen(component) orelse return null;
-        return try ctx.constI32(@intCast(char_len));
+        return base_len_val;
     }
     const range = comp.args[0].dim_range;
-    const base_len = componentCharacterConstLen(component) orelse return null;
-    var end_val = try ctx.constI32(@intCast(base_len));
+    var end_val = base_len_val orelse return null;
     if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
         end_val = try coerceCharacterLenToI32(ctx, builder, try memory.emitIndex(ctx, builder, range.upper));
     }

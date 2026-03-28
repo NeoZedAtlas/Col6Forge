@@ -260,6 +260,16 @@ pub fn emitLoadedComponentDataPtr(ctx: *Context, builder: anytype, comp: ast.Com
     return .{ .name = tmp, .ty = .ptr, .is_ptr = true };
 }
 
+pub fn emitComponentCharacterLenPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
+    const component = try lookupComponentLayout(ctx, comp);
+    if (!(component.pointer or component.allocatable)) return error.UnknownSymbol;
+    if (component.type_spec.lowered_kind != .character or component.type_spec.char_len != null) return error.UnknownSymbol;
+    const storage_ptr = try emitComponentStoragePtr(ctx, builder, comp);
+    const gep_name = try ctx.nextTemp();
+    try builder.gep(gep_name, .i8, storage_ptr, i64Const(ctx, @intCast(@sizeOf(usize))));
+    return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+}
+
 pub fn emitComponentDimLower(
     ctx: *Context,
     builder: anytype,
@@ -437,11 +447,15 @@ pub fn emitComponentDescriptorSlotPtr(
     if (dim_index >= component.dims.len) return error.InvalidSubscript;
     const storage_ptr = try emitComponentStoragePtr(ctx, builder, comp);
     const ptr_size = @sizeOf(usize);
+    const char_len_slot_size: usize = if (component.type_spec.lowered_kind == .character and component.type_spec.char_len == null)
+        @sizeOf(i64)
+    else
+        0;
     const dim_span = component.dims.len * @sizeOf(i64);
     const base_offset: usize = switch (kind) {
-        .lower => ptr_size + dim_index * @sizeOf(i64),
-        .extent => ptr_size + dim_span + dim_index * @sizeOf(i64),
-        .multiplier => ptr_size + dim_span * 2 + dim_index * @sizeOf(i64),
+        .lower => ptr_size + char_len_slot_size + dim_index * @sizeOf(i64),
+        .extent => ptr_size + char_len_slot_size + dim_span + dim_index * @sizeOf(i64),
+        .multiplier => ptr_size + char_len_slot_size + dim_span * 2 + dim_index * @sizeOf(i64),
     };
     const gep_name = try ctx.nextTemp();
     try builder.gep(gep_name, .i8, storage_ptr, i64Const(ctx, @intCast(base_offset)));

@@ -172,6 +172,7 @@ fn emitAllocateComponentItem(
     try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
     const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
     try builder.store(base_ptr, storage_ptr);
+    try updateAllocatedComponentCharacterLen(ctx, builder, comp, component, type_spec);
 
     var running_multiplier = constI64(ctx, 1);
     for (dim_specs, 0..) |dim_spec, dim_idx| {
@@ -233,6 +234,7 @@ fn emitDeallocateComponentItem(ctx: *Context, builder: anytype, comp: ast.Compon
     const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
     try builder.callTyped(null, .void, free_name, &.{current_ptr});
     try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = true }, storage_ptr);
+    try clearComponentCharacterLen(ctx, builder, comp, component);
 
     for (0..component.dims.len) |dim_idx| {
         const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);
@@ -573,6 +575,39 @@ fn updateAllocatedCharacterLen(
         len_i64 = try expr.coerce(ctx, builder, len_i64, .i32);
     }
     try ctx.char_arg_lens.put(sym.name, len_i64);
+}
+
+fn updateAllocatedComponentCharacterLen(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+    type_spec: ?ast.AllocateTypeSpec,
+) EmitError!void {
+    if (component.type_spec.lowered_kind != .character) return;
+    if (component.type_spec.char_len != null) return;
+    if (!(component.allocatable or component.pointer)) return;
+
+    const len_slot = try expr_memory.emitComponentCharacterLenPtr(ctx, builder, comp);
+    var len_i64 = if (type_spec) |spec|
+        try emitAllocateCharacterLenI64(ctx, builder, spec, undefined)
+    else
+        constI64(ctx, 0);
+    if (len_i64.ty != .i64) len_i64 = try expr.coerce(ctx, builder, len_i64, .i64);
+    try builder.store(len_i64, len_slot);
+}
+
+fn clearComponentCharacterLen(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) EmitError!void {
+    if (component.type_spec.lowered_kind != .character) return;
+    if (component.type_spec.char_len != null) return;
+    if (!(component.allocatable or component.pointer)) return;
+    const len_slot = try expr_memory.emitComponentCharacterLenPtr(ctx, builder, comp);
+    try builder.store(constI64(ctx, 0), len_slot);
 }
 
 fn constI64(ctx: *Context, value: i64) ValueRef {

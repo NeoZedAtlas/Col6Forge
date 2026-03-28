@@ -612,6 +612,37 @@ test "emitModuleToWriter supports allocatable unlimited polymorphic components" 
     try testing.expect(std.mem.indexOf(u8, output, "call void @free") != null);
 }
 
+test "emitModuleToWriter supports deferred-length allocatable character components in assignment and substring" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  type foo\n" ++
+        "    character(len=:), allocatable :: x\n" ++
+        "  end type foo\n" ++
+        "  type(foo) :: a\n" ++
+        "  a%x = 'asdf'\n" ++
+        "  a%x = a%x(2:3)\n" ++
+        "end program main\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "char_alloc_component_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "load i64") != null);
+}
+
 test "emitModuleToWriter resolves derived layout dependencies across imported module preludes" {
     const testing = std.testing;
     const allocator = testing.allocator;
