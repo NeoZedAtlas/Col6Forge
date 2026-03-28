@@ -360,9 +360,10 @@ fn structureConstructorTypeName(
     sym: symbols.Symbol,
 ) ?[]const u8 {
     const info = resolve_symbols.lookupDerivedType(self, name) orelse return null;
-    if (sym.is_intrinsic or sym.is_external or sym.dims.len != 0) return null;
+    const local_derived_shadow = sym.is_host_associated and resolve_symbols.hasLocalDerivedType(self, name);
+    if (sym.is_intrinsic or (!local_derived_shadow and sym.is_external) or sym.dims.len != 0) return null;
     if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return null;
-    if (sym.type_explicit and sym.loweredKind() != .derived) return null;
+    if (!local_derived_shadow and sym.type_explicit and sym.loweredKind() != .derived) return null;
     return info.name;
 }
 

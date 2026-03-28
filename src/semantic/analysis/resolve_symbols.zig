@@ -45,13 +45,13 @@ pub fn hasKnownHostDerivedType(self: *const context.Context, name: []const u8) b
     return getLowercaseMapValue(context.Context.DerivedTypeInfo, self.known_host_derived_types, name) != null;
 }
 
+pub fn hasLocalDerivedType(self: *const context.Context, name: []const u8) bool {
+    return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) != null;
+}
+
 pub fn lookupDerivedType(self: *const context.Context, name: []const u8) ?context.Context.DerivedTypeInfo {
     return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) orelse
         getLowercaseMapValue(context.Context.DerivedTypeInfo, self.known_host_derived_types, name);
-}
-
-fn hasLocalDerivedType(self: *const context.Context, name: []const u8) bool {
-    return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) != null;
 }
 
 pub fn lookupDerivedComponent(

@@ -1756,6 +1756,39 @@ test "derived assignment accepts renamed host type identity and sequence-equival
     _ = try split_api.analyzeProgram(arena.allocator(), program);
 }
 
+test "local derived constructor shadows host-associated object of the same name" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module global\n" ++
+        "  type :: seq_type1\n" ++
+        "    sequence\n" ++
+        "    integer :: i\n" ++
+        "  end type seq_type1\n" ++
+        "end module global\n" ++
+        "use global, only: seq_type2 => seq_type1\n" ++
+        "real :: seq_type1\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "    type :: seq_type1\n" ++
+        "      sequence\n" ++
+        "      integer :: i\n" ++
+        "    end type seq_type1\n" ++
+        "    type(seq_type2) :: x\n" ++
+        "    x = seq_type1(1)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "nopass type-bound call rejects array base object" {
     const testing = std.testing;
     const allocator = testing.allocator;
