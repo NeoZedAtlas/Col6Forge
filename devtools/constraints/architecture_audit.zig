@@ -1,43 +1,6 @@
 const std = @import("std");
 const Col6Forge = @import("Col6Forge");
-
-const Rule = struct {
-    name: []const u8,
-    needle: []const u8,
-};
-
-const ScopedRule = struct {
-    path_prefix: []const u8,
-    name: []const u8,
-    needle: []const u8,
-};
-
-const forbidden_global = [_]Rule{
-    .{ .name = "source doc dependency", .needle = "docs/errors.md" },
-    .{ .name = "legacy formatted entry", .needle = "emitWriteFormatted(" },
-    .{ .name = "legacy formatted entry", .needle = "emitReadFormatted(" },
-    .{ .name = "legacy formatted entry", .needle = "emitSpecialFormattedWrite(" },
-    .{ .name = "legacy formatted entry", .needle = "emitWriteDynamicFormat(" },
-    .{ .name = "legacy formatted entry", .needle = "emitReadDynamicFormat(" },
-    .{ .name = "legacy formatted entry", .needle = "streamFormatSource(" },
-    .{ .name = "legacy formatted entry", .needle = "emitWriteFormattedStreamPrepared(" },
-    .{ .name = "legacy formatted entry", .needle = "emitReadFormattedStreamPrepared(" },
-};
-
-const forbidden_scoped = [_]ScopedRule{
-    .{ .path_prefix = "src/semantic", .name = "compat mirror read", .needle = "sym.compat." },
-    .{ .path_prefix = "src/semantic", .name = "compat mirror read", .needle = "symbol.compat." },
-    .{ .path_prefix = "src/codegen", .name = "compat mirror read", .needle = "sym.compat." },
-    .{ .path_prefix = "src/codegen", .name = "compat mirror read", .needle = "symbol.compat." },
-    .{ .path_prefix = "src/semantic", .name = "legacy symbol field read", .needle = "sym.type_kind" },
-    .{ .path_prefix = "src/semantic", .name = "legacy symbol field read", .needle = "sym.char_len" },
-    .{ .path_prefix = "src/semantic", .name = "legacy symbol field read", .needle = "sym.char_len_kind" },
-    .{ .path_prefix = "src/codegen", .name = "legacy symbol field read", .needle = "sym.type_kind" },
-    .{ .path_prefix = "src/codegen", .name = "legacy symbol field read", .needle = "sym.char_len" },
-    .{ .path_prefix = "src/codegen", .name = "legacy symbol field read", .needle = "sym.char_len_kind" },
-    .{ .path_prefix = "src/semantic", .name = "direct Symbol literal", .needle = "Symbol{" },
-    .{ .path_prefix = "src/codegen", .name = "direct Symbol literal", .needle = "Symbol{" },
-};
+const registry = @import("registry.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -70,19 +33,13 @@ fn scanTree(allocator: std.mem.Allocator, root: []const u8, failures: *usize) !v
         const rel_path = try normalizePathForAudit(allocator, rel_path_native);
         defer allocator.free(rel_path);
 
-        if (isAllowedCompatFile(rel_path)) continue;
+        if (registry.isAllowedCompatFile(rel_path)) continue;
 
         const text = try std.fs.cwd().readFileAlloc(allocator, rel_path, 16 * 1024 * 1024);
         defer allocator.free(text);
 
         try scanFile(rel_path, text, failures);
     }
-}
-
-fn isAllowedCompatFile(rel_path: []const u8) bool {
-    return std.mem.eql(u8, rel_path, "src/semantic/symbol/entity.zig") or
-        std.mem.eql(u8, rel_path, "src/tools/error_catalog_docgen.zig") or
-        std.mem.eql(u8, rel_path, "src/tools/architecture_audit.zig");
 }
 
 fn normalizePathForAudit(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
@@ -94,14 +51,14 @@ fn normalizePathForAudit(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn scanFile(rel_path: []const u8, text: []const u8, failures: *usize) !void {
-    for (forbidden_global) |rule| {
+    for (registry.forbidden_global) |rule| {
         if (std.mem.indexOf(u8, text, rule.needle)) |idx| {
             reportViolation(rel_path, text, idx, rule.name, rule.needle);
             failures.* += 1;
         }
     }
 
-    for (forbidden_scoped) |rule| {
+    for (registry.forbidden_scoped) |rule| {
         if (!std.mem.startsWith(u8, rel_path, rule.path_prefix)) continue;
         if (std.mem.indexOf(u8, text, rule.needle)) |idx| {
             reportViolation(rel_path, text, idx, rule.name, rule.needle);
@@ -113,7 +70,7 @@ fn scanFile(rel_path: []const u8, text: []const u8, failures: *usize) !void {
 }
 
 fn scanBareErrorCodeLiterals(rel_path: []const u8, text: []const u8, failures: *usize) void {
-    if (shouldSkipBareErrorCodeAudit(rel_path)) return;
+    if (registry.shouldSkipBareErrorCodeAudit(rel_path)) return;
 
     var idx: usize = 0;
     while (idx + 7 < text.len) : (idx += 1) {
@@ -125,12 +82,6 @@ fn scanBareErrorCodeLiterals(rel_path: []const u8, text: []const u8, failures: *
         reportViolation(rel_path, text, idx, "bare error code literal", text[idx + 1 .. idx + 7]);
         failures.* += 1;
     }
-}
-
-fn shouldSkipBareErrorCodeAudit(rel_path: []const u8) bool {
-    return std.mem.eql(u8, rel_path, "src/common/error_catalog.zig") or
-        std.mem.indexOf(u8, rel_path, "/tests/") != null or
-        isAllowedCompatFile(rel_path);
 }
 
 fn verifyErrorCatalog(failures: *usize) void {
@@ -160,10 +111,4 @@ fn verifyErrorCatalog(failures: *usize) void {
 fn reportViolation(rel_path: []const u8, text: []const u8, idx: usize, name: []const u8, needle: []const u8) void {
     const line = 1 + std.mem.count(u8, text[0..idx], "\n");
     std.log.err("{s}:{d}: forbidden {s}: `{s}`", .{ rel_path, line, name, needle });
-}
-
-test "allowed compat file is exempt" {
-    try std.testing.expect(isAllowedCompatFile("src/semantic/symbol/entity.zig"));
-    try std.testing.expect(isAllowedCompatFile("src/tools/error_catalog_docgen.zig"));
-    try std.testing.expect(!isAllowedCompatFile("src/semantic/analysis/resolve_symbols.zig"));
 }

@@ -45,6 +45,10 @@ pub fn build(b: *std.Build) void {
     ) orelse false;
     const driver_build_options = b.addOptions();
     driver_build_options.addOption([]const u8, "project_root", b.pathFromRoot("."));
+    const constraints_devtools = b.addModule("constraints_devtools", .{
+        .root_source_file = b.path("devtools/constraints/mod.zig"),
+        .target = target,
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -263,11 +267,12 @@ pub fn build(b: *std.Build) void {
     const architecture_audit = b.addExecutable(.{
         .name = "architecture_audit",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tools/architecture_audit.zig"),
+            .root_source_file = b.path("devtools/constraints/architecture_audit.zig"),
             .target = target,
             .optimize = tools_optimize,
             .imports = &.{
                 .{ .name = "Col6Forge", .module = mod },
+                .{ .name = "constraints_devtools", .module = constraints_devtools },
             },
         }),
     });
@@ -285,6 +290,7 @@ pub fn build(b: *std.Build) void {
     b.addNamedLazyPath("col6forge_rt_src", b.path("src/runtime/col6forge_rt.zig"));
     b.addNamedLazyPath("col6forge_rt_dir", b.path("src/runtime"));
     b.addNamedLazyPath("col6forge_src_dir", b.path("src"));
+    b.addNamedLazyPath("constraints_devtools_dir", b.path("devtools/constraints"));
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
     const install_diagnostic_golden_runner = b.addInstallArtifact(diagnostic_golden_runner, .{});
