@@ -1,4 +1,5 @@
 const std = @import("std");
+const case_insensitive = @import("../../common/case_insensitive.zig");
 const symbols = @import("../symbol/mod.zig");
 
 pub const Symbol = symbols.Symbol;
@@ -77,8 +78,4 @@ pub fn lookupSemanticSymbol(
     return null;
 }
 
-pub fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
-}
+pub const lowerDup = case_insensitive.lowerDup;

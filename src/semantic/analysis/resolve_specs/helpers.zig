@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const case_insensitive = @import("../../../common/case_insensitive.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
@@ -190,11 +191,7 @@ fn blankCommonKey() []const u8 {
     return "\x00";
 }
 
-pub fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
-}
+pub const lowerDup = case_insensitive.lowerDup;
 
 pub fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void {
     for (self.implicit.items) |existing| {

@@ -16,11 +16,13 @@ const max_implied_do_iterations: usize = 65_536;
 const max_static_array_arg_expansion: usize = 4096;
 
 const io_utils = @import("utils.zig");
+const implied_helpers = @import("implied_helpers.zig");
 
 const ComplexFixup = io_utils.ComplexFixup;
 const charLenForExpr = io_utils.charLenForExpr;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const impliedLoopDim = implied_helpers.impliedLoopDim;
 
 pub const ExpandedReadTargets = struct {
     ptrs: std.array_list.Managed(ValueRef),
@@ -522,67 +524,6 @@ fn inferImpliedDoEndFromItems(ctx: *Context, implied: ast.ImpliedDo) ?i64 {
         return extent;
     }
     return null;
-}
-fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
-    var found: ?usize = null;
-    for (args, 0..) |arg, idx| {
-        const is_loop_var = arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, loop_var);
-        if (is_loop_var) {
-            if (found != null) return null;
-            found = idx;
-            continue;
-        }
-        if (exprContainsIdentifier(arg, loop_var)) return null;
-    }
-    return found;
-}
-fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
-    return switch (node.*) {
-        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
-        .unary => |un| exprContainsIdentifier(un.expr, name),
-        .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),
-        .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
-        .call_or_subscript => |call| blk: {
-            for (call.args) |arg| {
-                if (exprContainsIdentifier(arg, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .substring => |sub| blk: {
-            for (sub.args) |arg| {
-                if (exprContainsIdentifier(arg, name)) break :blk true;
-            }
-            if (sub.start) |start_expr| {
-                if (exprContainsIdentifier(start_expr, name)) break :blk true;
-            }
-            if (sub.end) |end_expr| {
-                if (exprContainsIdentifier(end_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .dim_range => |range| blk: {
-            if (range.lower) |lower| {
-                if (exprContainsIdentifier(lower, name)) break :blk true;
-            }
-            if (exprContainsIdentifier(range.upper, name)) break :blk true;
-            if (range.stride) |stride_expr| {
-                if (exprContainsIdentifier(stride_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .implied_do => |implied| blk: {
-            for (implied.items) |item| {
-                if (exprContainsIdentifier(item, name)) break :blk true;
-            }
-            if (exprContainsIdentifier(implied.start, name)) break :blk true;
-            if (exprContainsIdentifier(implied.end, name)) break :blk true;
-            if (implied.step) |step_expr| {
-                if (exprContainsIdentifier(step_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        else => false,
-    };
 }
 fn staticIntValue(ctx: *Context, node: *ast.Expr) ?i64 {
     return (evalConstIntSem(ctx, node) catch null) orelse intLiteralValue(node);

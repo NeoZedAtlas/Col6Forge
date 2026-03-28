@@ -8,10 +8,14 @@ const expr = @import("../../expr.zig");
 const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
 const control_flow = @import("../control_flow.zig");
+const stmt_shared = @import("shared.zig");
 
 const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
 const DoContext = control_flow.DoContext;
+const defaultSourceColumn = stmt_shared.defaultSourceColumn;
+const setStmtSourceIfMissing = stmt_shared.setStmtSourceIfMissing;
+const lexLine = stmt_shared.lexLine;
 
 pub const ParseStatementFn = *const fn (
     arena: std.mem.Allocator,
@@ -24,44 +28,6 @@ pub const ParseStatementFn = *const fn (
     diag_bag: *parse_diag.Bag,
     lex_diag_bag: *lexer.Bag,
 ) anyerror!Stmt;
-
-fn defaultSourceColumn(line: logical_line.LogicalLine) usize {
-    return if (line.segments.len > 0) line.segments[0].column else 1;
-}
-
-fn setStmtSourceIfMissing(stmt: *Stmt, line: logical_line.LogicalLine) void {
-    if (stmt.source_line != 0) return;
-    stmt.source_line = line.span.start_line;
-    stmt.source_column = defaultSourceColumn(line);
-    stmt.source_text = line.text;
-}
-
-fn setLexerOrLineDiagnostic(
-    diag_bag: *parse_diag.Bag,
-    lex_diag_bag: *lexer.Bag,
-    line: logical_line.LogicalLine,
-    err: anyerror,
-) void {
-    if (lex_diag_bag.take()) |lex_diag| {
-        defer lex_diag_bag.release(lex_diag);
-        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
-        return;
-    }
-    const info = parse_diag.errorInfo(err);
-    diag_bag.set(line.span.start_line, defaultSourceColumn(line), info.code, info.message, line.text);
-}
-
-fn lexLine(
-    arena: std.mem.Allocator,
-    line: logical_line.LogicalLine,
-    diag_bag: *parse_diag.Bag,
-    lex_diag_bag: *lexer.Bag,
-) ![]lexer.Token {
-    return lexer.lexLogicalLineWithDiagnostics(arena, line, lex_diag_bag) catch |err| {
-        setLexerOrLineDiagnostic(diag_bag, lex_diag_bag, line, err);
-        return err;
-    };
-}
 
 pub fn isAssociateStart(lp: LineParser) bool {
     return lp.isKeywordSplit("ASSOCIATE");

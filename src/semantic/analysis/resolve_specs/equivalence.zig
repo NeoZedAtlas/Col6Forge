@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const case_insensitive = @import("../../../common/case_insensitive.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
@@ -149,11 +150,7 @@ fn findEquivalenceRoot(self: *context.Context, idx: usize) !usize {
     return root;
 }
 
-fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
-}
+const lowerDup = case_insensitive.lowerDup;
 
 fn hasCommonBlock(self: *context.Context, target: ?[]const u8) !bool {
     try ensureCommonBlockIndex(self);

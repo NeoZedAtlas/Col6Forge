@@ -12,6 +12,7 @@ const ValueRef = context.ValueRef;
 const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
+const implied_helpers = @import("../implied_helpers.zig");
 const expansion = @import("../expansion.zig");
 const typed = @import("typed.zig");
 const arrays = @import("arrays.zig");
@@ -24,6 +25,8 @@ const defaultIntegerKind = io_utils.defaultIntegerKind;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const scalarByteSize = io_utils.scalarByteSize;
 const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
+const impliedLoopDim = implied_helpers.impliedLoopDim;
+const impliedStrideForDim = implied_helpers.impliedStrideForSymbolDim;
 const expandIoArgs = expansion.expandIoArgs;
 const buildTypedWriteArgs = typed.buildTypedWriteArgs;
 const buildTypedReadArgs = typed.buildTypedReadArgs;
@@ -504,85 +507,4 @@ fn shouldStreamDirect(ctx: *Context, args: []*ast.Expr) bool {
         }
     }
     return false;
-}
-
-fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
-    var found: ?usize = null;
-    for (args, 0..) |arg, idx| {
-        const is_loop_var = arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, loop_var);
-        if (is_loop_var) {
-            if (found != null) return null;
-            found = idx;
-            continue;
-        }
-        if (exprContainsIdentifier(arg, loop_var)) return null;
-    }
-    return found;
-}
-
-fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
-    return switch (node.*) {
-        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
-        .unary => |un| exprContainsIdentifier(un.expr, name),
-        .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),
-        .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
-        .call_or_subscript => |call| blk: {
-            for (call.args) |arg| {
-                if (exprContainsIdentifier(arg, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .substring => |sub| blk: {
-            for (sub.args) |arg| {
-                if (exprContainsIdentifier(arg, name)) break :blk true;
-            }
-            if (sub.start) |start_expr| {
-                if (exprContainsIdentifier(start_expr, name)) break :blk true;
-            }
-            if (sub.end) |end_expr| {
-                if (exprContainsIdentifier(end_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .dim_range => |range| blk: {
-            if (range.lower) |lower| {
-                if (exprContainsIdentifier(lower, name)) break :blk true;
-            }
-            if (exprContainsIdentifier(range.upper, name)) break :blk true;
-            if (range.stride) |stride_expr| {
-                if (exprContainsIdentifier(stride_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        .implied_do => |implied| blk: {
-            for (implied.items) |item| {
-                if (exprContainsIdentifier(item, name)) break :blk true;
-            }
-            if (exprContainsIdentifier(implied.start, name)) break :blk true;
-            if (exprContainsIdentifier(implied.end, name)) break :blk true;
-            if (implied.step) |step_expr| {
-                if (exprContainsIdentifier(step_expr, name)) break :blk true;
-            }
-            break :blk false;
-        },
-        else => false,
-    };
-}
-
-fn impliedStrideForDim(
-    ctx: *Context,
-    builder: anytype,
-    sym: ast.sema.Symbol,
-    loop_dim: usize,
-    step_expr: ?*ast.Expr,
-) EmitError!ValueRef {
-    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
-    stride = try coerceRuntimeI32(ctx, builder, stride);
-    if (step_expr) |step_node| {
-        const step = try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, step_node));
-        const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, stride, step);
-        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-    }
-    return stride;
 }

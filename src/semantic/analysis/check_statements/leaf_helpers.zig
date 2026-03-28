@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const case_insensitive = @import("../../../common/case_insensitive.zig");
 const context = @import("../context.zig");
 const intrinsics = @import("../intrinsics.zig");
 const resolve_expr = @import("../resolve_expr.zig");
@@ -52,11 +53,7 @@ pub fn isHomogeneousMaxMinIntrinsic(name: []const u8) bool {
     return std.mem.eql(u8, upper, "MAX") or std.mem.eql(u8, upper, "MIN");
 }
 
-pub fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
-}
+pub const lowerDup = case_insensitive.lowerDup;
 
 pub fn lookupIntrinsicArity(self: *context.Context, name: []const u8) ?intrinsics.Arity {
     var key_buf: [128]u8 = undefined;

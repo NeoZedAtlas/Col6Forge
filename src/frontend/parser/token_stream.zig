@@ -1,4 +1,5 @@
 const std = @import("std");
+const case_insensitive = @import("../../common/case_insensitive.zig");
 const logical_line = @import("../logical_line.zig");
 const lexer = @import("../lexer.zig");
 
@@ -106,7 +107,7 @@ pub const TokenStream = struct {
 pub const LineParser = TokenStream;
 
 pub fn eqNoCase(a: []const u8, b: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(a, b);
+    return case_insensitive.eql(a, b);
 }
 
 fn hasNameContinuation(tokens: []const lexer.Token, index: usize) bool {

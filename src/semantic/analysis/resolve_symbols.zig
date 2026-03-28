@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const case_insensitive = @import("../../common/case_insensitive.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const intrinsics = @import("intrinsics.zig");
@@ -9,6 +10,7 @@ const Symbol = symbols.Symbol;
 const CharacterLengthKind = symbols.CharacterLengthKind;
 const TypeSpec = symbols.TypeSpec;
 const MAX_IDENT_LEN: usize = 64;
+const lowerDup = case_insensitive.lowerDup;
 
 pub fn initImplicitDefaults(self: *context.Context) !void {
     try self.implicit.append(symbols.ImplicitRule.init('I', 'N', TypeSpec.fromResolvedKind(.integer, .integer, null)));
@@ -436,18 +438,12 @@ fn putBuiltinConstant(
     type_spec: TypeSpec,
     value: symbols.ConstValue,
 ) !void {
-    const key = try lowerDup(self.arena, name);
+    const key = try case_insensitive.lowerDup(self.arena, name);
     try self.builtin_constants.put(key, .{
         .module_name = module_name,
         .type_spec = type_spec,
         .value = value,
     });
-}
-
-fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
 }
 
 pub fn lookupKnownFunctionResolvedSpec(self: *context.Context, name: []const u8) ?TypeSpec {

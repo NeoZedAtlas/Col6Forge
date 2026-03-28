@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
+const case_insensitive = @import("../../common/case_insensitive.zig");
 const symbol_lookup = @import("symbol_lookup.zig");
 const const_eval_bridge = @import("const_eval_bridge.zig");
 
@@ -74,23 +75,10 @@ const EquivalenceDesignator = struct {
     designator_byte_offset: i64,
 };
 
-const CaseInsensitiveStringContext = struct {
-    pub fn hash(_: @This(), key: []const u8) u64 {
-        var h: u64 = 0xcbf29ce484222325;
-        for (key) |ch| {
-            const lowered = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
-            h = (h ^ @as(u64, lowered)) *% 0x100000001b3;
-        }
-        return h;
-    }
-
-    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        return std.ascii.eqlIgnoreCase(a, b);
-    }
-};
+const CaseInsensitiveStringContext = case_insensitive.StringContext;
 
 fn CaseInsensitiveStringHashMap(comptime V: type) type {
-    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
+    return case_insensitive.HashMap(V);
 }
 
 const SymbolNode = struct {

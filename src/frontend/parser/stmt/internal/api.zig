@@ -14,32 +14,16 @@ const associate_stmt = @import("associate_stmt.zig");
 const helpers = @import("../helpers.zig");
 const select_case = @import("select_case.zig");
 const select_type = @import("select_type.zig");
+const stmt_shared = @import("shared.zig");
 
 const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
 const StmtNode = ast.StmtNode;
 const DoContext = control_flow.DoContext;
-
-fn defaultSourceColumn(line: logical_line.LogicalLine) usize {
-    return if (line.segments.len > 0) line.segments[0].column else 1;
-}
-
-fn setStmtSourceIfMissing(stmt: *Stmt, line: logical_line.LogicalLine) void {
-    if (stmt.source_line != 0) return;
-    stmt.source_line = line.span.start_line;
-    stmt.source_column = defaultSourceColumn(line);
-    stmt.source_text = line.text;
-}
-
-fn makeStmtWithSource(line: logical_line.LogicalLine, label: ?[]const u8, node: StmtNode) Stmt {
-    return .{
-        .label = label,
-        .node = node,
-        .source_line = line.span.start_line,
-        .source_column = defaultSourceColumn(line),
-        .source_text = line.text,
-    };
-}
+const defaultSourceColumn = stmt_shared.defaultSourceColumn;
+const setStmtSourceIfMissing = stmt_shared.setStmtSourceIfMissing;
+const makeStmtWithSource = stmt_shared.makeStmtWithSource;
+const lexLine = stmt_shared.lexLine;
 
 fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
     const info = parse_diag.errorInfo(err);
@@ -53,33 +37,6 @@ fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.Lo
         column = lp.tokens[lp.tokens.len - 1].range.end.column;
     }
     diag_bag.set(line_no, column, info.code, info.message, line.text);
-}
-
-fn setLexerOrLineDiagnostic(
-    diag_bag: *parse_diag.Bag,
-    lex_diag_bag: *lexer.Bag,
-    line: logical_line.LogicalLine,
-    err: anyerror,
-) void {
-    if (lex_diag_bag.take()) |lex_diag| {
-        defer lex_diag_bag.release(lex_diag);
-        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
-        return;
-    }
-    const info = parse_diag.errorInfo(err);
-    diag_bag.set(line.span.start_line, defaultSourceColumn(line), info.code, info.message, line.text);
-}
-
-fn lexLine(
-    arena: std.mem.Allocator,
-    line: logical_line.LogicalLine,
-    diag_bag: *parse_diag.Bag,
-    lex_diag_bag: *lexer.Bag,
-) ![]lexer.Token {
-    return lexer.lexLogicalLineWithDiagnostics(arena, line, lex_diag_bag) catch |err| {
-        setLexerOrLineDiagnostic(diag_bag, lex_diag_bag, line, err);
-        return err;
-    };
 }
 
 fn actionCallbacks() action_stmt.ActionCallbacks {

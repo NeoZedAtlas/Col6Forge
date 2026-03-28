@@ -4,24 +4,12 @@ const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const storage_model = input.sema.storage_model;
+const case_insensitive = @import("../../../common/case_insensitive.zig");
 
-pub const CaseInsensitiveStringContext = struct {
-    pub fn hash(_: @This(), key: []const u8) u64 {
-        var h: u64 = 0xcbf29ce484222325;
-        for (key) |ch| {
-            const lowered = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
-            h = (h ^ @as(u64, lowered)) *% 0x100000001b3;
-        }
-        return h;
-    }
-
-    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        return std.ascii.eqlIgnoreCase(a, b);
-    }
-};
+pub const CaseInsensitiveStringContext = case_insensitive.StringContext;
 
 fn CaseInsensitiveStringHashMap(comptime V: type) type {
-    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
+    return case_insensitive.HashMap(V);
 }
 
 pub const CommonItem = struct {
