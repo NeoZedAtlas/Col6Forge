@@ -1,5 +1,8 @@
+pub const model = @import("model.zig");
 pub const registry = @import("registry.zig");
-pub const audit_engine = @import("audit_engine.zig");
+pub const audit_domains = @import("audit/domains.zig");
+pub const audit_imports = @import("audit/imports.zig");
+pub const audit_engine = @import("audit/engine.zig");
 pub const architecture_audit = @import("architecture_audit.zig");
 pub const mapping = @import("mapping.zig");
 pub const constraints_docgen = @import("constraints_docgen.zig");

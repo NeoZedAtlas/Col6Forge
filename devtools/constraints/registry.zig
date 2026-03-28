@@ -1,28 +1,7 @@
 const std = @import("std");
+const model = @import("model.zig");
 
-pub const RuleKind = enum {
-    forbidden_text,
-    forbidden_import_path_fragment,
-    bare_error_code_literal,
-    error_catalog_consistency,
-};
-
-pub const PathScope = union(enum) {
-    any,
-    prefix: []const u8,
-};
-
-pub const AuditRule = struct {
-    id: []const u8,
-    title: []const u8,
-    kind: RuleKind,
-    scope: PathScope = .any,
-    needle: ?[]const u8 = null,
-    excluded_exact_paths: []const []const u8 = &.{},
-    exclude_tests: bool = false,
-};
-
-pub const file_rules = [_]AuditRule{
+pub const file_rules = [_]model.AuditRule{
     .{
         .id = "AR-TXT-001",
         .title = "source doc dependency",
@@ -81,84 +60,84 @@ pub const file_rules = [_]AuditRule{
         .id = "AR-TXT-010",
         .title = "compat mirror read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "sym.compat.",
     },
     .{
         .id = "AR-TXT-011",
         .title = "compat mirror read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "symbol.compat.",
     },
     .{
         .id = "AR-TXT-012",
         .title = "compat mirror read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "sym.compat.",
     },
     .{
         .id = "AR-TXT-013",
         .title = "compat mirror read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "symbol.compat.",
     },
     .{
         .id = "AR-TXT-014",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "sym.type_kind",
     },
     .{
         .id = "AR-TXT-015",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "sym.char_len",
     },
     .{
         .id = "AR-TXT-016",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "sym.char_len_kind",
     },
     .{
         .id = "AR-TXT-017",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "sym.type_kind",
     },
     .{
         .id = "AR-TXT-018",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "sym.char_len",
     },
     .{
         .id = "AR-TXT-019",
         .title = "legacy symbol field read",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "sym.char_len_kind",
     },
     .{
         .id = "AR-TXT-020",
         .title = "direct Symbol literal",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "Symbol{",
     },
     .{
         .id = "AR-TXT-021",
         .title = "direct Symbol literal",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "Symbol{",
     },
     .{
@@ -172,14 +151,14 @@ pub const file_rules = [_]AuditRule{
         .id = "AR-IMP-001",
         .title = "semantic layer must not import driver code",
         .kind = .forbidden_import_path_fragment,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "driver/",
     },
     .{
         .id = "AR-IMP-002",
         .title = "codegen layer must not import driver code",
         .kind = .forbidden_import_path_fragment,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "driver/",
     },
     .{
@@ -193,7 +172,7 @@ pub const file_rules = [_]AuditRule{
         .id = "AR-IMP-004",
         .title = "codegen must not import compat diagnostic storage",
         .kind = .forbidden_import_path_fragment,
-        .scope = .{ .prefix = "src/codegen" },
+        .scope = .{ .domain = .codegen },
         .needle = "compat_diagnostic_storage.zig",
     },
     .{
@@ -219,7 +198,7 @@ pub const file_rules = [_]AuditRule{
     },
 };
 
-pub const project_rules = [_]AuditRule{
+pub const project_rules = [_]model.AuditRule{
     .{
         .id = "AR-CAT-001",
         .title = "error catalog consistency",
@@ -247,13 +226,11 @@ pub fn validateRules() !void {
     }
 }
 
-fn validateRule(rule: AuditRule) !void {
+fn validateRule(rule: model.AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
-        .forbidden_text => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
-        .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
-        .bare_error_code_literal => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
-        .error_catalog_consistency => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
+        .forbidden_text, .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
+        .bare_error_code_literal, .error_catalog_consistency => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
     }
 }
 
@@ -261,11 +238,14 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
     return std.mem.eql(u8, rel_path, "src/semantic/symbol/entity.zig") or
         std.mem.eql(u8, rel_path, "src/tools/error_catalog_docgen.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/architecture_audit.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/model.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/registry.zig") or
-        std.mem.eql(u8, rel_path, "devtools/constraints/audit_engine.zig");
+        std.mem.eql(u8, rel_path, "devtools/constraints/audit/engine.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/audit/imports.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/audit/domains.zig");
 }
 
-pub fn ruleAppliesToPath(rule: AuditRule, rel_path: []const u8) bool {
+pub fn ruleAppliesToFile(rule: model.AuditRule, rel_path: []const u8, domain: model.SourceDomain) bool {
     if (rule.exclude_tests and std.mem.indexOf(u8, rel_path, "/tests/") != null) return false;
     for (rule.excluded_exact_paths) |excluded| {
         if (std.mem.eql(u8, rel_path, excluded)) return false;
@@ -273,6 +253,7 @@ pub fn ruleAppliesToPath(rule: AuditRule, rel_path: []const u8) bool {
     return switch (rule.scope) {
         .any => true,
         .prefix => |prefix| std.mem.startsWith(u8, rel_path, prefix),
+        .domain => |expected| expected == domain,
     };
 }
 
@@ -283,16 +264,16 @@ test "allowed compat file is exempt" {
     try std.testing.expect(!isAllowedCompatFile("src/semantic/analysis/resolve_symbols.zig"));
 }
 
-test "scoped rule only applies inside its path prefix" {
-    const rule = AuditRule{
+test "domain-scoped rule only applies inside its source domain" {
+    const rule = model.AuditRule{
         .id = "AR-TEST-001",
-        .title = "scoped rule",
+        .title = "domain rule",
         .kind = .forbidden_text,
-        .scope = .{ .prefix = "src/semantic" },
+        .scope = .{ .domain = .semantic },
         .needle = "x",
     };
-    try std.testing.expect(ruleAppliesToPath(rule, "src/semantic/a.zig"));
-    try std.testing.expect(!ruleAppliesToPath(rule, "src/codegen/a.zig"));
+    try std.testing.expect(ruleAppliesToFile(rule, "src/semantic/a.zig", .semantic));
+    try std.testing.expect(!ruleAppliesToFile(rule, "src/codegen/a.zig", .codegen));
 }
 
 test "registry validates" {

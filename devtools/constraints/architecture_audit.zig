@@ -1,5 +1,5 @@
 const std = @import("std");
-const audit_engine = @import("audit_engine.zig");
+const audit_engine = @import("audit/engine.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
