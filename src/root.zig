@@ -30,7 +30,6 @@ pub const runPipelineWithOptions = pipeline.runPipelineWithOptions;
 pub const runPipelineToWriterWithOptions = pipeline.runPipelineToWriterWithOptions;
 pub const runPipelineWithOptionsAndDiagnostics = pipeline.runPipelineWithOptionsAndDiagnostics;
 pub const runPipelineToWriterWithOptionsAndDiagnostics = pipeline.runPipelineToWriterWithOptionsAndDiagnostics;
-pub const takeLastPipelineDiagnostic = pipeline.takeLastDiagnostic;
 pub const takeLastPipelineProfileSample = pipeline.takeLastProfileSample;
 pub const writePipelineErrorDiagnostic = pipeline.writePipelineErrorDiagnostic;
 pub const writePipelineErrorDiagnosticWithOptions = pipeline.writePipelineErrorDiagnosticWithOptions;

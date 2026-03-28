@@ -790,12 +790,13 @@ fn emitPipelineToFile(
     output_path: []const u8,
     dialect: Col6Forge.Dialect,
     capture_profile: bool,
+    diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
     var out_buf: [32 * 1024]u8 = undefined;
     var out_writer = out_file.writer(&out_buf);
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
         allocator,
         input_path,
         emit,
@@ -805,6 +806,7 @@ fn emitPipelineToFile(
             .capture_profile = capture_profile,
             .dialect = dialect,
         },
+        diag_bag,
     );
     try out_writer.interface.flush();
 }
@@ -1182,13 +1184,13 @@ fn buildExePath(
     return std.fs.path.join(allocator, &.{ work_dir, file_name });
 }
 
-fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerror) !void {
+fn reportPipelineError(log_state: *LogState, diag_bag: *const Col6Forge.diag.Bag, input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
     log_state.lock();
     defer log_state.unlock();
-    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
+    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, diag_bag, input_path, err);
     try writer.interface.flush();
 }
 
@@ -1918,6 +1920,8 @@ fn processCase(
                     return false;
                 };
             } else {
+                var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
+                defer pipeline_diag_bag.deinit();
                 emitPipelineToFile(
                     allocator,
                     abs_input_path,
@@ -1925,8 +1929,9 @@ fn processCase(
                     ll_path,
                     options.dialect,
                     options.profile_summary,
+                    &pipeline_diag_bag,
                 ) catch |err| {
-                    try reportPipelineError(log_state, abs_input_path, err);
+                    try reportPipelineError(log_state, &pipeline_diag_bag, abs_input_path, err);
                     return false;
                 };
                 if (options.profile_summary) {
@@ -1970,6 +1975,8 @@ fn processCase(
             copyFileAbsolute(translated_obj_path, obj_cache_path.?) catch {};
         }
     } else {
+        var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
+        defer pipeline_diag_bag.deinit();
         emitPipelineToFile(
             allocator,
             abs_input_path,
@@ -1977,8 +1984,9 @@ fn processCase(
             ll_path,
             options.dialect,
             options.profile_summary,
+            &pipeline_diag_bag,
         ) catch |err| {
-            try reportPipelineError(log_state, abs_input_path, err);
+            try reportPipelineError(log_state, &pipeline_diag_bag, abs_input_path, err);
             return false;
         };
         if (options.profile_summary) {

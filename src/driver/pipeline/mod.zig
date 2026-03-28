@@ -60,8 +60,6 @@ pub fn runPipelineToWriterWithOptionsAndDiagnostics(
     return runner.runPipelineToWriterWithOptionsAndDiagnostics(allocator, input_path, emit, writer, options, diag_bag);
 }
 
-pub const takeLastDiagnostic = diagnostics.takeLastDiagnostic;
-pub const releaseLastDiagnostic = diagnostics.releaseLastDiagnostic;
 pub const takeLastProfileSample = profile_mod.takeLastProfileSample;
 pub const writePipelineErrorDiagnostic = diagnostics.writePipelineErrorDiagnostic;
 pub const writePipelineErrorDiagnosticWithOptions = diagnostics.writePipelineErrorDiagnosticWithOptions;

@@ -1282,27 +1282,31 @@ fn translateSources(
             if (fileExistsAbsolute(ll_cache_path)) {
                 try copyFileAbsolute(ll_cache_path, ll_path);
             } else {
-                emitPipelineToFile(allocator, src_path, emit, ll_path) catch |err| {
+                var diag_bag = Col6Forge.diag.Bag.init(allocator);
+                defer diag_bag.deinit();
+                emitPipelineToFile(allocator, src_path, emit, ll_path, &diag_bag) catch |err| {
                     allocator.free(ll_path);
                     if (strict_translate) {
-                        printPipelineError(src_path, err);
+                        printPipelineError(src_path, &diag_bag, err);
                         return err;
                     }
                     try recordFallback(fallback_tracker, .pipeline, src_path);
-                    printPipelineError(src_path, err);
+                    printPipelineError(src_path, &diag_bag, err);
                     continue;
                 };
                 try copyFileAbsolute(ll_path, ll_cache_path);
             }
         } else {
-            emitPipelineToFile(allocator, src_path, emit, ll_path) catch |err| {
+            var diag_bag = Col6Forge.diag.Bag.init(allocator);
+            defer diag_bag.deinit();
+            emitPipelineToFile(allocator, src_path, emit, ll_path, &diag_bag) catch |err| {
                 allocator.free(ll_path);
                 if (strict_translate) {
-                    printPipelineError(src_path, err);
+                    printPipelineError(src_path, &diag_bag, err);
                     return err;
                 }
                 try recordFallback(fallback_tracker, .pipeline, src_path);
-                printPipelineError(src_path, err);
+                printPipelineError(src_path, &diag_bag, err);
                 continue;
             };
         }
@@ -1546,17 +1550,19 @@ fn emitPipelineToFile(
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
+    diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
     var out_buf: [32 * 1024]u8 = undefined;
     var out_writer = out_file.writer(&out_buf);
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
         allocator,
         input_path,
         emit,
         &out_writer.interface,
         .{ .coarse_source_map = true },
+        diag_bag,
     );
     try out_writer.interface.flush();
 }
@@ -1736,11 +1742,11 @@ fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) 
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn printPipelineError(path: []const u8, err: anyerror) void {
+fn printPipelineError(path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    Col6Forge.writePipelineErrorDiagnostic(&writer.interface, path, err) catch |write_err| {
+    Col6Forge.writePipelineErrorDiagnostic(&writer.interface, diag_bag, path, err) catch |write_err| {
         std.log.err("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
         return;
     };

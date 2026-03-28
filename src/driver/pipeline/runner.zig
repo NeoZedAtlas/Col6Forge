@@ -24,12 +24,7 @@ pub fn runPipelineWithOptions(
 ) !types.PipelineResult {
     var diag_bag = diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    const result = runPipelineWithOptionsAndDiagnostics(allocator, input_path, emit, options, &diag_bag) catch |err| {
-        diagnostics.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostics.publishCompatFromBag(&diag_bag);
-    return result;
+    return runPipelineWithOptionsAndDiagnostics(allocator, input_path, emit, options, &diag_bag);
 }
 
 pub fn runPipelineWithOptionsAndDiagnostics(
@@ -80,11 +75,7 @@ pub fn runPipelineToWriterWithOptions(
 ) !void {
     var diag_bag = diag.Bag.init(allocator);
     defer diag_bag.deinit();
-    runPipelineToWriterWithOptionsAndDiagnostics(allocator, input_path, emit, writer, options, &diag_bag) catch |err| {
-        diagnostics.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostics.publishCompatFromBag(&diag_bag);
+    return runPipelineToWriterWithOptionsAndDiagnostics(allocator, input_path, emit, writer, options, &diag_bag);
 }
 
 pub fn runPipelineToWriterWithOptionsAndDiagnostics(

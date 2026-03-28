@@ -43,8 +43,10 @@ fn runMain() !void {
         defer if (null_output_value) |value| allocator.free(value);
         const use_null_output = if (null_output_value) |value| value.len > 0 and value[0] == '1' else false;
         if (use_null_output) {
+            var diag_bag = Col6Forge.diag.Bag.init(allocator);
+            defer diag_bag.deinit();
             var null_writer = std.Io.null_writer;
-            Col6Forge.runPipelineToWriterWithOptions(
+            Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
                 allocator,
                 parsed.input_path,
                 parsed.emit,
@@ -55,8 +57,9 @@ fn runMain() !void {
                     .pause_mode = parsed.pause_mode,
                     .time_report = parsed.time_report,
                 },
+                &diag_bag,
             ) catch |err| {
-                failPipeline(parsed.input_path, err);
+                failPipeline(parsed.input_path, &diag_bag, err);
             };
             return;
         }
@@ -64,10 +67,12 @@ fn runMain() !void {
         defer if (count_output_value) |value| allocator.free(value);
         const use_count_output = if (count_output_value) |value| value.len > 0 and value[0] == '1' else false;
         if (use_count_output) {
+            var diag_bag = Col6Forge.diag.Bag.init(allocator);
+            defer diag_bag.deinit();
             var count: u128 = 0;
             const CountingWriter = std.Io.GenericWriter(*u128, error{}, countWrite);
             var count_writer = CountingWriter{ .context = &count };
-            Col6Forge.runPipelineToWriterWithOptions(
+            Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
                 allocator,
                 parsed.input_path,
                 parsed.emit,
@@ -78,18 +83,21 @@ fn runMain() !void {
                     .pause_mode = parsed.pause_mode,
                     .time_report = parsed.time_report,
                 },
+                &diag_bag,
             ) catch |err| {
-                failPipeline(parsed.input_path, err);
+                failPipeline(parsed.input_path, &diag_bag, err);
             };
             var msg_buf: [64]u8 = undefined;
             const msg = try std.fmt.bufPrint(&msg_buf, "emitted {d} bytes\n", .{count});
             try std.fs.File.stdout().writeAll(msg);
             return;
         }
+        var diag_bag = Col6Forge.diag.Bag.init(allocator);
+        defer diag_bag.deinit();
         var output_file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer output_file.close();
         var file_writer = FileOutputWriter{ .file = &output_file, .allocator = allocator };
-        Col6Forge.runPipelineToWriterWithOptions(
+        Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
             allocator,
             parsed.input_path,
             parsed.emit,
@@ -100,11 +108,14 @@ fn runMain() !void {
                 .pause_mode = parsed.pause_mode,
                 .time_report = parsed.time_report,
             },
+            &diag_bag,
         ) catch |err| {
-            failPipeline(parsed.input_path, err);
+            failPipeline(parsed.input_path, &diag_bag, err);
         };
     } else {
-        const result = Col6Forge.runPipelineWithOptions(
+        var diag_bag = Col6Forge.diag.Bag.init(allocator);
+        defer diag_bag.deinit();
+        const result = Col6Forge.runPipelineWithOptionsAndDiagnostics(
             allocator,
             parsed.input_path,
             parsed.emit,
@@ -114,8 +125,9 @@ fn runMain() !void {
                 .pause_mode = parsed.pause_mode,
                 .time_report = parsed.time_report,
             },
+            &diag_bag,
         ) catch |err| {
-            failPipeline(parsed.input_path, err);
+            failPipeline(parsed.input_path, &diag_bag, err);
         };
         defer allocator.free(result.output);
         try std.fs.File.stdout().writeAll(result.output);
@@ -308,11 +320,11 @@ fn parsePauseMode(value: []const u8) ?Col6Forge.PauseMode {
     return null;
 }
 
-fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
+fn reportPipelineError(input_path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    try Col6Forge.writePipelineErrorDiagnosticWithOptions(&writer.interface, input_path, err, .{
+    try Col6Forge.writePipelineErrorDiagnosticWithOptions(&writer.interface, diag_bag, input_path, err, .{
         .ansi = stderr.isTty(),
         .max_source_width = 100,
         .group_related_spans = true,
@@ -320,8 +332,8 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     try writer.interface.flush();
 }
 
-fn failPipeline(input_path: []const u8, err: anyerror) noreturn {
-    reportPipelineError(input_path, err) catch {
+fn failPipeline(input_path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) noreturn {
+    reportPipelineError(input_path, diag_bag, err) catch {
         var stderr = std.fs.File.stderr();
         var buffer: [512]u8 = undefined;
         var writer = stderr.writer(&buffer);

@@ -89,6 +89,8 @@ pub fn translateFortranInputs(
         defer allocator.free(ll_name);
         const ll_path = try std.fs.path.join(allocator, &.{ work_rel, ll_name });
 
+        var diag_bag = Col6Forge.diag.Bag.init(allocator);
+        defer diag_bag.deinit();
         emitPipelineToFile(
             allocator,
             input_path,
@@ -100,9 +102,10 @@ pub fn translateFortranInputs(
             time_report,
             known_function_types,
             known_procedure_sigs,
+            &diag_bag,
         ) catch |err| {
             allocator.free(ll_path);
-            try reportPipelineError(input_path, err);
+            try reportPipelineError(input_path, &diag_bag, err);
             return error.PipelineFailed;
         };
 
@@ -112,11 +115,11 @@ pub fn translateFortranInputs(
     return .{ .ll_paths = try ll_paths.toOwnedSlice(allocator) };
 }
 
-pub fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
+pub fn reportPipelineError(input_path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    try Col6Forge.writePipelineErrorDiagnosticWithOptions(&writer.interface, input_path, err, .{
+    try Col6Forge.writePipelineErrorDiagnosticWithOptions(&writer.interface, diag_bag, input_path, err, .{
         .ansi = stderr.isTty(),
         .max_source_width = 100,
         .group_related_spans = true,
@@ -212,8 +215,9 @@ pub fn emitPipelineToWriter(
     time_report: bool,
     known_function_types: []const Col6Forge.sema.KnownFunctionType,
     known_procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
+    diag_bag: *Col6Forge.diag.Bag,
 ) !void {
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
         allocator,
         input_path,
         .llvm,
@@ -228,6 +232,7 @@ pub fn emitPipelineToWriter(
             .known_function_types = known_function_types,
             .known_procedure_sigs = known_procedure_sigs,
         },
+        diag_bag,
     );
 }
 
@@ -242,6 +247,7 @@ fn emitPipelineToFile(
     time_report: bool,
     known_function_types: []const Col6Forge.sema.KnownFunctionType,
     known_procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
+    diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
@@ -258,6 +264,7 @@ fn emitPipelineToFile(
         time_report,
         known_function_types,
         known_procedure_sigs,
+        diag_bag,
     );
     try out_writer.interface.flush();
 }
@@ -288,13 +295,16 @@ test "emitPipelineToFile preserves fine-grained fixed-form diagnostics for cc tr
     defer allocator.free(input_path);
     const output_path = try writeTempSourceFile(&tmp, allocator, "translated.ll", "");
     defer allocator.free(output_path);
+    var diag_bag = Col6Forge.diag.Bag.init(allocator);
+    defer diag_bag.deinit();
 
     try testing.expectError(
         error.UnexpectedToken,
-        emitPipelineToFile(allocator, input_path, output_path, false, .default, .auto, null, false, &.{}, &.{}),
+        emitPipelineToFile(allocator, input_path, output_path, false, .default, .auto, null, false, &.{}, &.{}, &diag_bag),
     );
 
-    const diag_info = Col6Forge.takeLastPipelineDiagnostic() orelse return error.TestExpectedEqual;
+    const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 8), diag_info.column);
     try testing.expectEqualStrings(Col6Forge.error_catalog.parser.unexpected_token.code, diag_info.code);

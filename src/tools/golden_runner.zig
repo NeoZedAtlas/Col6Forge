@@ -299,13 +299,13 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     try file.writeAll(contents);
 }
 
-fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerror) !void {
+fn reportPipelineError(log_state: *LogState, diag_bag: *const Col6Forge.diag.Bag, input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
     log_state.lock();
     defer log_state.unlock();
-    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
+    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, diag_bag, input_path, err);
     try writer.interface.flush();
 }
 
@@ -386,11 +386,13 @@ fn processCase(
     log_state: *LogState,
 ) !CaseResult {
     var timer = try std.time.Timer.start();
-    const result = Col6Forge.runPipelineWithOptions(allocator, case.input_path, options.emit, .{
+    var diag_bag = Col6Forge.diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    const result = Col6Forge.runPipelineWithOptionsAndDiagnostics(allocator, case.input_path, options.emit, .{
         .dialect = options.dialect,
         .target = "x86_64-linux-gnu",
-    }) catch |err| {
-        try reportPipelineError(log_state, case.input_path, err);
+    }, &diag_bag) catch |err| {
+        try reportPipelineError(log_state, &diag_bag, case.input_path, err);
         return .{ .ok = false, .updated = false };
     };
     defer allocator.free(result.output);

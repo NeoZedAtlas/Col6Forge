@@ -6,70 +6,23 @@ const logical_line = @import("../../frontend/logical_line.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const semantic = @import("../../semantic/mod.zig");
 const codegen = @import("../../codegen/mod.zig");
-
-const compat_allocator = std.heap.page_allocator;
-
-const DiagStorage = struct {
-    file_path: ?[]u8 = null,
-    line: usize = 1,
-    column: usize = 1,
-    code: ?[]u8 = null,
-    message: ?[]u8 = null,
-    line_text: ?[]u8 = null,
-    primary_label: ?[]u8 = null,
-    notes: []diag.DiagnosticMessage = &.{},
-    helps: []diag.DiagnosticMessage = &.{},
-    secondary_spans: []diag.DiagnosticSpan = &.{},
-
-    fn clear(self: *DiagStorage) void {
-        if (self.file_path) |buf| compat_allocator.free(buf);
-        if (self.code) |buf| compat_allocator.free(buf);
-        if (self.message) |buf| compat_allocator.free(buf);
-        if (self.line_text) |buf| compat_allocator.free(buf);
-        if (self.primary_label) |buf| compat_allocator.free(buf);
-        freeCompatMessages(self.notes);
-        freeCompatMessages(self.helps);
-        freeCompatSpans(self.secondary_spans);
-        self.* = .{};
-    }
-};
-
-threadlocal var diag_storage: DiagStorage = .{};
-threadlocal var has_diag: bool = false;
-
-pub fn takeLastDiagnostic() ?diag.Diagnostic {
-    if (!has_diag) return null;
-    has_diag = false;
-    return .{
-        .file_path = diag_storage.file_path orelse "",
-        .line = diag_storage.line,
-        .column = diag_storage.column,
-        .code = diag_storage.code orelse "",
-        .message = diag_storage.message orelse "",
-        .line_text = diag_storage.line_text orelse "",
-        .primary_label = diag_storage.primary_label orelse "",
-        .notes = diag_storage.notes,
-        .helps = diag_storage.helps,
-        .secondary_spans = diag_storage.secondary_spans,
-    };
-}
-
-pub fn releaseLastDiagnostic(_: diag.Diagnostic) void {
-    diag_storage.clear();
-}
-
-pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const u8, err: anyerror) !void {
-    return writePipelineErrorDiagnosticWithOptions(writer, input_path, err, .{});
+pub fn writePipelineErrorDiagnostic(
+    writer: *std.Io.Writer,
+    diag_bag: *const diag.Bag,
+    input_path: []const u8,
+    err: anyerror,
+) !void {
+    return writePipelineErrorDiagnosticWithOptions(writer, diag_bag, input_path, err, .{});
 }
 
 pub fn writePipelineErrorDiagnosticWithOptions(
     writer: *std.Io.Writer,
+    diag_bag: *const diag.Bag,
     input_path: []const u8,
     err: anyerror,
     options: diagnostic_render.RenderOptions,
 ) !void {
-    if (takeLastDiagnostic()) |pipeline_diag| {
-        defer releaseLastDiagnostic(pipeline_diag);
+    if (diag_bag.latest()) |pipeline_diag| {
         return diagnostic_render.writeDiagnosticWithOptions(writer, pipeline_diag, options);
     }
 
@@ -84,8 +37,8 @@ pub fn writePipelineErrorDiagnosticWithOptions(
         }, options);
     }
 
-    const message = std.fmt.allocPrint(compat_allocator, "pipeline error: {s}", .{@errorName(err)}) catch null;
-    defer if (message) |buf| compat_allocator.free(buf);
+    const message = std.fmt.allocPrint(diag_bag.allocator, "pipeline error: {s}", .{@errorName(err)}) catch null;
+    defer if (message) |buf| diag_bag.allocator.free(buf);
     return diagnostic_render.writeDiagnosticWithOptions(writer, .{
         .file_path = input_path,
         .line = 1,
@@ -281,143 +234,6 @@ pub fn setDefaultDiagnosticAt(
     const message = std.fmt.allocPrint(diag_bag.allocator, "{s} ({s})", .{ base_message, @errorName(err) }) catch null;
     defer if (message) |buf| diag_bag.allocator.free(buf);
     diag_bag.add(input_path, line, column, code, if (message) |buf| buf else base_message, line_text);
-}
-
-pub fn publishCompatFromBag(diag_bag: *diag.Bag) void {
-    clearLastDiagnostic();
-    if (diag_bag.latest()) |pipeline_diag| {
-        setLastDiagnosticDetailed(
-            pipeline_diag.file_path,
-            pipeline_diag.line,
-            pipeline_diag.column,
-            pipeline_diag.code,
-            pipeline_diag.message,
-            pipeline_diag.line_text,
-            pipeline_diag.primary_label,
-            pipeline_diag.notes,
-            pipeline_diag.helps,
-            pipeline_diag.secondary_spans,
-        );
-    }
-}
-
-pub fn clearLastDiagnostic() void {
-    diag_storage.clear();
-    has_diag = false;
-}
-
-pub fn setLastDiagnostic(
-    input_path: []const u8,
-    line: usize,
-    column: usize,
-    code: []const u8,
-    message: []const u8,
-    line_text: []const u8,
-) void {
-    setLastDiagnosticDetailed(input_path, line, column, code, message, line_text, "", &.{}, &.{}, &.{});
-}
-
-pub fn setLastDiagnosticDetailed(
-    input_path: []const u8,
-    line: usize,
-    column: usize,
-    code: []const u8,
-    message: []const u8,
-    line_text: []const u8,
-    primary_label: []const u8,
-    notes: []const diag.DiagnosticMessage,
-    helps: []const diag.DiagnosticMessage,
-    secondary_spans: []const diag.DiagnosticSpan,
-) void {
-    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
-    diag_storage.clear();
-    diag_storage = next;
-    has_diag = true;
-}
-
-fn makeCompatDiagnostic(
-    input_path: []const u8,
-    line: usize,
-    column: usize,
-    code: []const u8,
-    message: []const u8,
-    line_text: []const u8,
-    primary_label: []const u8,
-    notes: []const diag.DiagnosticMessage,
-    helps: []const diag.DiagnosticMessage,
-    secondary_spans: []const diag.DiagnosticSpan,
-) !DiagStorage {
-    var next: DiagStorage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    errdefer next.clear();
-    next.file_path = try compat_allocator.dupe(u8, input_path);
-    next.code = try compat_allocator.dupe(u8, code);
-    next.message = try compat_allocator.dupe(u8, message);
-    next.line_text = try compat_allocator.dupe(u8, line_text);
-    next.primary_label = try compat_allocator.dupe(u8, primary_label);
-    next.notes = try dupeCompatMessages(notes);
-    next.helps = try dupeCompatMessages(helps);
-    next.secondary_spans = try dupeCompatSpans(secondary_spans);
-    return next;
-}
-
-fn dupeCompatMessages(messages: []const diag.DiagnosticMessage) ![]diag.DiagnosticMessage {
-    if (messages.len == 0) return &.{};
-    const owned = try compat_allocator.alloc(diag.DiagnosticMessage, messages.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (owned[0..initialized]) |message| compat_allocator.free(message.text);
-        compat_allocator.free(owned);
-    }
-    for (messages) |message| {
-        owned[initialized] = .{ .text = try compat_allocator.dupe(u8, message.text) };
-        initialized += 1;
-    }
-    return owned;
-}
-
-fn freeCompatMessages(messages: []const diag.DiagnosticMessage) void {
-    if (messages.len == 0) return;
-    for (messages) |message| compat_allocator.free(message.text);
-    compat_allocator.free(messages);
-}
-
-fn dupeCompatSpans(spans: []const diag.DiagnosticSpan) ![]diag.DiagnosticSpan {
-    if (spans.len == 0) return &.{};
-    const owned = try compat_allocator.alloc(diag.DiagnosticSpan, spans.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (owned[0..initialized]) |span| {
-            compat_allocator.free(span.file_path);
-            compat_allocator.free(span.line_text);
-            compat_allocator.free(span.label);
-        }
-        compat_allocator.free(owned);
-    }
-    for (spans) |span| {
-        owned[initialized] = .{
-            .file_path = try compat_allocator.dupe(u8, span.file_path),
-            .line = span.line,
-            .column = span.column,
-            .end_column = span.end_column,
-            .line_text = try compat_allocator.dupe(u8, span.line_text),
-            .label = try compat_allocator.dupe(u8, span.label),
-        };
-        initialized += 1;
-    }
-    return owned;
-}
-
-fn freeCompatSpans(spans: []const diag.DiagnosticSpan) void {
-    if (spans.len == 0) return;
-    for (spans) |span| {
-        compat_allocator.free(span.file_path);
-        compat_allocator.free(span.line_text);
-        compat_allocator.free(span.label);
-    }
-    compat_allocator.free(spans);
 }
 
 fn findLogicalLineForPhysicalLine(lines: []logical_line.LogicalLine, line: usize) ?logical_line.LogicalLine {

@@ -1191,20 +1191,11 @@ fn formatPipelineFailureText(
         return text;
     }
 
-    if (Col6Forge.takeLastPipelineDiagnostic()) |d| {
-        var out: std.Io.Writer.Allocating = .init(allocator);
-        defer out.deinit();
-        try Col6Forge.writeDiagnostic(&out.writer, d);
-        try out.writer.flush();
-        if (log_output) log_state.stderr("{s}", .{out.writer.buffered()});
-        return std.fmt.allocPrint(allocator, "{s}", .{d.message});
-    }
-
     const fallback = try std.fmt.allocPrint(allocator, "pipeline error: {s}", .{@errorName(err)});
     if (log_output) {
         var out: std.Io.Writer.Allocating = .init(allocator);
         defer out.deinit();
-        try Col6Forge.writePipelineErrorDiagnostic(&out.writer, input_path, err);
+        try Col6Forge.writePipelineErrorDiagnostic(&out.writer, diag_bag, input_path, err);
         try out.writer.flush();
         log_state.stderr("{s}", .{out.writer.buffered()});
     }

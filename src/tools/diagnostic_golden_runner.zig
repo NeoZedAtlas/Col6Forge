@@ -381,12 +381,8 @@ fn renderDiagnosticText(
             try Col6Forge.writeDiagnostic(&out.writer, display_diag);
             diag_bag.release(diag);
         }
-    } else if (Col6Forge.takeLastPipelineDiagnostic()) |diag| {
-        var display_diag = diag;
-        display_diag.file_path = display_path;
-        try Col6Forge.writeDiagnostic(&out.writer, display_diag);
     } else {
-        try Col6Forge.writePipelineErrorDiagnostic(&out.writer, display_path, err);
+        try Col6Forge.writePipelineErrorDiagnostic(&out.writer, diag_bag, display_path, err);
     }
     try out.writer.flush();
     return try allocator.dupe(u8, out.writer.buffered());
