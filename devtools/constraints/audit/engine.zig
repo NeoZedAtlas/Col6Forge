@@ -98,6 +98,16 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
+        .required_import_path_fragment_for_symbol_use => {
+            const fragment = rule.needle orelse return error.AuditRuleMissingNeedle;
+            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
+            if (symbol_index.findFunctionCall(symbol_name)) |idx| {
+                if (!imports.hasLiteralContaining(text, fragment)) {
+                    reportViolation(rel_path, idx, text, rule.id, rule.title, fragment);
+                    failures.* += 1;
+                }
+            }
+        },
         .forbidden_function_call => {
             const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
             if (symbol_index.findFunctionCall(symbol_name)) |idx| {

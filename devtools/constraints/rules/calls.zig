@@ -2,6 +2,8 @@ const model = @import("../model.zig");
 
 const io_binary_v_prefix = "src/runtime/col6forge_rt/io_binary_v/";
 const io_binary_v_shared = "src/runtime/col6forge_rt/io_binary_v/shared.zig";
+const codegen_io_prefix = "src/codegen/llvm/stmts/io/";
+const implied_helpers_owner = "src/codegen/llvm/stmts/io/implied_helpers.zig";
 
 pub const file_rules = [_]model.AuditRule{
     .{
@@ -150,5 +152,32 @@ pub const file_rules = [_]model.AuditRule{
         .symbol_name = "complexOffsetIndex",
         .call_path = "shared.complexOffsetIndex",
         .excluded_exact_paths = &.{io_binary_v_shared},
+    },
+    .{
+        .id = "AR-CALL-012",
+        .title = "implied-do helper use must import the shared helper module",
+        .kind = .required_import_path_fragment_for_symbol_use,
+        .scope = .{ .prefix = codegen_io_prefix },
+        .symbol_name = "impliedLoopDim",
+        .needle = "implied_helpers.zig",
+        .excluded_exact_paths = &.{implied_helpers_owner},
+    },
+    .{
+        .id = "AR-CALL-013",
+        .title = "implied-do helper use must import the shared helper module",
+        .kind = .required_import_path_fragment_for_symbol_use,
+        .scope = .{ .prefix = codegen_io_prefix },
+        .symbol_name = "impliedStrideForDim",
+        .needle = "implied_helpers.zig",
+        .excluded_exact_paths = &.{implied_helpers_owner},
+    },
+    .{
+        .id = "AR-CALL-014",
+        .title = "implied-do helper use must import the shared helper module",
+        .kind = .required_import_path_fragment_for_symbol_use,
+        .scope = .{ .prefix = codegen_io_prefix },
+        .symbol_name = "impliedStrideForSymbolDim",
+        .needle = "implied_helpers.zig",
+        .excluded_exact_paths = &.{implied_helpers_owner},
     },
 };
