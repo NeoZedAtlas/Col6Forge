@@ -41,4 +41,5 @@ pub const AnalyzeOptions = struct {
     range_check: bool = false,
     allow_argument_mismatch: bool = false,
     dialect: Dialect = .default,
+    declare_variant_adjust_args: []const context.Context.DeclareVariantAdjustArg = &.{},
 };

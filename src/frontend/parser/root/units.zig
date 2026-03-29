@@ -511,6 +511,9 @@ pub fn parseProgramUnitBody(
     var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(self.arena);
     var spec_part_open = true;
+    const implicit_program_recovery = header.kind == .program and std.mem.startsWith(u8, header.name, "__COL6FORGE_PROGRAM");
+    var recovered_stmt_error = false;
+    var saw_unexpected_end_recovery = false;
     if (header.type_decl) |type_decl| {
         try decls.append(type_decl);
         try decl_sources.append(root_diagnostics.sourceFromLine(header_line));
@@ -545,6 +548,16 @@ pub fn parseProgramUnitBody(
                 !root_control.isEndIfLine(stmt_lp) and
                 !root_control.isEndBlockLine(stmt_lp))
             {
+                if (implicit_program_recovery and recovered_stmt_error) {
+                    self.diag_bag.set(
+                        line.span.start_line,
+                        if (line.segments.len > 0) line.segments[0].column else 1,
+                        catalog.parser.unexpected_token.code,
+                        "Unexpected END statement",
+                        line.text,
+                    );
+                    saw_unexpected_end_recovery = true;
+                }
                 if (headerLineStartsModuleProcedure(header_line) and !isEndProcedureTokens(line, tokens)) {
                     self.diag_bag.set(
                         line.span.start_line,
@@ -610,6 +623,7 @@ pub fn parseProgramUnitBody(
                 root_diagnostics.setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
             }
             if (self.index == stmt_start_index and self.diag_bag.has() and err == error.UnexpectedToken) {
+                recovered_stmt_error = true;
                 self.index += 1;
                 try stmts.append(.{
                     .label = line.label,
@@ -627,6 +641,17 @@ pub fn parseProgramUnitBody(
             spec_part_open = false;
         }
         try stmts.append(stmt_node);
+    }
+
+    if (implicit_program_recovery and recovered_stmt_error and saw_unexpected_end_recovery and self.lines.len != 0) {
+        const eof_line = self.lines[self.lines.len - 1];
+        self.diag_bag.set(
+            eof_line.span.start_line,
+            if (eof_line.segments.len > 0) eof_line.segments[0].column else 1,
+            catalog.parser.unexpected_eof.code,
+            "Unexpected end of file",
+            eof_line.text,
+        );
     }
 
     var unit = ProgramUnit{

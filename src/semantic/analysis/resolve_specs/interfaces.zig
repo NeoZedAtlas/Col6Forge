@@ -91,97 +91,62 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
 }
 
 fn setAbstractInterfaceModuleProcedureDiagnostic(self: *context.Context, source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "MODULE PROCEDURE is only valid inside a named generic interface, not inside ABSTRACT INTERFACE" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "change this block to a concrete generic INTERFACE, or remove MODULE PROCEDURE from the ABSTRACT INTERFACE" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         source,
         catalog.semantic.duplicate_declaration.code,
         "must be in a generic module interface",
         "invalid MODULE PROCEDURE here",
-        notes[0..],
-        helps[0..],
-        &.{},
+        "MODULE PROCEDURE is only valid inside a named generic interface, not inside ABSTRACT INTERFACE",
+        "change this block to a concrete generic INTERFACE, or remove MODULE PROCEDURE from the ABSTRACT INTERFACE",
     );
 }
 
 fn setEnclosingProcedureDiagnostic(self: *context.Context, source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "a local explicit INTERFACE body may not declare a procedure with the same name as its enclosing procedure" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "rename the explicit interface procedure, or move the interface to a scope where the enclosing procedure name does not conflict" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         source,
         catalog.semantic.duplicate_declaration.code,
         "enclosing procedure",
         "conflicts with enclosing procedure here",
-        notes[0..],
-        helps[0..],
-        &.{},
+        "a local explicit INTERFACE body may not declare a procedure with the same name as its enclosing procedure",
+        "rename the explicit interface procedure, or move the interface to a scope where the enclosing procedure name does not conflict",
     );
 }
 
 fn setIntrinsicTypeNameConflictDiagnostic(self: *context.Context, source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "an explicit INTERFACE procedure name may not shadow an intrinsic type keyword" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "rename the procedure so it no longer collides with the intrinsic type name" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         source,
         catalog.semantic.duplicate_declaration.code,
         "cannot be the same as an intrinsic type",
         "intrinsic type-name conflict here",
-        notes[0..],
-        helps[0..],
-        &.{},
+        "an explicit INTERFACE procedure name may not shadow an intrinsic type keyword",
+        "rename the procedure so it no longer collides with the intrinsic type name",
     );
 }
 
 fn setFunctionResultDeclaredOutsideInterfaceDiagnostic(self: *context.Context, source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "the function result symbol must be fully characterized inside the INTERFACE body itself" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "move the function result declaration into the INTERFACE body, or remove the conflicting outer declaration" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         source,
         catalog.semantic.duplicate_declaration.code,
         "function result declared outside its INTERFACE body",
         "outer result declaration conflicts here",
-        notes[0..],
-        helps[0..],
-        &.{},
+        "the function result symbol must be fully characterized inside the INTERFACE body itself",
+        "move the function result declaration into the INTERFACE body, or remove the conflicting outer declaration",
     );
 }
 
 fn setFunctionResultDeferredShapeDiagnostic(self: *context.Context, source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "an explicit interface function result may not have deferred shape unless it is POINTER or ALLOCATABLE" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "remove the deferred-shape result, or mark the result POINTER/ALLOCATABLE if that is the intended interface" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         source,
         catalog.semantic.duplicate_declaration.code,
         "function result cannot have a deferred shape",
         "invalid deferred-shape result here",
-        notes[0..],
-        helps[0..],
-        &.{},
+        "an explicit interface function result may not have deferred shape unless it is POINTER or ALLOCATABLE",
+        "remove the deferred-shape result, or mark the result POINTER/ALLOCATABLE if that is the intended interface",
     );
 }
 
@@ -710,18 +675,38 @@ fn setNonProcedureSpecificDiagnostic(
 }
 
 fn setUnknownSpecificProcedureDiagnostic(self: *context.Context, current_source: ast.DeclSource) void {
-    const notes = [_]common_diag.DiagnosticMessage{
-        .{ .text = "generic interface PROCEDURE entries must name a visible function or subroutine" },
-    };
-    const helps = [_]common_diag.DiagnosticMessage{
-        .{ .text = "declare or import the target procedure before the generic interface refers to it" },
-    };
-    setStructuredSourceDiagnostic(
+    setSingleNoteHelpSourceDiagnostic(
         self,
         current_source,
         catalog.semantic.duplicate_declaration.code,
         "neither function nor subroutine",
         "unknown procedure entry here",
+        "generic interface PROCEDURE entries must name a visible function or subroutine",
+        "declare or import the target procedure before the generic interface refers to it",
+    );
+}
+
+fn setSingleNoteHelpSourceDiagnostic(
+    self: *context.Context,
+    source: ast.DeclSource,
+    code: []const u8,
+    message: []const u8,
+    primary_label: []const u8,
+    note_text: []const u8,
+    help_text: []const u8,
+) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = note_text },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = help_text },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        code,
+        message,
+        primary_label,
         notes[0..],
         helps[0..],
         &.{},

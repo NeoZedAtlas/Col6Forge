@@ -48,13 +48,7 @@ pub fn parseEndBlockName(lp: *LineParser, arena: std.mem.Allocator) anyerror!?[]
 }
 
 pub fn isEndBlockLine(lp: LineParser) bool {
-    if (lp.isKeywordSplit("ENDBLOCK")) return true;
-    const end_span = lp.keywordSpan("END") orelse return false;
-    const next_idx = lp.index + end_span;
-    if (next_idx >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[next_idx];
-    if (next_tok.kind != .identifier) return false;
-    return context.eqNoCase(lp.tokenText(next_tok), "BLOCK");
+    return helpers.isEndKeywordLine(lp, "ENDBLOCK", "BLOCK");
 }
 
 pub fn loopEndLabel(node: StmtNode) ?[]const u8 {

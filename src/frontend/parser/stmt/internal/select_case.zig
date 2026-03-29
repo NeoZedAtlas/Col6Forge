@@ -7,6 +7,7 @@ const decl = @import("../../decl/mod.zig");
 const expr = @import("../../expr.zig");
 const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
+const helpers = @import("../helpers.zig");
 const stmt_shared = @import("shared.zig");
 
 const LineParser = context.LineParser;
@@ -82,13 +83,7 @@ pub fn isCaseLine(lp: LineParser) bool {
 }
 
 pub fn isEndSelectLine(lp: LineParser) bool {
-    if (lp.isKeywordSplit("ENDSELECT")) return true;
-    const end_span = lp.keywordSpan("END") orelse return false;
-    const next_idx = lp.index + end_span;
-    if (next_idx >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[next_idx];
-    if (next_tok.kind != .identifier) return false;
-    return context.eqNoCase(lp.tokenText(next_tok), "SELECT");
+    return helpers.isEndKeywordLine(lp, "ENDSELECT", "SELECT");
 }
 
 pub fn parseSelectCaseStatement(

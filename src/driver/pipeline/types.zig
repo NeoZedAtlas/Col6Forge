@@ -21,6 +21,7 @@ pub const PipelineOptions = struct {
     capture_profile: bool = false,
     known_function_types: []const semantic.KnownFunctionType = &.{},
     known_procedure_sigs: []const semantic.KnownProcedureSig = &.{},
+    declare_variant_adjust_args: []const semantic.Context.DeclareVariantAdjustArg = &.{},
 };
 
 pub const PipelineResult = struct {

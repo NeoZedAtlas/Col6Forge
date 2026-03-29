@@ -6,6 +6,7 @@ const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
 const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
+const expr = @import("../../expr.zig");
 const action_stmt = @import("action_stmt.zig");
 const control_flow = @import("../control_flow.zig");
 const control_flow_bridge = @import("control_flow_bridge.zig");
@@ -37,6 +38,30 @@ fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.Lo
         column = lp.tokens[lp.tokens.len - 1].range.end.column;
     }
     diag_bag.set(line_no, column, info.code, info.message, line.text);
+}
+
+fn maybeSetBareCallLikeVariableDiagnostic(
+    arena: std.mem.Allocator,
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    tokens: []lexer.Token,
+) bool {
+    if (tokens.len == 0) return false;
+
+    var scan = LineParser.init(line, tokens);
+    const target = expr.parseExpr(&scan, arena, 0) catch return false;
+    if (scan.peek() != null) return false;
+
+    const proc_name = switch (target.*) {
+        .call_or_subscript => |call| call.name,
+        .component => |comp| if (comp.has_parens) comp.name else return false,
+        else => return false,
+    };
+
+    const first_tok = tokens[0];
+    const message = std.fmt.allocPrint(arena, "'{s}' at (1) is not a variable", .{proc_name}) catch return false;
+    diag_bag.set(first_tok.line, first_tok.column, catalog.parser.unexpected_token.code, message, line.text);
+    return true;
 }
 
 fn actionCallbacks() action_stmt.ActionCallbacks {
@@ -190,7 +215,11 @@ pub fn parseStatementWithDiagnostics(
         return stmt;
     }
     const action_node = action_stmt.parseActionStmtNode(arena, line, &lp, do_ctx, .top_level, actionCallbacks()) catch |err| {
-        if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
+        if (!diag_bag.has()) {
+            if (!(err == error.UnexpectedToken and maybeSetBareCallLikeVariableDiagnostic(arena, diag_bag, line, tokens))) {
+                setParseDiagnosticFromStream(diag_bag, line, lp, err);
+            }
+        }
         return err;
     };
     if (lp.peek() != null) {

@@ -8,6 +8,7 @@ const utils = @import("../../codegen/utils.zig");
 const cfg = @import("../cfg.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
+const procedure_pass = @import("../../../../common/procedure_pass.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -88,7 +89,7 @@ fn buildProcedureComponentActuals(
     else if (component.procedure_sig == null)
         @as(?usize, 0)
     else
-        procedureComponentPassArgIndex(component.procedure_sig.?, component.procedure_pass_name);
+        procedure_pass.procedurePassArgIndex(component.procedure_sig.?.args, component.procedure_pass_name);
     var actual_idx: usize = 0;
     var arg_idx: usize = 0;
     while (actual_idx < actuals.len) : (actual_idx += 1) {
@@ -100,18 +101,6 @@ fn buildProcedureComponentActuals(
         arg_idx += 1;
     }
     return actuals;
-}
-
-fn procedureComponentPassArgIndex(
-    sig: ast.sema.KnownProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
 }
 
 pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty: ir.IRType) EmitError!ValueRef {

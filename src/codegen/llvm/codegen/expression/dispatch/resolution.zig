@@ -4,6 +4,7 @@ const ir = @import("../../../../ir.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../context/mod.zig");
 const utils = @import("../../utils.zig");
+const procedure_pass = @import("../../../../../common/procedure_pass.zig");
 const type_kind_selector = @import("../../../../../semantic/type_kind_selector.zig");
 const ast_nodes = @import("../../../../../ast/nodes.zig");
 const character = @import("character.zig");
@@ -138,7 +139,7 @@ pub fn buildTypeBoundProcedureActuals(
     const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
     const lookup_name = try boundProcedureLookupName(ctx, binding, proc_name);
     const proc_sig = ctx.lookupKnownProcedureSig(lookup_name) orelse ctx.lookupKnownProcedureSig(proc_name);
-    const pass_idx = if (binding.nopass or proc_sig == null) null else bindingPassArgIndex(proc_sig.?, binding.pass_name);
+    const pass_idx = if (binding.nopass or proc_sig == null) null else procedure_pass.procedurePassArgIndex(proc_sig.?.args, binding.pass_name);
     const extra: usize = if (binding.nopass) 0 else 1;
     const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
     const fallback_pass_idx: ?usize = if (!binding.nopass and pass_idx == null and actuals.len > comp.args.len) 0 else pass_idx;
@@ -457,18 +458,6 @@ fn inferConstantCharLen(len_expr: ?*Expr) ?usize {
         },
         else => null,
     };
-}
-
-fn bindingPassArgIndex(
-    sig: ast.sema.KnownProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
 }
 
 fn buildAbiParamTypes(

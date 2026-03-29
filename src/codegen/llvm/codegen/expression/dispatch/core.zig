@@ -5,6 +5,7 @@ const llvm_types = @import("../../../types.zig");
 const common = @import("../../common.zig");
 const context = @import("../../context/mod.zig");
 const utils = @import("../../utils.zig");
+const procedure_pass = @import("../../../../../common/procedure_pass.zig");
 
 const binary = @import("../binary.zig");
 const call = @import("../call/mod.zig");
@@ -381,7 +382,7 @@ fn buildProcedureComponentActuals(
 ) ![]*Expr {
     const extra: usize = if (component.procedure_nopass) 0 else 1;
     const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
-    const pass_idx = if (component.procedure_nopass) null else procedureComponentPassArgIndex(proc_sig, component.procedure_pass_name);
+    const pass_idx = if (component.procedure_nopass) null else procedure_pass.procedurePassArgIndex(proc_sig.args, component.procedure_pass_name);
     var actual_idx: usize = 0;
     var comp_idx: usize = 0;
     while (actual_idx < actuals.len) : (actual_idx += 1) {
@@ -393,18 +394,6 @@ fn buildProcedureComponentActuals(
         comp_idx += 1;
     }
     return actuals;
-}
-
-fn procedureComponentPassArgIndex(
-    sig: ast.sema.KnownProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
 }
 
 fn emitDefinedUnaryOperatorCall(

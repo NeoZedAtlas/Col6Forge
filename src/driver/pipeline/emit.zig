@@ -69,6 +69,12 @@ pub fn emitLlvmModule(
         if (profile) |p| p.markFailure(.parse);
     }
 
+    const declare_variant_adjust_args = try omp_declare_variant.collectDeclareVariantAdjustArgs(
+        arena.allocator(),
+        program,
+        contents,
+    );
+
     var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
     defer semantic_diag_bag.deinit();
     const semantic_start = profile_mod.nowNs();
@@ -82,6 +88,7 @@ pub fn emitLlvmModule(
             .range_check = options.range_check,
             .allow_argument_mismatch = options.allow_argument_mismatch,
             .dialect = options.dialect,
+            .declare_variant_adjust_args = declare_variant_adjust_args,
         },
         &semantic_diag_bag,
     ) catch |err| {
@@ -198,6 +205,12 @@ pub fn emitLlvmModuleToWriter(
     var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
     defer semantic_diag_bag.deinit();
     const semantic_start = profile_mod.nowNs();
+    const declare_variant_adjust_args = try omp_declare_variant.collectDeclareVariantAdjustArgs(
+        arena.allocator(),
+        program,
+        contents,
+    );
+
     const sem = semantic.analyzeProgramWithKnownAndOptionsAndDiagnostics(
         arena.allocator(),
         program,
@@ -208,6 +221,7 @@ pub fn emitLlvmModuleToWriter(
             .range_check = options.range_check,
             .allow_argument_mismatch = options.allow_argument_mismatch,
             .dialect = options.dialect,
+            .declare_variant_adjust_args = declare_variant_adjust_args,
         },
         &semantic_diag_bag,
     ) catch |err| {

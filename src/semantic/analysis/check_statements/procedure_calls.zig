@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
+const procedure_pass = @import("../../../common/procedure_pass.zig");
 const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
 const constants = @import("../resolve_const.zig");
@@ -77,6 +78,13 @@ pub fn checkProcedureActualArgsForCall(
         if (arg != .expr) continue;
         if (formal_idx >= sig.args.len) break;
         const actual = arg.expr;
+        if (declareVariantAdjustKind(self, callee_name, sig.args[formal_idx].name)) |kind| {
+            if (kind != .nothing) {
+                try resolve_expr.resolveExpr(self, actual.value);
+                formal_idx += 1;
+                continue;
+            }
+        }
         try checkProcedureActualArg(self, callee_name, sig.args[formal_idx], actual.value, deps);
         formal_idx += 1;
     }
@@ -98,6 +106,12 @@ pub fn checkProcedureActualArgsForExprCall(
     const count = @min(sig.args.len, args.len);
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
+        if (declareVariantAdjustKind(self, callee_name, sig.args[idx].name)) |kind| {
+            if (kind != .nothing) {
+                try resolve_expr.resolveExpr(self, args[idx]);
+                continue;
+            }
+        }
         try checkProcedureActualArg(self, callee_name, sig.args[idx], args[idx], deps);
     }
 }
@@ -146,7 +160,7 @@ pub fn checkTypeBoundProcedureComponent(
         return error.InvalidArgumentCount;
     }
 
-    const pass_idx = if (binding.nopass) null else bindingPassArgIndex(sig, binding.pass_name);
+    const pass_idx = if (binding.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, binding.pass_name);
     var actual_idx: usize = 0;
     var formal_idx: usize = 0;
     while (formal_idx < sig.args.len) : (formal_idx += 1) {
@@ -202,7 +216,7 @@ pub fn checkProcedureComponent(
         return error.InvalidArgumentCount;
     }
 
-    const pass_idx = if (component.procedure_nopass) null else bindingPassArgIndex(resolved_sig, component.procedure_pass_name);
+    const pass_idx = if (component.procedure_nopass) null else procedure_pass.procedurePassArgIndex(resolved_sig.args, component.procedure_pass_name);
     var actual_idx: usize = 0;
     var formal_idx: usize = 0;
     while (formal_idx < resolved_sig.args.len) : (formal_idx += 1) {
@@ -880,18 +894,6 @@ fn typeBoundProcedureSig(
         resolve_symbols.lookupKnownProcedureSig(self, binding.name);
 }
 
-fn bindingPassArgIndex(
-    sig: context.Context.ProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
-}
-
 fn checkProcedureActualArg(
     self: *context.Context,
     callee_name: ?[]const u8,
@@ -1085,6 +1087,19 @@ fn structureConstructorProcedureFormalArg(
         .procedure_result_procedure_pointer = sig.result_procedure_pointer,
         .procedure_dummy_sigs = sig.args,
     };
+}
+
+fn declareVariantAdjustKind(
+    self: *context.Context,
+    callee_name: []const u8,
+    formal_name: []const u8,
+) ?context.Context.DeclareVariantAdjustArgKind {
+    for (self.declare_variant_adjust_args) |adjust| {
+        if (!std.ascii.eqlIgnoreCase(adjust.procedure_name, callee_name)) continue;
+        if (!std.ascii.eqlIgnoreCase(adjust.arg_name, formal_name)) continue;
+        return adjust.kind;
+    }
+    return null;
 }
 
 fn procedureComponentSig(

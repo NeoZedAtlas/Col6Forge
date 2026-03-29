@@ -154,6 +154,18 @@ pub const Context = struct {
         call_source: ast.SourceRef = .{},
     };
 
+    pub const DeclareVariantAdjustArgKind = enum {
+        nothing,
+        need_device_ptr,
+        need_device_addr,
+    };
+
+    pub const DeclareVariantAdjustArg = struct {
+        procedure_name: []const u8,
+        arg_name: []const u8,
+        kind: DeclareVariantAdjustArgKind,
+    };
+
     pub const BuiltinConstant = struct {
         module_name: []const u8,
         type_spec: symbols.TypeSpec,
@@ -209,6 +221,7 @@ pub const Context = struct {
     allow_argument_mismatch: bool,
     dialect: Dialect,
     use_imports_preinstalled: bool,
+    declare_variant_adjust_args: []const DeclareVariantAdjustArg = &.{},
 
     pub const Owner = struct {
         name: []const u8,

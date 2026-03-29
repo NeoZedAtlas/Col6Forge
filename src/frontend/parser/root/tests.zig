@@ -1562,6 +1562,41 @@ test "parseProgramWithDiagnostics reports malformed operator interface end" {
     try testing.expectEqualStrings("Unexpected end of file", third.message);
 }
 
+test "parseProgramWithDiagnostics recovers bare call-like statement in implicit program" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none(type,external)\n" ++
+        "  integer :: a, b, c\n" ++
+        "  g(a,b,c)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    try testing.expectEqual(@as(usize, 3), first.line);
+    try testing.expect(std.mem.indexOf(u8, first.message, "is not a variable") != null);
+
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+    try testing.expectEqual(@as(usize, 4), second.line);
+    try testing.expectEqualStrings("Unexpected END statement", second.message);
+
+    const third = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(third);
+    try testing.expectEqual(@as(usize, 4), third.line);
+    try testing.expectEqualStrings("Unexpected end of file", third.message);
+}
+
 test "parseProgram handles free-form complex parameter slash array constructor declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

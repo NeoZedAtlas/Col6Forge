@@ -39,22 +39,23 @@ pub fn parseLabelToken(lp: *LineParser) ParseStmtError![]const u8 {
 }
 
 pub fn isEndDo(lp: LineParser) bool {
-    if (lp.isKeywordSplit("ENDDO")) return true;
-    const end_span = lp.keywordSpan("END") orelse return false;
-    const next_idx = lp.index + end_span;
-    if (next_idx >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[next_idx];
-    if (next_tok.kind != .identifier) return false;
-    return context.eqNoCase(lp.tokenText(next_tok), "DO");
+    return isEndKeywordLine(lp, "ENDDO", "DO");
 }
 
 pub fn isEndIfLine(lp: LineParser) bool {
+    return isEndKeywordLine(lp, null, "IF");
+}
+
+pub fn isEndKeywordLine(lp: LineParser, combined_keyword: ?[]const u8, tail_keyword: []const u8) bool {
+    if (combined_keyword) |keyword| {
+        if (lp.isKeywordSplit(keyword)) return true;
+    }
     const end_span = lp.keywordSpan("END") orelse return false;
     const next_idx = lp.index + end_span;
     if (next_idx >= lp.tokens.len) return false;
     const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
-    return context.eqNoCase(lp.tokenText(next_tok), "IF");
+    return context.eqNoCase(lp.tokenText(next_tok), tail_keyword);
 }
 
 pub fn nextTokenIsEquals(lp: LineParser) bool {

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
+const procedure_pass = @import("../../../common/procedure_pass.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
@@ -569,7 +570,7 @@ fn validateDerivedProcedureComponentPassConstraints(
     }
 
     const pass_idx: ?usize = if (procedure_decl.pass_name) |pass_name|
-        bindingPassArgIndex(sig, pass_name)
+        procedure_pass.procedurePassArgIndex(sig.args, pass_name)
     else
         0;
 
@@ -1212,8 +1213,8 @@ fn validateBindingOverrideCompatibility(
     }
 
     if (!parent_binding.nopass and !binding.nopass) {
-        const parent_pass_idx = bindingPassArgIndex(parent_sig, parent_binding.pass_name) orelse return null;
-        const child_pass_idx = bindingPassArgIndex(child_sig, binding.pass_name) orelse return null;
+        const parent_pass_idx = procedure_pass.procedurePassArgIndex(parent_sig.args, parent_binding.pass_name) orelse return null;
+        const child_pass_idx = procedure_pass.procedurePassArgIndex(child_sig.args, binding.pass_name) orelse return null;
         if (parent_pass_idx != child_pass_idx) {
             setBindingDiagnosticWithRelated(self, binding, "same position", parent_related[0..], "overridden parent binding here");
             return error.DuplicateDeclaration;
@@ -1318,7 +1319,7 @@ fn validatePassedObjectDummyConstraints(
         setBindingDiagnostic(self, binding, "at least one argument");
         return error.DuplicateDeclaration;
     }
-    const pass_idx = bindingPassArgIndex(sig, binding.pass_name) orelse {
+    const pass_idx = procedure_pass.procedurePassArgIndex(sig.args, binding.pass_name) orelse {
         if (binding.pass_name) |pass_name| {
             const message = std.fmt.allocPrint(self.arena, "no argument '{s}'", .{pass_name}) catch "no PASS argument";
             setBindingDiagnostic(self, binding, message);
@@ -1452,7 +1453,7 @@ fn genericBindingTargetSpecific(
         const sig = bindingReferenceSig(self, target) orelse return null;
         return .{
             .sig = sig,
-            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .pass_idx = if (target.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, target.pass_name),
             .source = target.source,
         };
     }
@@ -1461,7 +1462,7 @@ fn genericBindingTargetSpecific(
         const sig = bindingInfoReferenceSig(self, target) orelse return null;
         return .{
             .sig = sig,
-            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .pass_idx = if (target.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, target.pass_name),
             .source = target.source,
         };
     }
@@ -1479,7 +1480,7 @@ fn genericBindingInfoTargetSpecific(
         const sig = bindingInfoReferenceSig(self, target) orelse return null;
         return .{
             .sig = sig,
-            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .pass_idx = if (target.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, target.pass_name),
             .source = target.source,
         };
     }
@@ -1488,7 +1489,7 @@ fn genericBindingInfoTargetSpecific(
         const sig = bindingInfoReferenceSig(self, target) orelse return null;
         return .{
             .sig = sig,
-            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .pass_idx = if (target.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, target.pass_name),
             .source = target.source,
         };
     }
@@ -1668,18 +1669,6 @@ fn genericBindingArgEquivalent(a: context.Context.ProcedureSig.ArgSig, b: contex
         return std.ascii.eqlIgnoreCase(a.type_spec.derived_type_name.?, b.type_spec.derived_type_name.?);
     }
     return true;
-}
-
-fn bindingPassArgIndex(
-    sig: context.Context.ProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
 }
 
 fn findResolvedBindingByName(

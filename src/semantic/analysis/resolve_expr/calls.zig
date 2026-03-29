@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const catalog = @import("../../../common/error_catalog.zig");
+const procedure_pass = @import("../../../common/procedure_pass.zig");
 const symbols = @import("../../symbol/mod.zig");
 const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
@@ -700,7 +701,7 @@ fn validateTypeBoundProcedureCall(
     if (actual_count > sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
     if (actual_count < minimumRequiredProcedureArgs(sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
 
-    const pass_idx = if (binding.nopass) null else bindingPassArgIndex(sig, binding.pass_name);
+    const pass_idx = if (binding.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, binding.pass_name);
     var actual_idx: usize = 0;
     var formal_idx: usize = 0;
     while (formal_idx < sig.args.len) : (formal_idx += 1) {
@@ -732,7 +733,7 @@ fn validateProcedureComponentCall(
     if (actual_count > resolved_sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
     if (actual_count < minimumRequiredProcedureArgs(resolved_sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
 
-    const pass_idx = if (component.procedure_nopass) null else bindingPassArgIndex(resolved_sig, component.procedure_pass_name);
+    const pass_idx = if (component.procedure_nopass) null else procedure_pass.procedurePassArgIndex(resolved_sig.args, component.procedure_pass_name);
     var actual_idx: usize = 0;
     var formal_idx: usize = 0;
     while (formal_idx < resolved_sig.args.len) : (formal_idx += 1) {
@@ -819,18 +820,6 @@ fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {
         if (!arg.optional) required += 1;
     }
     return required;
-}
-
-fn bindingPassArgIndex(
-    sig: context.Context.ProcedureSig,
-    pass_name: ?[]const u8,
-) ?usize {
-    if (sig.args.len == 0) return null;
-    const target = pass_name orelse return 0;
-    for (sig.args, 0..) |arg, idx| {
-        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
-    }
-    return null;
 }
 
 fn emitInvalidSubscriptDiagnostic(
