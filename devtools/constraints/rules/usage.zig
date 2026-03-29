@@ -1,10 +1,46 @@
 const model = @import("../model.zig");
 
+const UsageSpec = struct {
+    id: []const u8,
+    symbol_name: []const u8,
+    import_fragment: ?[]const u8 = null,
+    call_path: ?[]const u8 = null,
+    alias_path: ?[]const u8 = null,
+};
+
+fn buildUsageRules(
+    comptime title: []const u8,
+    comptime scope: model.Scope,
+    comptime specs: []const UsageSpec,
+    comptime excluded_exact_paths: []const []const u8,
+    comptime excluded_path_prefixes: []const []const u8,
+) [specs.len]model.AuditRule {
+    var rules: [specs.len]model.AuditRule = undefined;
+    inline for (specs, 0..) |spec, idx| {
+        rules[idx] = .{
+            .id = spec.id,
+            .title = title,
+            .kind = .owned_symbol_usage,
+            .scope = scope,
+            .needle = spec.import_fragment,
+            .symbol_name = spec.symbol_name,
+            .call_path = spec.call_path,
+            .alias_path = spec.alias_path,
+            .excluded_exact_paths = excluded_exact_paths,
+            .excluded_path_prefixes = excluded_path_prefixes,
+        };
+    }
+    return rules;
+}
+
 const io_binary_v_prefix = "src/runtime/col6forge_rt/io_binary_v/";
 const io_binary_v_shared = "src/runtime/col6forge_rt/io_binary_v/shared.zig";
+const io_binary_v_title = "io_binary_v runtime helper use must stay behind the shared facade";
 
 const codegen_io_prefix = "src/codegen/llvm/stmts/io/";
 const implied_helpers_owner = "src/codegen/llvm/stmts/io/implied_helpers.zig";
+const implied_helpers_title = "implied-do helper use must import the shared helper module";
+const implied_helpers_alias_title = "implied-do helper use must import the shared helper module and bind aliases to the owner";
 
 const runtime_prefix = "src/runtime/col6forge_rt/";
 const runtime_args_owner = "src/runtime/col6forge_rt/runtime_args.zig";
@@ -15,82 +51,115 @@ const runtime_facade_prefixes = &.{
     "src/runtime/col6forge_rt/io_binary_v/",
     "src/runtime/col6forge_rt/io_list_read/",
 };
+const runtime_args_title = "runtime argument helper use must import the shared helper module and bind aliases to runtime_args";
+const runtime_memory_title = "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory";
+const runtime_stride_title = "runtime stride helper use must import the shared helper module and bind aliases to runtime_stride";
+const runtime_text_title = "runtime text helper use must import the shared helper module and bind aliases to runtime_text";
 
 const io_list_read_prefix = "src/runtime/col6forge_rt/io_list_read/";
 const io_list_read_shared = "src/runtime/col6forge_rt/io_list_read/shared.zig";
+const io_list_read_title = "io_list_read shared helper use must import the shared facade module and bind aliases to shared";
 
-fn ownedUsageRule(
-    id: []const u8,
-    title: []const u8,
-    scope: model.Scope,
-    symbol_name: []const u8,
-    import_fragment: ?[]const u8,
-    call_path: ?[]const u8,
-    alias_path: ?[]const u8,
-    excluded_exact_paths: []const []const u8,
-    excluded_path_prefixes: []const []const u8,
-) model.AuditRule {
-    return .{
-        .id = id,
-        .title = title,
-        .kind = .owned_symbol_usage,
-        .scope = scope,
-        .needle = import_fragment,
-        .symbol_name = symbol_name,
-        .call_path = call_path,
-        .alias_path = alias_path,
-        .excluded_exact_paths = excluded_exact_paths,
-        .excluded_path_prefixes = excluded_path_prefixes,
-    };
-}
-
-pub const file_rules = [_]model.AuditRule{
-    ownedUsageRule("AR-CALL-001", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "runtimeArgCount", "shared.zig", "shared.runtimeArgCount", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-002", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "runtimeArgPtrAt", "shared.zig", "shared.runtimeArgPtrAt", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-003", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "runtimeArgKindAt", "shared.zig", "shared.runtimeArgKindAt", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-004", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "runtimeArgLenAt", "shared.zig", "shared.runtimeArgLenAt", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-005", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "checkedAdd", "shared.zig", "shared.checkedAdd", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-006", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "checkedMul", "shared.zig", "shared.checkedMul", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-007", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "checkedMulI64", "shared.zig", "shared.checkedMulI64", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-008", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "offsetBytes", "shared.zig", "shared.offsetBytes", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-009", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "offsetConstBytes", "shared.zig", "shared.offsetConstBytes", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-010", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "offsetIndex", "shared.zig", "shared.offsetIndex", null, &.{io_binary_v_shared}, &.{}),
-    ownedUsageRule("AR-CALL-011", "io_binary_v runtime helper use must stay behind the shared facade", .{ .prefix = io_binary_v_prefix }, "complexOffsetIndex", "shared.zig", "shared.complexOffsetIndex", null, &.{io_binary_v_shared}, &.{}),
-
-    ownedUsageRule("AR-CALL-012", "implied-do helper use must import the shared helper module and bind aliases to the owner", .{ .prefix = codegen_io_prefix }, "impliedLoopDim", "implied_helpers.zig", null, "implied_helpers.impliedLoopDim", &.{implied_helpers_owner}, &.{}),
-    ownedUsageRule("AR-CALL-013", "implied-do helper use must import the shared helper module", .{ .prefix = codegen_io_prefix }, "impliedStrideForDim", "implied_helpers.zig", null, null, &.{implied_helpers_owner}, &.{}),
-    ownedUsageRule("AR-CALL-014", "implied-do helper use must import the shared helper module", .{ .prefix = codegen_io_prefix }, "impliedStrideForSymbolDim", "implied_helpers.zig", null, null, &.{implied_helpers_owner}, &.{}),
-
-    ownedUsageRule("AR-CALL-015", "runtime argument helper use must import the shared helper module and bind aliases to runtime_args", .{ .prefix = runtime_prefix }, "runtimeArgCount", "runtime_args.zig", null, "runtime_args.runtimeArgCount", &.{runtime_args_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-016", "runtime argument helper use must import the shared helper module and bind aliases to runtime_args", .{ .prefix = runtime_prefix }, "runtimeArgPtrAt", "runtime_args.zig", null, "runtime_args.runtimeArgPtrAt", &.{runtime_args_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-017", "runtime argument helper use must import the shared helper module and bind aliases to runtime_args", .{ .prefix = runtime_prefix }, "runtimeArgKindAt", "runtime_args.zig", null, "runtime_args.runtimeArgKindAt", &.{runtime_args_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-018", "runtime argument helper use must import the shared helper module and bind aliases to runtime_args", .{ .prefix = runtime_prefix }, "runtimeArgLenAt", "runtime_args.zig", null, "runtime_args.runtimeArgLenAt", &.{runtime_args_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-019", "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory", .{ .prefix = runtime_prefix }, "checkedAdd", "runtime_memory.zig", null, "runtime_memory.checkedAdd", &.{runtime_memory_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-020", "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory", .{ .prefix = runtime_prefix }, "checkedMul", "runtime_memory.zig", null, "runtime_memory.checkedMul", &.{runtime_memory_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-021", "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory", .{ .prefix = runtime_prefix }, "checkedMulI64", "runtime_memory.zig", null, "runtime_memory.checkedMulI64", &.{runtime_memory_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-022", "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory", .{ .prefix = runtime_prefix }, "offsetBytes", "runtime_memory.zig", null, "runtime_memory.offsetBytes", &.{runtime_memory_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-023", "runtime memory helper use must import the shared helper module and bind aliases to runtime_memory", .{ .prefix = runtime_prefix }, "offsetConstBytes", "runtime_memory.zig", null, "runtime_memory.offsetConstBytes", &.{runtime_memory_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-024", "runtime stride helper use must import the shared helper module and bind aliases to runtime_stride", .{ .prefix = runtime_prefix }, "offsetIndex", "runtime_stride.zig", null, "runtime_stride.offsetIndex", &.{runtime_stride_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-025", "runtime stride helper use must import the shared helper module and bind aliases to runtime_stride", .{ .prefix = runtime_prefix }, "complexOffsetIndex", "runtime_stride.zig", null, "runtime_stride.complexOffsetIndex", &.{runtime_stride_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-026", "runtime text helper use must import the shared helper module and bind aliases to runtime_text", .{ .prefix = runtime_prefix }, "cstrlen", "runtime_text.zig", null, "runtime_text.cstrlen", &.{runtime_text_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-027", "runtime text helper use must import the shared helper module and bind aliases to runtime_text", .{ .prefix = runtime_prefix }, "cstrnlen", "runtime_text.zig", null, "runtime_text.cstrnlen", &.{runtime_text_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-028", "runtime text helper use must import the shared helper module and bind aliases to runtime_text", .{ .prefix = runtime_prefix }, "cstrlenRaw", "runtime_text.zig", null, "runtime_text.cstrlenRaw", &.{runtime_text_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-029", "runtime text helper use must import the shared helper module and bind aliases to runtime_text", .{ .prefix = runtime_prefix }, "asCStr", "runtime_text.zig", null, "runtime_text.asCStr", &.{runtime_text_owner}, runtime_facade_prefixes),
-    ownedUsageRule("AR-CALL-030", "runtime text helper use must import the shared helper module and bind aliases to runtime_text", .{ .prefix = runtime_prefix }, "asConstCStr", "runtime_text.zig", null, "runtime_text.asConstCStr", &.{runtime_text_owner}, runtime_facade_prefixes),
-
-    ownedUsageRule("AR-CALL-031", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "runtimeArgCount", "shared.zig", null, "shared.runtimeArgCount", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-032", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "runtimeArgPtrAt", "shared.zig", null, "shared.runtimeArgPtrAt", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-033", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "runtimeArgKindAt", "shared.zig", null, "shared.runtimeArgKindAt", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-034", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "runtimeArgLenAt", "shared.zig", null, "shared.runtimeArgLenAt", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-035", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "checkedAdd", "shared.zig", null, "shared.checkedAdd", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-036", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "checkedMul", "shared.zig", null, "shared.checkedMul", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-037", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "checkedMulI64", "shared.zig", null, "shared.checkedMulI64", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-038", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "offsetBytes", "shared.zig", null, "shared.offsetBytes", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-039", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "offsetIndex", "shared.zig", null, "shared.offsetIndex", &.{io_list_read_shared}, &.{}),
-    ownedUsageRule("AR-CALL-040", "io_list_read shared helper use must import the shared facade module and bind aliases to shared", .{ .prefix = io_list_read_prefix }, "complexOffsetIndex", "shared.zig", null, "shared.complexOffsetIndex", &.{io_list_read_shared}, &.{}),
-
-    ownedUsageRule("AR-CALL-068", "list-directed implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/list_directed.zig" }, "impliedStrideForDim", null, null, "implied_helpers.impliedStrideForSymbolDim", &.{}, &.{}),
-    ownedUsageRule("AR-CALL-069", "streaming implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/direct/streaming.zig" }, "impliedStrideForDim", null, null, "implied_helpers.impliedStrideForSymbolDim", &.{}, &.{}),
-    ownedUsageRule("AR-CALL-070", "special write implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/formatted/special_write.zig" }, "impliedStrideForDim", null, null, "implied_helpers.impliedStrideForSymbolDim", &.{}, &.{}),
-    ownedUsageRule("AR-CALL-071", "unformatted implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/unformatted.zig" }, "impliedStrideForDim", null, null, "implied_helpers.impliedStrideForDims", &.{}, &.{}),
+const io_binary_v_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-001", .symbol_name = "runtimeArgCount", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgCount" },
+    .{ .id = "AR-CALL-002", .symbol_name = "runtimeArgPtrAt", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgPtrAt" },
+    .{ .id = "AR-CALL-003", .symbol_name = "runtimeArgKindAt", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgKindAt" },
+    .{ .id = "AR-CALL-004", .symbol_name = "runtimeArgLenAt", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgLenAt" },
+    .{ .id = "AR-CALL-005", .symbol_name = "checkedAdd", .import_fragment = "shared.zig", .call_path = "shared.checkedAdd" },
+    .{ .id = "AR-CALL-006", .symbol_name = "checkedMul", .import_fragment = "shared.zig", .call_path = "shared.checkedMul" },
+    .{ .id = "AR-CALL-007", .symbol_name = "checkedMulI64", .import_fragment = "shared.zig", .call_path = "shared.checkedMulI64" },
+    .{ .id = "AR-CALL-008", .symbol_name = "offsetBytes", .import_fragment = "shared.zig", .call_path = "shared.offsetBytes" },
+    .{ .id = "AR-CALL-009", .symbol_name = "offsetConstBytes", .import_fragment = "shared.zig", .call_path = "shared.offsetConstBytes" },
+    .{ .id = "AR-CALL-010", .symbol_name = "offsetIndex", .import_fragment = "shared.zig", .call_path = "shared.offsetIndex" },
+    .{ .id = "AR-CALL-011", .symbol_name = "complexOffsetIndex", .import_fragment = "shared.zig", .call_path = "shared.complexOffsetIndex" },
 };
+
+const implied_helper_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-012", .symbol_name = "impliedLoopDim", .import_fragment = "implied_helpers.zig", .alias_path = "implied_helpers.impliedLoopDim" },
+    .{ .id = "AR-CALL-013", .symbol_name = "impliedStrideForDim", .import_fragment = "implied_helpers.zig" },
+    .{ .id = "AR-CALL-014", .symbol_name = "impliedStrideForSymbolDim", .import_fragment = "implied_helpers.zig" },
+};
+
+const runtime_args_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-015", .symbol_name = "runtimeArgCount", .import_fragment = "runtime_args.zig", .alias_path = "runtime_args.runtimeArgCount" },
+    .{ .id = "AR-CALL-016", .symbol_name = "runtimeArgPtrAt", .import_fragment = "runtime_args.zig", .alias_path = "runtime_args.runtimeArgPtrAt" },
+    .{ .id = "AR-CALL-017", .symbol_name = "runtimeArgKindAt", .import_fragment = "runtime_args.zig", .alias_path = "runtime_args.runtimeArgKindAt" },
+    .{ .id = "AR-CALL-018", .symbol_name = "runtimeArgLenAt", .import_fragment = "runtime_args.zig", .alias_path = "runtime_args.runtimeArgLenAt" },
+};
+
+const runtime_memory_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-019", .symbol_name = "checkedAdd", .import_fragment = "runtime_memory.zig", .alias_path = "runtime_memory.checkedAdd" },
+    .{ .id = "AR-CALL-020", .symbol_name = "checkedMul", .import_fragment = "runtime_memory.zig", .alias_path = "runtime_memory.checkedMul" },
+    .{ .id = "AR-CALL-021", .symbol_name = "checkedMulI64", .import_fragment = "runtime_memory.zig", .alias_path = "runtime_memory.checkedMulI64" },
+    .{ .id = "AR-CALL-022", .symbol_name = "offsetBytes", .import_fragment = "runtime_memory.zig", .alias_path = "runtime_memory.offsetBytes" },
+    .{ .id = "AR-CALL-023", .symbol_name = "offsetConstBytes", .import_fragment = "runtime_memory.zig", .alias_path = "runtime_memory.offsetConstBytes" },
+};
+
+const runtime_stride_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-024", .symbol_name = "offsetIndex", .import_fragment = "runtime_stride.zig", .alias_path = "runtime_stride.offsetIndex" },
+    .{ .id = "AR-CALL-025", .symbol_name = "complexOffsetIndex", .import_fragment = "runtime_stride.zig", .alias_path = "runtime_stride.complexOffsetIndex" },
+};
+
+const runtime_text_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-026", .symbol_name = "cstrlen", .import_fragment = "runtime_text.zig", .alias_path = "runtime_text.cstrlen" },
+    .{ .id = "AR-CALL-027", .symbol_name = "cstrnlen", .import_fragment = "runtime_text.zig", .alias_path = "runtime_text.cstrnlen" },
+    .{ .id = "AR-CALL-028", .symbol_name = "cstrlenRaw", .import_fragment = "runtime_text.zig", .alias_path = "runtime_text.cstrlenRaw" },
+    .{ .id = "AR-CALL-029", .symbol_name = "asCStr", .import_fragment = "runtime_text.zig", .alias_path = "runtime_text.asCStr" },
+    .{ .id = "AR-CALL-030", .symbol_name = "asConstCStr", .import_fragment = "runtime_text.zig", .alias_path = "runtime_text.asConstCStr" },
+};
+
+const io_list_read_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-031", .symbol_name = "runtimeArgCount", .import_fragment = "shared.zig", .alias_path = "shared.runtimeArgCount" },
+    .{ .id = "AR-CALL-032", .symbol_name = "runtimeArgPtrAt", .import_fragment = "shared.zig", .alias_path = "shared.runtimeArgPtrAt" },
+    .{ .id = "AR-CALL-033", .symbol_name = "runtimeArgKindAt", .import_fragment = "shared.zig", .alias_path = "shared.runtimeArgKindAt" },
+    .{ .id = "AR-CALL-034", .symbol_name = "runtimeArgLenAt", .import_fragment = "shared.zig", .alias_path = "shared.runtimeArgLenAt" },
+    .{ .id = "AR-CALL-035", .symbol_name = "checkedAdd", .import_fragment = "shared.zig", .alias_path = "shared.checkedAdd" },
+    .{ .id = "AR-CALL-036", .symbol_name = "checkedMul", .import_fragment = "shared.zig", .alias_path = "shared.checkedMul" },
+    .{ .id = "AR-CALL-037", .symbol_name = "checkedMulI64", .import_fragment = "shared.zig", .alias_path = "shared.checkedMulI64" },
+    .{ .id = "AR-CALL-038", .symbol_name = "offsetBytes", .import_fragment = "shared.zig", .alias_path = "shared.offsetBytes" },
+    .{ .id = "AR-CALL-039", .symbol_name = "offsetIndex", .import_fragment = "shared.zig", .alias_path = "shared.offsetIndex" },
+    .{ .id = "AR-CALL-040", .symbol_name = "complexOffsetIndex", .import_fragment = "shared.zig", .alias_path = "shared.complexOffsetIndex" },
+};
+
+const list_directed_stride_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-068", .symbol_name = "impliedStrideForDim", .alias_path = "implied_helpers.impliedStrideForSymbolDim" },
+};
+
+const streaming_stride_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-069", .symbol_name = "impliedStrideForDim", .alias_path = "implied_helpers.impliedStrideForSymbolDim" },
+};
+
+const special_write_stride_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-070", .symbol_name = "impliedStrideForDim", .alias_path = "implied_helpers.impliedStrideForSymbolDim" },
+};
+
+const unformatted_stride_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-071", .symbol_name = "impliedStrideForDim", .alias_path = "implied_helpers.impliedStrideForDims" },
+};
+
+const io_binary_v_rules = buildUsageRules(io_binary_v_title, .{ .prefix = io_binary_v_prefix }, io_binary_v_specs[0..], &.{io_binary_v_shared}, &.{});
+const implied_helper_rules = buildUsageRules(implied_helpers_alias_title, .{ .prefix = codegen_io_prefix }, implied_helper_specs[0..1], &.{implied_helpers_owner}, &.{});
+const implied_helper_import_rules = buildUsageRules(implied_helpers_title, .{ .prefix = codegen_io_prefix }, implied_helper_specs[1..], &.{implied_helpers_owner}, &.{});
+const runtime_arg_rules = buildUsageRules(runtime_args_title, .{ .prefix = runtime_prefix }, runtime_args_specs[0..], &.{runtime_args_owner}, runtime_facade_prefixes);
+const runtime_memory_rules = buildUsageRules(runtime_memory_title, .{ .prefix = runtime_prefix }, runtime_memory_specs[0..], &.{runtime_memory_owner}, runtime_facade_prefixes);
+const runtime_stride_rules = buildUsageRules(runtime_stride_title, .{ .prefix = runtime_prefix }, runtime_stride_specs[0..], &.{runtime_stride_owner}, runtime_facade_prefixes);
+const runtime_text_rules = buildUsageRules(runtime_text_title, .{ .prefix = runtime_prefix }, runtime_text_specs[0..], &.{runtime_text_owner}, runtime_facade_prefixes);
+const io_list_read_rules = buildUsageRules(io_list_read_title, .{ .prefix = io_list_read_prefix }, io_list_read_specs[0..], &.{io_list_read_shared}, &.{});
+const list_directed_stride_rules = buildUsageRules("list-directed implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/list_directed.zig" }, list_directed_stride_specs[0..], &.{}, &.{});
+const streaming_stride_rules = buildUsageRules("streaming implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/direct/streaming.zig" }, streaming_stride_specs[0..], &.{}, &.{});
+const special_write_stride_rules = buildUsageRules("special write implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/formatted/special_write.zig" }, special_write_stride_specs[0..], &.{}, &.{});
+const unformatted_stride_rules = buildUsageRules("unformatted implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/unformatted.zig" }, unformatted_stride_specs[0..], &.{}, &.{});
+
+pub const file_rules =
+    io_binary_v_rules ++
+    implied_helper_rules ++
+    implied_helper_import_rules ++
+    runtime_arg_rules ++
+    runtime_memory_rules ++
+    runtime_stride_rules ++
+    runtime_text_rules ++
+    io_list_read_rules ++
+    list_directed_stride_rules ++
+    streaming_stride_rules ++
+    special_write_stride_rules ++
+    unformatted_stride_rules;
