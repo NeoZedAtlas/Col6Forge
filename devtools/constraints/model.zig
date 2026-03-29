@@ -18,6 +18,7 @@ pub const RuleKind = enum {
     required_import_path_fragment_for_symbol_use,
     forbidden_function_call,
     required_function_call_path,
+    required_symbol_alias_path,
     forbidden_member_access_path,
     owned_symbol_definition,
     bare_error_code_literal,

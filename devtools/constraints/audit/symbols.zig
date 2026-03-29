@@ -11,6 +11,12 @@ pub const FunctionDefinition = struct {
     start_idx: usize,
 };
 
+pub const SymbolAlias = struct {
+    name: []const u8,
+    path: []const u8,
+    start_idx: usize,
+};
+
 pub const MemberAccess = struct {
     path: []const u8,
     start_idx: usize,
@@ -19,12 +25,14 @@ pub const MemberAccess = struct {
 pub const Index = struct {
     function_calls: std.ArrayListUnmanaged(FunctionCall) = .{},
     function_definitions: std.ArrayListUnmanaged(FunctionDefinition) = .{},
+    symbol_aliases: std.ArrayListUnmanaged(SymbolAlias) = .{},
     member_accesses: std.ArrayListUnmanaged(MemberAccess) = .{},
     owned_strings: std.ArrayListUnmanaged([]u8) = .{},
 
     pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
         self.function_calls.deinit(allocator);
         self.function_definitions.deinit(allocator);
+        self.symbol_aliases.deinit(allocator);
         self.member_accesses.deinit(allocator);
         for (self.owned_strings.items) |value| allocator.free(value);
         self.owned_strings.deinit(allocator);
@@ -46,6 +54,14 @@ pub const Index = struct {
         return null;
     }
 
+    pub fn findAliasOutsidePath(self: Index, symbol_name: []const u8, required_path: []const u8) ?usize {
+        for (self.symbol_aliases.items) |alias| {
+            if (!std.mem.eql(u8, alias.name, symbol_name)) continue;
+            if (!std.mem.eql(u8, alias.path, required_path)) return alias.start_idx;
+        }
+        return null;
+    }
+
     pub fn findMemberAccessPath(self: Index, needle: []const u8) ?usize {
         for (self.member_accesses.items) |access| {
             if (matchesMemberAccessNeedle(access.path, needle)) return access.start_idx;
@@ -59,8 +75,8 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
     errdefer out.deinit(allocator);
 
     var idx: usize = 0;
-    var saw_pub = false;
     var expect_fn_name = false;
+    var expect_binding_name = false;
 
     while (idx < text.len) {
         if (text[idx] == '/' and idx + 1 < text.len and text[idx + 1] == '/') {
@@ -73,9 +89,7 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
             continue;
         }
         if (!isIdentifierStart(text[idx])) {
-            if (!std.ascii.isWhitespace(text[idx]) and text[idx] != '.') {
-                if (!expect_fn_name) saw_pub = false;
-            }
+            if (!std.ascii.isWhitespace(text[idx]) and text[idx] != '.' and !expect_fn_name) expect_binding_name = false;
             idx += 1;
             continue;
         }
@@ -89,13 +103,13 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
         idx = access.cursor;
         const next_idx = skipWhitespace(text, idx);
 
-        if (std.mem.eql(u8, ident, "pub")) {
-            saw_pub = true;
-            continue;
-        }
+        if (std.mem.eql(u8, ident, "pub")) continue;
         if (std.mem.eql(u8, ident, "fn")) {
             expect_fn_name = true;
-            saw_pub = false;
+            continue;
+        }
+        if (std.mem.eql(u8, ident, "const") or std.mem.eql(u8, ident, "var")) {
+            expect_binding_name = true;
             continue;
         }
         if (expect_fn_name) {
@@ -106,11 +120,14 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
                 });
             }
             expect_fn_name = false;
-            saw_pub = false;
+            continue;
+        }
+        if (expect_binding_name) {
+            try maybeAppendAlias(allocator, &out, text, ident, start_idx, idx);
+            expect_binding_name = false;
             continue;
         }
 
-        saw_pub = false;
         if (isCallLikeKeyword(ident)) continue;
         if (next_idx < text.len and text[next_idx] == '(') {
             const call_name = lastPathSegment(access.path);
@@ -123,6 +140,34 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
     }
 
     return out;
+}
+
+fn maybeAppendAlias(
+    allocator: std.mem.Allocator,
+    out: *Index,
+    text: []const u8,
+    alias_name: []const u8,
+    alias_start_idx: usize,
+    alias_cursor: usize,
+) !void {
+    const equals_idx = skipWhitespace(text, alias_cursor);
+    if (equals_idx >= text.len or text[equals_idx] != '=') return;
+
+    const rhs_start = skipWhitespace(text, equals_idx + 1);
+    if (rhs_start >= text.len or !isIdentifierStart(text[rhs_start])) return;
+
+    var rhs_end = rhs_start + 1;
+    while (rhs_end < text.len and isIdentifierContinue(text[rhs_end])) : (rhs_end += 1) {}
+    const rhs_head = text[rhs_start..rhs_end];
+    const access = try parseAccessPath(allocator, out, text, rhs_head, rhs_start, rhs_end);
+    const terminator_idx = skipWhitespace(text, access.cursor);
+    if (terminator_idx >= text.len or text[terminator_idx] != ';') return;
+
+    try out.symbol_aliases.append(allocator, .{
+        .name = alias_name,
+        .path = access.path,
+        .start_idx = alias_start_idx,
+    });
 }
 
 fn skipWhitespace(text: []const u8, start: usize) usize {
@@ -277,4 +322,18 @@ test "tracks qualified function call paths" {
 
     try std.testing.expect(index.findFunctionCallOutsidePath("runtimeArgCount", "shared.runtimeArgCount") != null);
     try std.testing.expect(index.findFunctionCallOutsidePath("runtimeArgCount", "runtimeArgCount") != null);
+}
+
+test "tracks symbol alias bindings" {
+    const text =
+        "const runtimeArgCount = shared.runtimeArgCount;\n" ++
+        "pub const offsetBytes = shared.offsetBytes;\n" ++
+        "const ignored_import = @import(\"shared.zig\");\n";
+    var index = try buildIndex(std.testing.allocator, text);
+    defer index.deinit(std.testing.allocator);
+
+    try std.testing.expect(index.findAliasOutsidePath("runtimeArgCount", "shared.runtimeArgCount") == null);
+    try std.testing.expect(index.findAliasOutsidePath("offsetBytes", "shared.offsetBytes") == null);
+    try std.testing.expect(index.findAliasOutsidePath("runtimeArgCount", "runtimeArgCount") != null);
+    try std.testing.expectEqual(@as(usize, 2), index.symbol_aliases.items.len);
 }

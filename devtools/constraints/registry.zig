@@ -6,6 +6,7 @@ pub const file_rules =
     rules.text.file_rules ++
     rules.legacy_calls.file_rules ++
     rules.call_paths.file_rules ++
+    rules.alias_paths.file_rules ++
     rules.import_usage.file_rules ++
     rules.imports.file_rules ++
     rules.ownership.file_rules;
@@ -51,6 +52,11 @@ fn validateRule(rule: model.AuditRule) !void {
             if (rule.call_path == null or rule.call_path.?.len == 0) return error.AuditRuleMissingCallPath;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
         },
+        .required_symbol_alias_path => {
+            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
+            if (rule.call_path == null or rule.call_path.?.len == 0) return error.AuditRuleMissingCallPath;
+            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+        },
         .owned_symbol_definition => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.owner_exact_path == null or rule.owner_exact_path.?.len == 0) return error.AuditRuleMissingOwnerPath;
@@ -74,6 +80,7 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/text.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/legacy_calls.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/call_paths.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/alias_paths.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/import_usage.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/ownership.zig") or
