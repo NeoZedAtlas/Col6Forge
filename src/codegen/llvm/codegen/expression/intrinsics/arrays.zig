@@ -6,6 +6,7 @@ const evaluator = @import("../../../../../semantic/evaluator.zig");
 const binary = @import("../binary.zig");
 const casting = @import("../casting.zig");
 const array_actuals = @import("../call/array_actuals.zig");
+const call_shared = @import("../call/shared.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const memory = @import("../memory.zig");
 const shared = @import("shared.zig");
@@ -14,6 +15,7 @@ const IRType = shared.IRType;
 const Context = shared.Context;
 const ValueRef = shared.ValueRef;
 const EmitError = shared.EmitError;
+const ArrayActualPlan = call_shared.ArrayActualPlan;
 const isIntegerType = shared.isIntegerType;
 const isRealType = shared.isRealType;
 const shapeSubjectExtents = array_actuals.shapeSubjectExtents;
@@ -207,6 +209,29 @@ const ConstructorView = struct {
     count: usize,
 };
 
+const MergeViewPlan = struct {
+    elem_ty: IRType,
+    true_view: ?WholeArrayView = null,
+    true_actual: ?ArrayActualPlan = null,
+    true_scalar: ?ValueRef = null,
+    false_view: ?WholeArrayView = null,
+    false_actual: ?ArrayActualPlan = null,
+    false_scalar: ?ValueRef = null,
+    mask_view: ?WholeArrayView = null,
+    mask_actual: ?ArrayActualPlan = null,
+    mask_scalar: ?ValueRef = null,
+};
+
+const MergeComparePlan = struct {
+    elem_ty: IRType,
+    true_actual: ?ArrayActualPlan = null,
+    true_scalar: ?ValueRef = null,
+    false_actual: ?ArrayActualPlan = null,
+    false_scalar: ?ValueRef = null,
+    mask_actual: ?ArrayActualPlan = null,
+    mask_scalar: ?ValueRef = null,
+};
+
 fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
     if (expr_node.* != .binary) return null;
     const bin = expr_node.binary;
@@ -219,6 +244,9 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
         if (supportedConstructorView(bin.right)) |right_ctor| {
             return try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
         }
+        if (try analyzeMergeViewPlan(ctx, builder, bin.right)) |right_merge| {
+            return try emitWholeArrayMergeViewReduction(ctx, builder, bin.op, left_view, right_merge);
+        }
         if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
             if (left_view.count == null or right_view.count == null) return null;
             if (left_view.count.? != right_view.count.?) return null;
@@ -227,6 +255,9 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
         return try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
     }
     if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
+        if (try analyzeMergeViewPlan(ctx, builder, bin.left)) |left_merge| {
+            return try emitMergeViewWholeArrayReduction(ctx, builder, bin.op, left_merge, right_view);
+        }
         if (supportedConstructorView(bin.left)) |left_ctor| {
             return try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
         }
@@ -257,6 +288,9 @@ fn emitWholeArrayAllReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
         if (supportedConstructorView(bin.right)) |right_ctor| {
             return try emitWholeArrayConstructorReductionAll(ctx, builder, bin.op, left_view, right_ctor);
         }
+        if (try analyzeMergeViewPlan(ctx, builder, bin.right)) |right_merge| {
+            return try emitWholeArrayMergeViewReductionAll(ctx, builder, bin.op, left_view, right_merge);
+        }
         if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
             if (left_view.count == null or right_view.count == null) return null;
             if (left_view.count.? != right_view.count.?) return null;
@@ -265,6 +299,9 @@ fn emitWholeArrayAllReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
         return try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, left_view, bin.right);
     }
     if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
+        if (try analyzeMergeViewPlan(ctx, builder, bin.left)) |left_merge| {
+            return try emitMergeViewWholeArrayReductionAll(ctx, builder, bin.op, left_merge, right_view);
+        }
         if (supportedConstructorView(bin.left)) |left_ctor| {
             return try emitConstructorWholeArrayReductionAll(ctx, builder, bin.op, left_ctor, right_view);
         }
@@ -324,10 +361,10 @@ fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) Em
     return switch (expr_node.*) {
         .identifier => |name| wholeArraySymbolView(ctx, name),
         .call_or_subscript => |call| blk: {
-            if (wholeArraySectionView(ctx, call)) |view| break :blk view;
-            if (std.ascii.eqlIgnoreCase(call.name, "sum")) {
+            if (try wholeArraySectionView(ctx, builder, call)) |view| break :blk view;
+            if (std.ascii.eqlIgnoreCase(call.name, "sum") or std.ascii.eqlIgnoreCase(call.name, "merge")) {
                 if (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) |actual| {
-                    const count = staticSumDimResultCount(ctx, call) orelse break :blk null;
+                    const count = staticIntrinsicArrayResultCount(ctx, actual.extents) orelse staticWholeArrayExprCount(ctx, expr_node) orelse break :blk null;
                     break :blk .{
                         .base_ptr = actual.base_ptr,
                         .elem_ty = actual.elem_ty,
@@ -342,26 +379,235 @@ fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) Em
     };
 }
 
-fn staticSumDimResultCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
-    if (!std.ascii.eqlIgnoreCase(call.name, "sum")) return null;
-    if (call.args.len < 2) return null;
-    const dim_value = evalConstIntArg(ctx, call.args[1]) orelse return null;
-    if (dim_value <= 0) return null;
-    const reduce_idx: usize = @intCast(dim_value - 1);
-    const source_name = switch (call.args[0].*) {
-        .identifier => |name| name,
-        else => return null,
-    };
-    const sym = ctx.findSymbol(source_name) orelse return null;
-    if (reduce_idx >= sym.dims.len) return null;
+fn staticIntrinsicArrayResultCount(
+    ctx: *Context,
+    extents: []const ValueRef,
+) ?usize {
+    _ = ctx;
     var total: usize = 1;
-    for (sym.dims, 0..) |dim, idx| {
-        if (idx == reduce_idx) continue;
-        var one_dim = [_]*ast.Expr{@constCast(dim)};
-        const extent = common.arrayElementCount(ctx.sem, one_dim[0..]) catch return null;
-        total = std.math.mul(usize, total, extent) catch return null;
+    for (extents) |extent| {
+        const value = std.fmt.parseInt(i64, extent.name, 10) catch return null;
+        if (value < 0) return null;
+        const usize_value = std.math.cast(usize, value) orelse return null;
+        total = std.math.mul(usize, total, usize_value) catch return null;
     }
     return total;
+}
+
+fn staticWholeArrayExprCount(ctx: *Context, expr_node: *Expr) ?usize {
+    return switch (expr_node.*) {
+        .identifier => |name| staticSymbolArrayCount(ctx, name),
+        .call_or_subscript => |call| staticCallArrayCount(ctx, call),
+        else => null,
+    };
+}
+
+fn staticSymbolArrayCount(ctx: *Context, name: []const u8) ?usize {
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    return common.arrayElementCount(ctx.sem, sym.dims) catch null;
+}
+
+fn staticCallArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    if (staticSectionArrayCount(ctx, call)) |count| return count;
+    if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumArrayCount(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeArrayCount(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeArrayCount(ctx, call);
+    return null;
+}
+
+fn staticSectionArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    if (call.args.len != sym.dims.len) return null;
+
+    var count: usize = 1;
+    var has_range = false;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* != .dim_range) continue;
+        if (!isFullDimRange(arg)) return null;
+        has_range = true;
+        const extent = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch return null;
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return if (has_range) count else null;
+}
+
+fn staticSumArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    if (call.args.len < 2 or call.args.len > 3) return null;
+    const source_shape = staticExprShape(ctx, call.args[0]) orelse return null;
+    defer ctx.allocator.free(source_shape);
+    if (source_shape.len <= 1) return null;
+
+    const dim_value = staticConstIntExpr(ctx, call.args[1]) orelse return null;
+    if (dim_value <= 0) return null;
+    const reduce_idx: usize = @intCast(dim_value - 1);
+    if (reduce_idx >= source_shape.len) return null;
+
+    var count: usize = 1;
+    for (source_shape, 0..) |extent, idx| {
+        if (idx == reduce_idx) continue;
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
+}
+
+fn staticMergeArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    if (call.args.len != 3) return null;
+    return staticWholeArrayExprCount(ctx, call.args[0]) orelse
+        staticWholeArrayExprCount(ctx, call.args[1]) orelse
+        staticWholeArrayExprCount(ctx, call.args[2]);
+}
+
+fn staticExprShape(ctx: *Context, expr_node: *Expr) ?[]usize {
+    return switch (expr_node.*) {
+        .identifier => |name| staticSymbolShape(ctx, name),
+        .call_or_subscript => |call| staticCallShape(ctx, call),
+        else => null,
+    };
+}
+
+fn staticSymbolShape(ctx: *Context, name: []const u8) ?[]usize {
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    const shape = ctx.allocator.alloc(usize, sym.dims.len) catch return null;
+    for (sym.dims, 0..) |_, idx| {
+        shape[idx] = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch {
+            ctx.allocator.free(shape);
+            return null;
+        };
+    }
+    return shape;
+}
+
+fn staticCallShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (staticSectionShape(ctx, call)) |shape| return shape;
+    if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumShape(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeShape(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeShape(ctx, call);
+    return null;
+}
+
+fn staticReshapeArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    const shape = staticReshapeShape(ctx, call) orelse return null;
+    defer ctx.allocator.free(shape);
+    var count: usize = 1;
+    for (shape) |extent| {
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
+}
+
+fn staticReshapeShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (!std.ascii.eqlIgnoreCase(call.name, "reshape")) return null;
+    if (call.args.len != 2) return null;
+    return staticShapeExprShape(ctx, call.args[1]);
+}
+
+fn staticShapeExprShape(ctx: *Context, expr_node: *Expr) ?[]usize {
+    if (expr_node.* == .call_or_subscript and std.ascii.eqlIgnoreCase(expr_node.call_or_subscript.name, "shape") and expr_node.call_or_subscript.args.len == 1) {
+        return cloneStaticShape(ctx, expr_node.call_or_subscript.args[0]);
+    }
+    if (expr_node.* != .array_constructor) return null;
+
+    const ctor = expr_node.array_constructor;
+    const shape = ctx.allocator.alloc(usize, ctor.items.len) catch return null;
+    for (ctor.items, 0..) |item, idx| {
+        shape[idx] = std.math.cast(usize, staticConstIntExpr(ctx, item) orelse {
+            ctx.allocator.free(shape);
+            return null;
+        }) orelse {
+            ctx.allocator.free(shape);
+            return null;
+        };
+    }
+    return shape;
+}
+
+fn staticSectionShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    if (call.args.len != sym.dims.len) return null;
+
+    var rank: usize = 0;
+    for (call.args) |arg| {
+        if (arg.* == .dim_range) rank += 1;
+    }
+    if (rank == 0) return null;
+
+    const shape = ctx.allocator.alloc(usize, rank) catch return null;
+    var out_idx: usize = 0;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* != .dim_range) continue;
+        if (!isFullDimRange(arg)) {
+            ctx.allocator.free(shape);
+            return null;
+        }
+        shape[out_idx] = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch {
+            ctx.allocator.free(shape);
+            return null;
+        };
+        out_idx += 1;
+    }
+    return shape;
+}
+
+fn staticSumShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (call.args.len < 2 or call.args.len > 3) return null;
+    const source_shape = staticExprShape(ctx, call.args[0]) orelse return null;
+    errdefer ctx.allocator.free(source_shape);
+    if (source_shape.len <= 1) return null;
+
+    const dim_value = staticConstIntExpr(ctx, call.args[1]) orelse return null;
+    if (dim_value <= 0) return null;
+    const reduce_idx: usize = @intCast(dim_value - 1);
+    if (reduce_idx >= source_shape.len) return null;
+
+    const shape = ctx.allocator.alloc(usize, source_shape.len - 1) catch return null;
+    var out_idx: usize = 0;
+    for (source_shape, 0..) |extent, idx| {
+        if (idx == reduce_idx) continue;
+        shape[out_idx] = extent;
+        out_idx += 1;
+    }
+    ctx.allocator.free(source_shape);
+    return shape;
+}
+
+fn staticMergeShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (call.args.len != 3) return null;
+    return cloneStaticShape(ctx, call.args[0]) orelse
+        cloneStaticShape(ctx, call.args[1]) orelse
+        cloneStaticShape(ctx, call.args[2]);
+}
+
+fn cloneStaticShape(ctx: *Context, expr_node: *Expr) ?[]usize {
+    const shape = staticExprShape(ctx, expr_node) orelse return null;
+    const cloned = ctx.allocator.alloc(usize, shape.len) catch {
+        ctx.allocator.free(shape);
+        return null;
+    };
+    @memcpy(cloned, shape);
+    ctx.allocator.free(shape);
+    return cloned;
+}
+
+fn staticConstIntExpr(ctx: *Context, expr_node: *Expr) ?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(i64, lit.text, 10) catch null,
+            else => null,
+        },
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.const_value) |cv| switch (cv) {
+                .integer => |v| break :blk v,
+                else => {},
+            };
+            break :blk null;
+        },
+        else => null,
+    };
 }
 
 fn wholeArraySymbolView(ctx: *Context, name: []const u8) ?WholeArrayView {
@@ -376,14 +622,36 @@ fn wholeArraySymbolView(ctx: *Context, name: []const u8) ?WholeArrayView {
     };
 }
 
-fn wholeArraySectionView(ctx: *Context, call: ast.CallOrSubscript) ?WholeArrayView {
+fn wholeArraySectionView(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) EmitError!?WholeArrayView {
     const sym = ctx.findSymbol(call.name) orelse return null;
     if (sym.dims.len == 0 or sym.isCharacter()) return null;
     if (call.args.len != sym.dims.len) return null;
-    for (call.args) |arg| {
-        if (!isFullDimRange(arg)) return null;
+
+    var count: usize = 1;
+    var has_range = false;
+    var saw_scalar = false;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* == .dim_range) {
+            if (saw_scalar) return null;
+            if (!isFullDimRange(arg)) return null;
+            has_range = true;
+            const extent = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch return null;
+            count = std.math.mul(usize, count, extent) catch return null;
+            continue;
+        }
+        saw_scalar = true;
     }
-    return wholeArraySymbolView(ctx, call.name);
+    if (!has_range) return null;
+
+    const base_ptr = if (!saw_scalar)
+        (ctx.getPointer(call.name) catch return null)
+    else
+        (try array_actuals.emitSectionBasePtr(ctx, builder, sym, call));
+    return .{
+        .base_ptr = base_ptr,
+        .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
+        .count = count,
+    };
 }
 
 fn wholeProjectedComponentView(
@@ -503,6 +771,281 @@ fn emitWholeArrayElement(
     const elem_tmp = try ctx.nextTemp();
     try builder.load(elem_tmp, view.elem_ty, elem_ptr);
     return .{ .name = elem_tmp, .ty = view.elem_ty, .is_ptr = false };
+}
+
+fn analyzeMergeViewPlan(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?MergeViewPlan {
+    if (expr_node.* != .call_or_subscript) return null;
+    const call = expr_node.call_or_subscript;
+    if (!std.ascii.eqlIgnoreCase(call.name, "merge")) return null;
+    if (call.args.len != 3) return null;
+
+    const true_view = try supportedWholeArrayView(ctx, builder, call.args[0]);
+    const false_view = try supportedWholeArrayView(ctx, builder, call.args[1]);
+    const mask_view = try supportedWholeArrayView(ctx, builder, call.args[2]);
+    const true_actual = if (true_view == null) try array_actuals.resolveArrayActual(ctx, builder, call.args[0]) else null;
+    const false_actual = if (false_view == null) try array_actuals.resolveArrayActual(ctx, builder, call.args[1]) else null;
+    const mask_actual = if (mask_view == null) try array_actuals.resolveArrayActual(ctx, builder, call.args[2]) else null;
+    const basis_elem_ty = if (true_view) |view|
+        view.elem_ty
+    else if (true_actual) |actual|
+        actual.elem_ty
+    else if (false_view) |view|
+        view.elem_ty
+    else if (false_actual) |actual|
+        actual.elem_ty
+    else if (mask_view) |view|
+        view.elem_ty
+    else if (mask_actual) |actual|
+        actual.elem_ty
+    else
+        return null;
+
+    return .{
+        .elem_ty = basis_elem_ty,
+        .true_view = true_view,
+        .true_actual = true_actual,
+        .true_scalar = if (true_view == null and true_actual == null) try emitMergeScalarOperand(ctx, builder, call.args[0], basis_elem_ty) else null,
+        .false_view = false_view,
+        .false_actual = false_actual,
+        .false_scalar = if (false_view == null and false_actual == null) try emitMergeScalarOperand(ctx, builder, call.args[1], basis_elem_ty) else null,
+        .mask_view = mask_view,
+        .mask_actual = mask_actual,
+        .mask_scalar = if (mask_view == null and mask_actual == null) try emitLogicalCast(ctx, builder, try dispatch.emitExpr(ctx, builder, call.args[2])) else null,
+    };
+}
+
+fn emitMergeViewElement(
+    ctx: *Context,
+    builder: anytype,
+    plan: MergeViewPlan,
+    idx: usize,
+) EmitError!ValueRef {
+    const idx_val = try ctx.constI64(@intCast(idx));
+    const mask = if (plan.mask_view) |view|
+        try emitLogicalCast(ctx, builder, try emitWholeArrayElement(ctx, builder, view, idx))
+    else if (plan.mask_actual) |actual|
+        try emitLogicalCast(ctx, builder, try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual))
+    else
+        plan.mask_scalar.?;
+    const when_true = if (plan.true_view) |view|
+        try emitWholeArrayElement(ctx, builder, view, idx)
+    else if (plan.true_actual) |actual|
+        try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        plan.true_scalar.?;
+    const when_false = if (plan.false_view) |view|
+        try emitWholeArrayElement(ctx, builder, view, idx)
+    else if (plan.false_actual) |actual|
+        try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        plan.false_scalar.?;
+    const select_name = try ctx.nextTemp();
+    try builder.select(select_name, plan.elem_ty, mask, when_true, when_false);
+    return .{ .name = select_name, .ty = plan.elem_ty, .is_ptr = false };
+}
+
+fn emitWholeArrayMergeViewReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: MergeViewPlan,
+) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try emitMergeViewElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitMergeViewWholeArrayReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: MergeViewPlan,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    const count = right.count orelse return error.UnsupportedIntrinsicType;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitMergeViewElement(ctx, builder, left, idx);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitWholeArrayMergeViewReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: MergeViewPlan,
+) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try emitMergeViewElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitMergeViewWholeArrayReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: MergeViewPlan,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    const count = right.count orelse return error.UnsupportedIntrinsicType;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitMergeViewElement(ctx, builder, left, idx);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn analyzeMergeComparePlan(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?MergeComparePlan {
+    if (expr_node.* != .call_or_subscript) return null;
+    const call = expr_node.call_or_subscript;
+    if (!std.ascii.eqlIgnoreCase(call.name, "merge")) return null;
+    if (call.args.len != 3) return null;
+
+    const true_actual = try array_actuals.resolveArrayActual(ctx, builder, call.args[0]);
+    const false_actual = try array_actuals.resolveArrayActual(ctx, builder, call.args[1]);
+    const mask_actual = try array_actuals.resolveArrayActual(ctx, builder, call.args[2]);
+    const basis = true_actual orelse false_actual orelse mask_actual orelse return null;
+    try basis.validate();
+
+    return .{
+        .elem_ty = basis.elem_ty,
+        .true_actual = true_actual,
+        .true_scalar = if (true_actual == null) try emitMergeScalarOperand(ctx, builder, call.args[0], basis.elem_ty) else null,
+        .false_actual = false_actual,
+        .false_scalar = if (false_actual == null) try emitMergeScalarOperand(ctx, builder, call.args[1], basis.elem_ty) else null,
+        .mask_actual = mask_actual,
+        .mask_scalar = if (mask_actual == null) try emitLogicalCast(ctx, builder, try dispatch.emitExpr(ctx, builder, call.args[2])) else null,
+    };
+}
+
+fn emitMergeScalarOperand(ctx: *Context, builder: anytype, expr_node: *Expr, elem_ty: IRType) EmitError!ValueRef {
+    const value = try dispatch.emitExpr(ctx, builder, expr_node);
+    return if (value.ty == elem_ty) value else try casting.coerce(ctx, builder, value, elem_ty);
+}
+
+fn emitMergePlanElement(
+    ctx: *Context,
+    builder: anytype,
+    plan: MergeComparePlan,
+    idx: usize,
+) EmitError!ValueRef {
+    const idx_val = try ctx.constI64(@intCast(idx));
+    const mask = if (plan.mask_actual) |actual|
+        try emitLogicalCast(ctx, builder, try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual))
+    else
+        plan.mask_scalar.?;
+    const when_true = if (plan.true_actual) |actual|
+        try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        plan.true_scalar.?;
+    const when_false = if (plan.false_actual) |actual|
+        try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        plan.false_scalar.?;
+    const select_name = try ctx.nextTemp();
+    try builder.select(select_name, plan.elem_ty, mask, when_true, when_false);
+    return .{ .name = select_name, .ty = plan.elem_ty, .is_ptr = false };
+}
+
+fn emitWholeArrayMergeReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: MergeComparePlan,
+) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try emitMergePlanElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitMergeWholeArrayReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: MergeComparePlan,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    const count = right.count orelse return error.UnsupportedIntrinsicType;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitMergePlanElement(ctx, builder, left, idx);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitWholeArrayMergeReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: MergeComparePlan,
+) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try emitMergePlanElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitMergeWholeArrayReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: MergeComparePlan,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    const count = right.count orelse return error.UnsupportedIntrinsicType;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitMergePlanElement(ctx, builder, left, idx);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
 }
 
 fn emitWholeArrayWholeArrayReduction(
