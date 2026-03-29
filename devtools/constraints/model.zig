@@ -15,8 +15,16 @@ pub const SourceDomain = enum {
 pub const RuleKind = enum {
     forbidden_text,
     forbidden_import_path_fragment,
+    owned_symbol_definition,
     bare_error_code_literal,
     error_catalog_consistency,
+};
+
+pub const DefinitionKind = enum {
+    function,
+    type_struct,
+    type_union,
+    type_enum,
 };
 
 pub const Scope = union(enum) {
@@ -31,6 +39,9 @@ pub const AuditRule = struct {
     kind: RuleKind,
     scope: Scope = .any,
     needle: ?[]const u8 = null,
+    symbol_name: ?[]const u8 = null,
+    owner_exact_path: ?[]const u8 = null,
+    definition_kind: ?DefinitionKind = null,
     excluded_exact_paths: []const []const u8 = &.{},
     exclude_tests: bool = false,
 };

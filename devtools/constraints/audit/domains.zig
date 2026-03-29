@@ -26,6 +26,7 @@ const exact_specs = [_]struct {
     .{ .domain = .root_entry, .path = "src/main.zig" },
     .{ .domain = .root_entry, .path = "src/root.zig" },
     .{ .domain = .scratch, .path = "src/tmp_c_loc_diag.zig" },
+    .{ .domain = .scratch, .path = "src/tmp_c_loc_symbols.zig" },
 };
 
 pub fn classify(rel_path: []const u8) ?model.SourceDomain {
@@ -58,4 +59,5 @@ test "classify recognizes semantic and root files" {
     try std.testing.expectEqual(model.SourceDomain.semantic, classify("src/semantic/mod.zig").?);
     try std.testing.expectEqual(model.SourceDomain.root_entry, classify("src/root.zig").?);
     try std.testing.expectEqual(model.SourceDomain.scratch, classify("src/tmp_c_loc_diag.zig").?);
+    try std.testing.expectEqual(model.SourceDomain.scratch, classify("src/tmp_c_loc_symbols.zig").?);
 }

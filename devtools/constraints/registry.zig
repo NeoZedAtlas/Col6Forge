@@ -196,6 +196,54 @@ pub const file_rules = [_]model.AuditRule{
             "src/tools/fallback_policy.zig",
         },
     },
+    .{
+        .id = "AR-OWN-001",
+        .title = "StringContext type owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "StringContext",
+        .definition_kind = .type_struct,
+        .owner_exact_path = "src/common/case_insensitive.zig",
+    },
+    .{
+        .id = "AR-OWN-002",
+        .title = "ArrayActualPlan type owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "ArrayActualPlan",
+        .definition_kind = .type_struct,
+        .owner_exact_path = "src/codegen/llvm/codegen/expression/call/shared.zig",
+    },
+    .{
+        .id = "AR-OWN-003",
+        .title = "CharacterValuePlan type owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "CharacterValuePlan",
+        .definition_kind = .type_struct,
+        .owner_exact_path = "src/codegen/llvm/codegen/expression/dispatch/shared.zig",
+    },
+    .{
+        .id = "AR-OWN-004",
+        .title = "PreparedExecutionFormatPlan type owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "PreparedExecutionFormatPlan",
+        .definition_kind = .type_union,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/formatted/context.zig",
+    },
+    .{
+        .id = "AR-OWN-005",
+        .title = "semantic test DiagCapture owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "DiagCapture",
+        .definition_kind = .type_struct,
+        .owner_exact_path = "src/semantic/tests/helpers.zig",
+    },
+    .{
+        .id = "AR-OWN-006",
+        .title = "intrinsic assignment compatibility helper owner",
+        .kind = .owned_symbol_definition,
+        .symbol_name = "intrinsicAssignmentTypeCompatible",
+        .definition_kind = .function,
+        .owner_exact_path = "src/semantic/analysis/check_statements/mod.zig",
+    },
 };
 
 pub const project_rules = [_]model.AuditRule{
@@ -230,6 +278,12 @@ fn validateRule(rule: model.AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
         .forbidden_text, .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
+        .owned_symbol_definition => {
+            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
+            if (rule.owner_exact_path == null or rule.owner_exact_path.?.len == 0) return error.AuditRuleMissingOwnerPath;
+            if (rule.definition_kind == null) return error.AuditRuleMissingDefinitionKind;
+            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+        },
         .bare_error_code_literal, .error_catalog_consistency => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
     }
 }
@@ -240,6 +294,7 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
         std.mem.eql(u8, rel_path, "devtools/constraints/architecture_audit.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/model.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/registry.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/audit/declarations.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/engine.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/domains.zig");

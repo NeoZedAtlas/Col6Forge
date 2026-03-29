@@ -2,6 +2,7 @@ const std = @import("std");
 const Col6Forge = @import("Col6Forge");
 const model = @import("../model.zig");
 const registry = @import("../registry.zig");
+const declarations = @import("declarations.zig");
 const domains = @import("domains.zig");
 const imports = @import("imports.zig");
 
@@ -88,6 +89,16 @@ fn applyFileRule(
                 cursor = match.next_cursor;
                 if (std.mem.indexOf(u8, match.literal, fragment) == null) continue;
                 reportViolation(rel_path, match.start_idx, text, rule.id, rule.title, match.literal);
+                failures.* += 1;
+            }
+        },
+        .owned_symbol_definition => {
+            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
+            const owner_path = rule.owner_exact_path orelse return error.AuditRuleMissingOwnerPath;
+            const definition_kind = rule.definition_kind orelse return error.AuditRuleMissingDefinitionKind;
+            if (std.mem.eql(u8, rel_path, owner_path)) return;
+            if (declarations.definesOwnedSymbol(text, symbol_name, definition_kind)) {
+                reportViolation(rel_path, 0, text, rule.id, rule.title, symbol_name);
                 failures.* += 1;
             }
         },
