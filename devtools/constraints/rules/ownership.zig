@@ -80,6 +80,13 @@ const semantic_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/semantic/analysis/check_statements/mod.zig",
     },
+    .{
+        .id = "AR-OWN-028",
+        .title = "single-note source diagnostic helper owner",
+        .symbol_name = "setSingleNoteHelpSourceDiagnostic",
+        .definition_kind = .function,
+        .owner_exact_path = "src/semantic/analysis/resolve_specs/interfaces.zig",
+    },
 };
 
 const implied_helper_specs = [_]OwnerSpec{
