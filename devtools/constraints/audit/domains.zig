@@ -33,6 +33,9 @@ pub fn classify(rel_path: []const u8) ?model.SourceDomain {
     for (exact_specs) |spec| {
         if (std.mem.eql(u8, rel_path, spec.path)) return spec.domain;
     }
+    if (std.mem.startsWith(u8, rel_path, "src/tmp_") and std.mem.endsWith(u8, rel_path, ".zig")) {
+        return .scratch;
+    }
     for (prefix_specs) |spec| {
         if (std.mem.startsWith(u8, rel_path, spec.prefix)) return spec.domain;
     }
@@ -60,4 +63,5 @@ test "classify recognizes semantic and root files" {
     try std.testing.expectEqual(model.SourceDomain.root_entry, classify("src/root.zig").?);
     try std.testing.expectEqual(model.SourceDomain.scratch, classify("src/tmp_c_loc_diag.zig").?);
     try std.testing.expectEqual(model.SourceDomain.scratch, classify("src/tmp_c_loc_symbols.zig").?);
+    try std.testing.expectEqual(model.SourceDomain.scratch, classify("src/tmp_c_loc_steps.zig").?);
 }

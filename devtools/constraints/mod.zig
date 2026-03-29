@@ -1,5 +1,6 @@
 pub const model = @import("model.zig");
 pub const registry = @import("registry.zig");
+pub const rules = @import("rules/mod.zig");
 pub const audit_domains = @import("audit/domains.zig");
 pub const audit_declarations = @import("audit/declarations.zig");
 pub const audit_imports = @import("audit/imports.zig");

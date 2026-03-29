@@ -97,8 +97,8 @@ fn applyFileRule(
             const owner_path = rule.owner_exact_path orelse return error.AuditRuleMissingOwnerPath;
             const definition_kind = rule.definition_kind orelse return error.AuditRuleMissingDefinitionKind;
             if (std.mem.eql(u8, rel_path, owner_path)) return;
-            if (declarations.definesOwnedSymbol(text, symbol_name, definition_kind)) {
-                reportViolation(rel_path, 0, text, rule.id, rule.title, symbol_name);
+            if (declarations.findOwnedSymbolDefinition(text, symbol_name, definition_kind)) |idx| {
+                reportViolation(rel_path, idx, text, rule.id, rule.title, symbol_name);
                 failures.* += 1;
             }
         },
