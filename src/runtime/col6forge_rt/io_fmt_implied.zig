@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
@@ -66,11 +67,7 @@ const LineBuffer = struct {
     }
 };
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlen = runtime_text.cstrlen;
 
 fn appendLenSlice(out: *LineBuffer, ptr: ?[*]const u8, len_in: c_int) bool {
     if (ptr == null or len_in <= 0) return true;

@@ -66,7 +66,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     const target_ptr = try pointer_misc.emitAssignmentTargetPtr(ctx, builder, assign.target);
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const target_ty = if (pointer_misc.targetExprSymbol(ctx, assign.target)) |sym|
-        common.symbolStorageIRType(sym, ctx.options.target_layout)
+        common.symbolElementIRType(sym, ctx.options.target_layout)
     else
         try expr.exprType(ctx, assign.target);
     const coerced = try expr.coerce(ctx, builder, value, target_ty);

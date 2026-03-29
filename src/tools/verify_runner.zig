@@ -1315,6 +1315,32 @@ fn cleanupWorkDir(path: []const u8) void {
     std.fs.cwd().deleteTree(path) catch {};
 }
 
+fn resolveVerifyWorkDir(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    work_name: []const u8,
+) ![]const u8 {
+    if (!shouldRelocateVerifyWorkDir(root_path)) {
+        return std.fs.path.join(allocator, &.{ root_path, "zig-cache", "verify", work_name });
+    }
+
+    const override_root = std.process.getEnvVarOwned(allocator, "COL6FORGE_VERIFY_WORK_ROOT") catch null;
+    defer if (override_root) |value| allocator.free(value);
+
+    const base_root = override_root orelse "/tmp/col6forge-verify";
+    var hasher = std.hash.XxHash64.init(0);
+    hasher.update(root_path);
+    const root_bucket = try std.fmt.allocPrint(allocator, "{x:0>16}", .{hasher.final()});
+    defer allocator.free(root_bucket);
+
+    return std.fs.path.join(allocator, &.{ base_root, root_bucket, work_name });
+}
+
+fn shouldRelocateVerifyWorkDir(root_path: []const u8) bool {
+    if (builtin.os.tag != .linux) return false;
+    return std.mem.startsWith(u8, root_path, "/mnt/");
+}
+
 fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
     var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
     defer dir.close();
@@ -1739,7 +1765,7 @@ fn processCase(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
-    runtime_artifacts: *const RuntimeArtifacts,
+    runtime_artifacts: *RuntimeArtifacts,
     compiler_cache_key: []const u8,
     ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
@@ -1756,12 +1782,9 @@ fn processCase(
     const abs_case_dir = try std.fs.path.join(allocator, &.{ root_path, case.case_dir });
     defer allocator.free(abs_case_dir);
 
-    const work_dir_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", case.work_name });
-    defer allocator.free(work_dir_rel);
-    try std.fs.cwd().makePath(work_dir_rel);
-
-    const work_dir = try std.fs.path.join(allocator, &.{ root_path, work_dir_rel });
+    const work_dir = try resolveVerifyWorkDir(allocator, root_path, case.work_name);
     defer allocator.free(work_dir);
+    try std.fs.cwd().makePath(work_dir);
 
     const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
     defer allocator.free(ll_path);
@@ -1773,7 +1796,7 @@ fn processCase(
     defer allocator.free(test_exe);
     if (isTimedOut(options.timeout_ms, &timer)) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -1794,7 +1817,7 @@ fn processCase(
     const ref_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (ref_timeout != null and ref_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -1838,7 +1861,7 @@ fn processCase(
         defer ref_compile.deinit(allocator);
         if (ref_compile.timed_out) {
             log_state.stderr("timeout: gfortran compile {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
+            cleanupWorkDir(work_dir);
             return false;
         }
         if (!isZeroExit(ref_compile.term)) {
@@ -1875,7 +1898,7 @@ fn processCase(
     const compile_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (compile_timeout != null and compile_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -1950,7 +1973,7 @@ fn processCase(
             const object_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
             if (object_timeout != null and object_timeout.? == 0) {
                 log_state.stderr("timeout: {s}\n", .{abs_input_path});
-                cleanupWorkDir(work_dir_rel);
+                cleanupWorkDir(work_dir);
                 return false;
             }
             const object_compile = runProcessCapture(
@@ -1965,7 +1988,7 @@ fn processCase(
             defer object_compile.deinit(allocator);
             if (object_compile.timed_out) {
                 log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
-                cleanupWorkDir(work_dir_rel);
+                cleanupWorkDir(work_dir);
                 return false;
             }
             if (!isZeroExit(object_compile.term)) {
@@ -2001,7 +2024,7 @@ fn processCase(
     const link_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (link_timeout != null and link_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -2032,7 +2055,7 @@ fn processCase(
             defer compile_args.deinit(allocator);
             try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
             try runtime_artifacts.appendToArgs(allocator, &compile_args);
-            const our_compile = runZigCcLinkWithWindowsRetry(
+            var our_compile = runZigCcLinkWithWindowsRetry(
                 allocator,
                 compile_args.items,
                 work_dir,
@@ -2045,8 +2068,29 @@ fn processCase(
             defer our_compile.deinit(allocator);
             if (our_compile.timed_out) {
                 log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
-                cleanupWorkDir(work_dir_rel);
+                cleanupWorkDir(work_dir);
                 return false;
+            }
+            if (!isZeroExit(our_compile.term) and
+                options.incremental and
+                try tryRecoverRuntimeCacheAndRelink(
+                    allocator,
+                    root_path,
+                    cache_dir,
+                    runtime_cache_key,
+                    runtime_artifacts,
+                    options,
+                    log_state,
+                    dir_locks,
+                    abs_input_path,
+                    work_dir,
+                    test_exe,
+                    translated_obj_path,
+                    link_timeout,
+                    &our_compile,
+                ))
+            {
+                // relink succeeded after runtime-cache rebuild
             }
             if (!isZeroExit(our_compile.term)) {
                 log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
@@ -2072,7 +2116,7 @@ fn processCase(
         defer our_compile.deinit(allocator);
         if (our_compile.timed_out) {
             log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
+            cleanupWorkDir(work_dir);
             return false;
         }
         if (!isZeroExit(our_compile.term)) {
@@ -2084,7 +2128,7 @@ fn processCase(
     const ref_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (ref_run_timeout != null and ref_run_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -2102,14 +2146,14 @@ fn processCase(
     defer ref_run.deinit(allocator);
     if (ref_run.timed_out) {
         log_state.stderr("timeout: reference run {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
     const test_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (test_run_timeout != null and test_run_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -2144,7 +2188,7 @@ fn processCase(
                 defer rebuilt.deinit(allocator);
                 if (rebuilt.timed_out) {
                     log_state.stderr("timeout: zig cc rebuild {s}\n", .{abs_input_path});
-                    cleanupWorkDir(work_dir_rel);
+                    cleanupWorkDir(work_dir);
                     return false;
                 }
                 if (!isZeroExit(rebuilt.term)) {
@@ -2171,7 +2215,7 @@ fn processCase(
     defer test_run.deinit(allocator);
     if (test_run.timed_out) {
         log_state.stderr("timeout: translated run {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
+        cleanupWorkDir(work_dir);
         return false;
     }
 
@@ -2200,7 +2244,7 @@ fn runCaseParallel(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
-    runtime_artifacts: *const RuntimeArtifacts,
+    runtime_artifacts: *RuntimeArtifacts,
     compiler_cache_key: []const u8,
     ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
@@ -2378,6 +2422,73 @@ const RuntimeArtifacts = struct {
         }
     }
 };
+
+fn isRuntimeCacheCorruption(stderr: []const u8, runtime_artifacts: *const RuntimeArtifacts) bool {
+    const runtime_obj = runtime_artifacts.zig_object orelse return false;
+    if (std.mem.indexOf(u8, stderr, runtime_obj) == null) return false;
+    return std.mem.indexOf(u8, stderr, "unknown file type") != null or
+        std.mem.indexOf(u8, stderr, "unknown directive") != null or
+        std.mem.indexOf(u8, stderr, "file format not recognized") != null;
+}
+
+fn tryRecoverRuntimeCacheAndRelink(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
+    runtime_artifacts: *RuntimeArtifacts,
+    options: Options,
+    log_state: *LogState,
+    dir_locks: *DirLocks,
+    abs_input_path: []const u8,
+    work_dir: []const u8,
+    test_exe: []const u8,
+    translated_obj_path: []const u8,
+    link_timeout: ?u64,
+    link_result: *ProcessResult,
+) !bool {
+    if (!isRuntimeCacheCorruption(link_result.stderr, runtime_artifacts)) return false;
+
+    const runtime_obj = runtime_artifacts.zig_object orelse return false;
+    const runtime_lock = try dir_locks.get(runtime_obj);
+    runtime_lock.lock();
+    defer runtime_lock.unlock();
+
+    log_state.stderr("runtime cache object invalid, rebuilding: {s}\n", .{abs_input_path});
+    deleteFileAbsoluteIfExists(runtime_obj);
+    runtime_artifacts.deinit(allocator);
+    runtime_artifacts.* = try prepareRuntimeArtifacts(
+        allocator,
+        root_path,
+        cache_dir,
+        options.runtime_backend,
+        options.timeout_ms,
+        runtime_cache_key,
+        true,
+    );
+
+    deleteFileAbsoluteIfExists(test_exe);
+    deleteWindowsLinkSidecarsIfExists(allocator, test_exe);
+
+    var compile_args: std.ArrayList([]const u8) = .empty;
+    defer compile_args.deinit(allocator);
+    try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
+    try runtime_artifacts.appendToArgs(allocator, &compile_args);
+
+    const rebuilt_result = runZigCcLinkWithWindowsRetry(
+        allocator,
+        compile_args.items,
+        work_dir,
+        link_timeout,
+        test_exe,
+    ) catch |err| {
+        log_state.stderr("zig cc link failed while rebuilding runtime cache: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
+    };
+    link_result.deinit(allocator);
+    link_result.* = rebuilt_result;
+    return isZeroExit(link_result.term);
+}
 
 fn prepareRuntimeArtifacts(
     allocator: std.mem.Allocator,

@@ -1692,6 +1692,222 @@ test "parseProgram handles reduced array_constructor_34 nested constructor assig
     try testing.expectEqual(@as(usize, 1), program.units.len);
 }
 
+test "parseProgram handles transfer kind selector followed by print format string" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr) :: m\n" ++
+        "  integer(c_intptr_t) :: a\n" ++
+        "  integer(transfer(transfer(4_c_intptr_t, c_null_ptr),1_c_intptr_t)) :: b\n" ++
+        "  a = transfer(transfer(\"ABCE\", m), 1_c_intptr_t)\n" ++
+        "  print '(z8)', a\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 2), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[1].node == .write);
+}
+
+test "parseProgram handles c_ptr_tests_16 reduced full file shape" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr) :: m\n" ++
+        "  integer(c_intptr_t) :: a\n" ++
+        "  integer(transfer(transfer(4_c_intptr_t, c_null_ptr),1_c_intptr_t)) :: b\n" ++
+        "  a = transfer (transfer(\"ABCE\", m), 1_c_intptr_t)\n" ++
+        "  print '(z8)', a\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "subroutine bug1\n" ++
+        "   use iso_c_binding\n" ++
+        "   implicit none\n" ++
+        "   type(c_ptr) :: m, i\n" ++
+        "   type mytype\n" ++
+        "     integer a, b, c\n" ++
+        "   end type mytype\n" ++
+        "   type(mytype) x\n" ++
+        "   print *, transfer(32512, x)\n" ++
+        "   i = transfer(32512, m)\n" ++
+        "end subroutine bug1\n" ++
+        "\n" ++
+        "function fun()\n" ++
+        "   use iso_c_binding\n" ++
+        "   implicit none\n" ++
+        "   type(c_funptr) fun\n" ++
+        "   fun = transfer(32512_c_intptr_t,fun)\n" ++
+        "end function fun\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+}
+
+test "parseProgram handles c_ptr_tests_16 exact file shape" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "! PR fortran/46974\n" ++
+        "\n" ++
+        "program test\n" ++
+        "  use ISO_C_BINDING\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr) :: m\n" ++
+        "  integer(c_intptr_t) :: a\n" ++
+        "  integer(transfer(transfer(4_c_intptr_t, c_null_ptr),1_c_intptr_t)) :: b\n" ++
+        "  a = transfer (transfer(\"ABCE\", m), 1_c_intptr_t)\n" ++
+        "  print '(z8)', a\n" ++
+        "  if (     int(z'45434241') /= a  &\n" ++
+        "     .and. int(z'41424345') /= a  &\n" ++
+        "     .and. int(z'4142434500000000',kind=8) /= a) &\n" ++
+        "    call i_do_not_exist()\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "! Examples contributed by Steve Kargl and James Van Buskirk\n" ++
+        "\n" ++
+        "subroutine bug1\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   type(c_ptr) :: m, i\n" ++
+        "   type mytype\n" ++
+        "     integer a, b, c\n" ++
+        "   end type mytype\n" ++
+        "   type(mytype) x\n" ++
+        "   print *, transfer(32512, x)\n" ++
+        "   i = transfer(32512, m)\n" ++
+        "end subroutine bug1\n" ++
+        "\n" ++
+        "subroutine bug6\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   interface\n" ++
+        "      function fun()\n" ++
+        "         use ISO_C_BINDING\n" ++
+        "         implicit none\n" ++
+        "         type(C_FUNPTR) fun\n" ++
+        "      end function fun\n" ++
+        "   end interface\n" ++
+        "   type(C_PTR) array(2)\n" ++
+        "   type(C_FUNPTR) result\n" ++
+        "   integer(C_INTPTR_T), parameter :: const(*) = [32512,32520]\n" ++
+        "\n" ++
+        "   result = fun()\n" ++
+        "   array = transfer([integer(C_INTPTR_T)::32512,32520],array)\n" ++
+        "end subroutine bug6\n" ++
+        "\n" ++
+        "function fun()\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   type(C_FUNPTR) fun\n" ++
+        "   fun = transfer(32512_C_INTPTR_T,fun)\n" ++
+        "end function fun\n" ++
+        "\n" ++
+        "! { dg-final { scan-tree-dump-times \"i_do_not_exist\" 0 \"optimized\" } }\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 4), program.units.len);
+    try testing.expect(program.units[0].stmts.len >= 3);
+}
+
+test "parseProgramWithDiagnostics handles c_ptr_tests_16 exact file shape without parser diagnostics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "! PR fortran/46974\n" ++
+        "\n" ++
+        "program test\n" ++
+        "  use ISO_C_BINDING\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr) :: m\n" ++
+        "  integer(c_intptr_t) :: a\n" ++
+        "  integer(transfer(transfer(4_c_intptr_t, c_null_ptr),1_c_intptr_t)) :: b\n" ++
+        "  a = transfer (transfer(\"ABCE\", m), 1_c_intptr_t)\n" ++
+        "  print '(z8)', a\n" ++
+        "  if (     int(z'45434241') /= a  &\n" ++
+        "     .and. int(z'41424345') /= a  &\n" ++
+        "     .and. int(z'4142434500000000',kind=8) /= a) &\n" ++
+        "    call i_do_not_exist()\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "! Examples contributed by Steve Kargl and James Van Buskirk\n" ++
+        "\n" ++
+        "subroutine bug1\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   type(c_ptr) :: m, i\n" ++
+        "   type mytype\n" ++
+        "     integer a, b, c\n" ++
+        "   end type mytype\n" ++
+        "   type(mytype) x\n" ++
+        "   print *, transfer(32512, x)\n" ++
+        "   i = transfer(32512, m)\n" ++
+        "end subroutine bug1\n" ++
+        "\n" ++
+        "subroutine bug6\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   interface\n" ++
+        "      function fun()\n" ++
+        "         use ISO_C_BINDING\n" ++
+        "         implicit none\n" ++
+        "         type(C_FUNPTR) fun\n" ++
+        "      end function fun\n" ++
+        "   end interface\n" ++
+        "   type(C_PTR) array(2)\n" ++
+        "   type(C_FUNPTR) result\n" ++
+        "   integer(C_INTPTR_T), parameter :: const(*) = [32512,32520]\n" ++
+        "\n" ++
+        "   result = fun()\n" ++
+        "   array = transfer([integer(C_INTPTR_T)::32512,32520],array)\n" ++
+        "end subroutine bug6\n" ++
+        "\n" ++
+        "function fun()\n" ++
+        "   use ISO_C_BINDING\n" ++
+        "   implicit none\n" ++
+        "   type(C_FUNPTR) fun\n" ++
+        "   fun = transfer(32512_C_INTPTR_T,fun)\n" ++
+        "end function fun\n" ++
+        "\n" ++
+        "! { dg-final { scan-tree-dump-times \"i_do_not_exist\" 0 \"optimized\" } }\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    const program = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    try testing.expectEqual(@as(usize, 4), program.units.len);
+    try testing.expect(program.units[0].stmts.len >= 3);
+    try testing.expect(!diag_bag.has());
+}
+
 test "parseProgram parses submodule container and inherited module procedure implementation" {
     const testing = std.testing;
     const allocator = testing.allocator;

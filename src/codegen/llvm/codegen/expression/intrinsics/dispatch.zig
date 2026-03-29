@@ -1,11 +1,16 @@
 const std = @import("std");
+const common = @import("../../common.zig");
+const utils = @import("../../utils.zig");
 const casting = @import("../casting.zig");
+const call = @import("../call/mod.zig");
+const dispatch = @import("../dispatch/mod.zig");
 const shared = @import("shared.zig");
 const numeric = @import("numeric.zig");
 const libm = @import("libm.zig");
 const arrays = @import("arrays.zig");
 const Expr = shared.Expr;
 const Context = shared.Context;
+const IRType = shared.IRType;
 const ValueRef = shared.ValueRef;
 const EmitError = shared.EmitError;
 const emitIntrinsicUnaryFloat = shared.emitIntrinsicUnaryFloat;
@@ -166,6 +171,9 @@ const IntrinsicTag = enum {
     allocated,
     associated,
     present,
+    transfer,
+    c_loc,
+    c_funloc,
     csin,
     ccos,
     cexp,
@@ -268,6 +276,9 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "allocated", .allocated },
     .{ "associated", .associated },
     .{ "present", .present },
+    .{ "transfer", .transfer },
+    .{ "c_loc", .c_loc },
+    .{ "c_funloc", .c_funloc },
     .{ "csin", .csin },
     .{ "ccos", .ccos },
     .{ "cexp", .cexp },
@@ -401,11 +412,246 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .allocated => return emitIntrinsicAllocated(args),
         .associated => return emitIntrinsicAllocated(args),
         .present => return emitIntrinsicAllocated(args),
+        .transfer => return emitIntrinsicTransfer(ctx, builder, args),
+        .c_loc => return emitIntrinsicCLoc(ctx, builder, args),
+        .c_funloc => return emitIntrinsicCFunloc(ctx, args),
         .csin => return emitComplexCsin(ctx, builder, args),
         .ccos => return emitComplexCcos(ctx, builder, args),
         .cexp => return emitComplexCexp(ctx, builder, args),
         .clog => return emitComplexClog(ctx, builder, args),
         .csqrt => return emitComplexCsqrt(ctx, builder, args),
     }
+}
+
+fn emitIntrinsicCLoc(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const ptr = try call.emitArgPointer(ctx, builder, args[0]);
+    return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+}
+
+fn emitIntrinsicCFunloc(ctx: *Context, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg = args[0];
+    if (arg.* != .identifier) return error.UnsupportedIntrinsicType;
+    const ptr = try call.procedureDesignatorPointer(ctx, arg.identifier) orelse return error.UnknownSymbol;
+    return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+}
+
+const TransferScalarResultInfo = struct {
+    storage_size: usize,
+    value_ty: ?IRType,
+};
+
+const TransferSourceBytes = struct {
+    ptr: ValueRef,
+    size: ValueRef,
+};
+
+fn emitIntrinsicTransfer(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len < 2 or args.len > 3) return error.InvalidIntrinsicCall;
+    if (args.len == 3) return error.UnsupportedIntrinsicType;
+
+    const result = try transferScalarResultInfo(ctx, args[1]);
+    const dst_ptr = try allocaByteBuffer(ctx, builder, result.storage_size);
+    try zeroByteBuffer(ctx, builder, dst_ptr, try ctx.constI64(@intCast(result.storage_size)));
+
+    const src = try transferSourceBytes(ctx, builder, args[0]);
+    const dst_size = try ctx.constI64(@intCast(result.storage_size));
+    const copy_len = try emitTransferMinI64(ctx, builder, src.size, dst_size);
+    try emitMemcpyBytes(ctx, builder, dst_ptr, src.ptr, copy_len);
+
+    if (result.value_ty == null) {
+        return .{ .name = dst_ptr.name, .ty = .ptr, .is_ptr = false };
+    }
+
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, result.value_ty.?, dst_ptr);
+    return .{ .name = tmp, .ty = result.value_ty.?, .is_ptr = false };
+}
+
+fn transferScalarResultInfo(ctx: *Context, mold: *Expr) EmitError!TransferScalarResultInfo {
+    if (ctx.derivedTypeNameForExpr(mold)) |derived_name| {
+        const layout = ctx.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
+        if (isBuiltinIsoCPointerType(derived_name)) {
+            return .{
+                .storage_size = layout.size,
+                .value_ty = .ptr,
+            };
+        }
+        return .{
+            .storage_size = layout.size,
+            .value_ty = null,
+        };
+    }
+
+    switch (mold.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            if (sym.isCharacter()) return error.UnsupportedIntrinsicType;
+            const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
+            const value_ty = switch (sym.loweredKind()) {
+                .logical => ctx.typeFromKind(sym.loweredKind()),
+                else => if (sym.loweredKind() == .derived) null else ctx.typeFromKind(sym.loweredKind()),
+            };
+            return .{
+                .storage_size = byteSizeForIRType(storage_ty),
+                .value_ty = value_ty,
+            };
+        },
+        .literal => |lit| switch (lit.kind) {
+            .integer => {
+                const ty = integerLiteralIRType(ctx, lit.text);
+                return .{ .storage_size = byteSizeForIRType(ty), .value_ty = ty };
+            },
+            .real => {
+                const ty = casting.exprType(ctx, mold) catch return error.UnsupportedIntrinsicType;
+                return .{ .storage_size = byteSizeForIRType(ty), .value_ty = ty };
+            },
+            .logical => {
+                const storage_ty = ctx.defaultIntegerIRType();
+                return .{ .storage_size = byteSizeForIRType(storage_ty), .value_ty = .i1 };
+            },
+            else => return error.UnsupportedIntrinsicType,
+        },
+        else => {
+            const ty = casting.exprType(ctx, mold) catch return error.UnsupportedIntrinsicType;
+            return .{ .storage_size = byteSizeForIRType(ty), .value_ty = ty };
+        },
+    }
+}
+
+fn transferSourceBytes(ctx: *Context, builder: anytype, expr: *Expr) EmitError!TransferSourceBytes {
+    switch (expr.*) {
+        .literal => |lit| switch (lit.kind) {
+            .string => {
+                const ptr = try casting.emitLiteral(ctx, builder, lit);
+                const len = try ctx.constI64(@intCast(utils.decodedStringLen(lit.text)));
+                return .{ .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true }, .size = len };
+            },
+            .hollerith => {
+                const ptr = try casting.emitLiteral(ctx, builder, lit);
+                const bytes = utils.hollerithBytes(lit.text) orelse return error.UnsupportedIntrinsicType;
+                return .{ .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true }, .size = try ctx.constI64(@intCast(bytes.len)) };
+            },
+            else => {},
+        },
+        else => {},
+    }
+
+    if (ctx.derivedTypeNameForExpr(expr)) |derived_name| {
+        if (!isBuiltinIsoCPointerType(derived_name)) {
+            const layout = ctx.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
+            const value = try callValue(ctx, builder, expr);
+            return .{
+                .ptr = .{ .name = value.name, .ty = .ptr, .is_ptr = true },
+                .size = try ctx.constI64(@intCast(layout.size)),
+            };
+        }
+    }
+
+    const value = try callValue(ctx, builder, expr);
+    const alloc_ty = if (value.ty == .i1) ctx.defaultIntegerIRType() else value.ty;
+    const tmp = try ctx.nextTemp();
+    try builder.alloca(tmp, alloc_ty);
+    const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+    const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
+    try builder.store(stored, ptr);
+    return .{
+        .ptr = ptr,
+        .size = try ctx.constI64(@intCast(byteSizeForIRType(alloc_ty))),
+    };
+}
+
+fn callValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
+    return dispatch.emitExpr(ctx, builder, expr);
+}
+
+fn allocaByteBuffer(ctx: *Context, builder: anytype, size: usize) EmitError!ValueRef {
+    const name = try ctx.nextTemp();
+    if (size <= 1) {
+        try builder.alloca(name, .i8);
+    } else {
+        try builder.allocaArray(name, .i8, size);
+    }
+    return .{ .name = name, .ty = .ptr, .is_ptr = true };
+}
+
+fn zeroByteBuffer(ctx: *Context, builder: anytype, ptr: ValueRef, size: ValueRef) EmitError!void {
+    const memset_name = try ctx.ensureDeclRaw("llvm.memset.p0.i64", .void, &[_]IRType{ .ptr, .i8, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memset_name, &.{ ptr, .{ .name = "0", .ty = .i8, .is_ptr = false }, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+}
+
+fn emitMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) EmitError!void {
+    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]IRType{ .ptr, .ptr, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memcpy_name, &.{ dst_ptr, src_ptr, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+}
+
+fn emitTransferMinI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    const cmp_name = try ctx.nextTemp();
+    try builder.compare(cmp_name, "icmp", "ule", .i64, lhs, rhs);
+    const cmp = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+    const min_name = try ctx.nextTemp();
+    try builder.select(min_name, .i64, cmp, lhs, rhs);
+    return .{ .name = min_name, .ty = .i64, .is_ptr = false };
+}
+
+fn byteSizeForIRType(ty: IRType) usize {
+    return switch (ty) {
+        .i1 => 1,
+        .i8 => 1,
+        .i32 => 4,
+        .i64 => 8,
+        .f32 => 4,
+        .f64 => 8,
+        .v2f32 => 8,
+        .complex_f32 => 8,
+        .complex_f64 => 16,
+        .ptr => @sizeOf(usize),
+        .void => 0,
+    };
+}
+
+fn integerLiteralIRType(ctx: *Context, text: []const u8) IRType {
+    const suffix = literalKindSuffix(text) orelse return ctx.defaultIntegerIRType();
+    if (suffix.len == 0) return ctx.defaultIntegerIRType();
+
+    var all_digits = true;
+    for (suffix) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        const kind_value = std.fmt.parseInt(i64, suffix, 10) catch return ctx.defaultIntegerIRType();
+        return if (kind_value >= 8) .i64 else .i32;
+    }
+    if (containsIgnoreCase(suffix, "intptr") or
+        containsIgnoreCase(suffix, "int64") or
+        containsIgnoreCase(suffix, "size_t"))
+    {
+        return .i64;
+    }
+    return ctx.defaultIntegerIRType();
+}
+
+fn literalKindSuffix(text: []const u8) ?[]const u8 {
+    const idx = std.mem.lastIndexOfScalar(u8, text, '_') orelse return null;
+    if (idx + 1 >= text.len) return null;
+    return text[idx + 1 ..];
+}
+
+fn isBuiltinIsoCPointerType(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "c_ptr") or std.ascii.eqlIgnoreCase(name, "c_funptr");
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (haystack.len < needle.len) return false;
+    var start: usize = 0;
+    while (start + needle.len <= haystack.len) : (start += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[start .. start + needle.len], needle)) return true;
+    }
+    return false;
 }
 

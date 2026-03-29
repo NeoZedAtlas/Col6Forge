@@ -573,6 +573,12 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
             return try validatedArrayActual(actual);
         }
     }
+    if (expr.* == .call_or_subscript and std.ascii.eqlIgnoreCase(expr.call_or_subscript.name, "transfer")) {
+        if (try analyzeIntrinsicTransferActual(ctx, builder, expr.call_or_subscript)) |actual| {
+            return try validatedArrayActual(actual);
+        }
+        return null;
+    }
     if (expr.* == .call_or_subscript and isIntrinsicArrayConversionArg(ctx, expr.call_or_subscript)) {
         if (try analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript)) |actual| {
             return try validatedArrayActual(actual);
@@ -787,6 +793,108 @@ fn analyzeIntrinsicConversionActual(
         .storage = .materialized_temp,
         .contiguous = true,
     });
+}
+
+fn analyzeIntrinsicTransferActual(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) anyerror!?ArrayActualPlan {
+    if (call.args.len < 2 or call.args.len > 3) return null;
+    if (call.args.len == 3) return null;
+
+    const mold_actual = (try analyzeAddressableArrayActual(ctx, builder, call.args[1])) orelse return null;
+    const dst_elem_count = try emitExtentProductI64(ctx, builder, mold_actual.extents);
+    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, mold_actual.elem_ty, dst_elem_count);
+    const dst_bytes = try emitMulI64(ctx, builder, dst_elem_count, i64Const(ctx, @intCast(byteSizeForIRType(mold_actual.elem_ty))));
+
+    const src = try materializeTransferSourceBytes(ctx, builder, call.args[0]);
+    try zeroByteBuffer(ctx, builder, dst_ptr, dst_bytes);
+    try emitMemcpyBytes(ctx, builder, dst_ptr, src.ptr, try emitMinI64(ctx, builder, src.size, dst_bytes));
+
+    return try validatedArrayActual(.{
+        .base_ptr = dst_ptr,
+        .elem_ty = mold_actual.elem_ty,
+        .extents = mold_actual.extents,
+        .multipliers = try emitContiguousMultipliers(ctx, builder, mold_actual.extents),
+        .address_scale = i64Const(ctx, 1),
+        .storage = .materialized_temp,
+        .owned_heap_ptr = dst_ptr,
+        .contiguous = true,
+    });
+}
+
+const TransferSourceBytes = struct {
+    ptr: ValueRef,
+    size: ValueRef,
+};
+
+fn materializeTransferSourceBytes(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+) !TransferSourceBytes {
+    if (try resolveArrayActual(ctx, builder, expr)) |actual| {
+        const elem_count = try emitExtentProductI64(ctx, builder, actual.extents);
+        var total_bytes = try emitMulI64(ctx, builder, elem_count, i64Const(ctx, @intCast(byteSizeForIRType(actual.elem_ty))));
+        if (!valueRefEquals(actual.address_scale, i64Const(ctx, 1))) {
+            total_bytes = try emitMulI64(ctx, builder, total_bytes, actual.address_scale);
+        }
+        return .{ .ptr = actual.base_ptr, .size = total_bytes };
+    }
+
+    switch (expr.*) {
+        .literal => |lit| switch (lit.kind) {
+            .string => {
+                const ptr = try casting.emitLiteral(ctx, builder, lit);
+                return .{
+                    .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
+                    .size = i64Const(ctx, @intCast(utils.decodedStringLen(lit.text))),
+                };
+            },
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return error.UnsupportedIntrinsicType;
+                const ptr = try casting.emitLiteral(ctx, builder, lit);
+                return .{
+                    .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
+                    .size = i64Const(ctx, @intCast(bytes.len)),
+                };
+            },
+            else => {},
+        },
+        else => {},
+    }
+
+    const value = try dispatch.emitExpr(ctx, builder, expr);
+    const alloc_ty = if (value.ty == .i1) ctx.defaultIntegerIRType() else value.ty;
+    const tmp = try ctx.nextTemp();
+    try builder.alloca(tmp, alloc_ty);
+    const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+    const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
+    try builder.store(stored, ptr);
+    return .{
+        .ptr = ptr,
+        .size = i64Const(ctx, @intCast(byteSizeForIRType(alloc_ty))),
+    };
+}
+
+fn zeroByteBuffer(ctx: *Context, builder: anytype, ptr: ValueRef, size: ValueRef) !void {
+    const memset_name = try ctx.ensureDeclRaw("llvm.memset.p0.i64", .void, &[_]IRType{ .ptr, .i8, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memset_name, &.{ ptr, .{ .name = "0", .ty = .i8, .is_ptr = false }, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+}
+
+fn emitMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) !void {
+    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]IRType{ .ptr, .ptr, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memcpy_name, &.{ dst_ptr, src_ptr, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+}
+
+fn emitMinI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+    const cmp_name = try ctx.nextTemp();
+    try builder.compare(cmp_name, "icmp", "ule", .i64, lhs, rhs);
+    const cmp = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+    const min_name = try ctx.nextTemp();
+    try builder.select(min_name, .i64, cmp, lhs, rhs);
+    return .{ .name = min_name, .ty = .i64, .is_ptr = false };
 }
 
 fn emitSymbolDimExtents(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {

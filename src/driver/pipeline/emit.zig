@@ -6,6 +6,7 @@ const semantic = @import("../../semantic/mod.zig");
 const codegen = @import("../../codegen/mod.zig");
 const profile_mod = @import("profile.zig");
 const diagnostics = @import("diagnostics.zig");
+const omp_declare_variant = @import("omp_declare_variant.zig");
 const types = @import("types.zig");
 
 pub fn emitLlvmModule(
@@ -92,6 +93,10 @@ pub fn emitLlvmModule(
         return err;
     };
     if (profile) |p| p.semantic_ns = profile_mod.elapsedNs(semantic_start);
+    omp_declare_variant.validateDeclareVariantCompatibility(arena.allocator(), program, input_path, contents, diag_bag) catch |err| {
+        if (profile) |p| p.markFailure(.semantic);
+        return err;
+    };
     if (parse_had_diagnostics) {
         return error.UnexpectedToken;
     }
@@ -214,6 +219,10 @@ pub fn emitLlvmModuleToWriter(
         return err;
     };
     if (profile) |p| p.semantic_ns = profile_mod.elapsedNs(semantic_start);
+    omp_declare_variant.validateDeclareVariantCompatibility(arena.allocator(), program, input_path, contents, diag_bag) catch |err| {
+        if (profile) |p| p.markFailure(.semantic);
+        return err;
+    };
     if (parse_had_diagnostics) {
         return error.UnexpectedToken;
     }

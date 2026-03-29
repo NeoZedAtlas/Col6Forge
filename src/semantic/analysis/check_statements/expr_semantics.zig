@@ -78,6 +78,23 @@ pub fn checkSpecialExprCallConstraints(
             return emitExprConstraintDiagnostic(self, args[0], "must be a POINTER");
         }
     }
+    if (std.ascii.eqlIgnoreCase(name, "c_associated")) {
+        if (args.len < 2) return;
+        const first_spec = try resolve_expr.exprTypeSpec(self, args[0]);
+        const second_spec = try resolve_expr.exprTypeSpec(self, args[1]);
+        const first_family = isoCBindingHandleFamily(first_spec);
+        const second_family = isoCBindingHandleFamily(second_spec);
+        if (first_family == null or second_family == null or first_family.? == second_family.?) return;
+
+        const expected_name = first_spec.derived_type_name orelse "c_ptr";
+        const actual_name = second_spec.derived_type_name orelse "c_funptr";
+        const message = std.fmt.allocPrint(
+            self.arena,
+            "Argument C_PTR_2 at (1) to C_ASSOCIATED shall have the same type as C_PTR_1, found TYPE({s}) instead of TYPE({s}).",
+            .{ actual_name, expected_name },
+        ) catch "Argument C_PTR_2 to C_ASSOCIATED shall have the same type as C_PTR_1.";
+        return emitExprConstraintDiagnostic(self, args[1], message);
+    }
 }
 
 fn intrinsicRequiresDoublePrecisionArgs(name: []const u8) bool {
@@ -110,6 +127,18 @@ fn intrinsicRequiresDoublePrecisionArgs(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "dsqrt") or
         std.ascii.eqlIgnoreCase(name, "dtan") or
         std.ascii.eqlIgnoreCase(name, "dtanh");
+}
+
+fn isoCBindingHandleFamily(spec: symbols.TypeSpec) ?enum { c_ptr, c_funptr } {
+    if (spec.lowered_kind != .derived) return null;
+    const name = spec.derived_type_name orelse return null;
+    var lower_buf: [128]u8 = undefined;
+    if (name.len > lower_buf.len) return null;
+    for (name, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
+    const lower = lower_buf[0..name.len];
+    if (std.mem.indexOf(u8, lower, "c_funptr") != null) return .c_funptr;
+    if (std.mem.indexOf(u8, lower, "c_ptr") != null) return .c_ptr;
+    return null;
 }
 
 pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: anytype) CheckError!ast.TypeKind {
@@ -214,7 +243,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                     return try resolve_expr.exprType(self, expr);
                 }
                 if (resolve_calls.isCharacterComponentSubstringRef(component, comp)) {
-                    try resolve_calls.validateCharacterComponentSubstringArgs(self, expr, comp.args, .{
+                    try resolve_calls.validateCharacterComponentSubstringArgs(self, expr, component.dims, comp.args, .{
                         .resolvedExprType = resolve_expr.exprType,
                     });
                     return .character;

@@ -355,21 +355,37 @@ pub fn emitMinMaxNInt(ctx: *Context, builder: anytype, args: []*Expr, is_max: bo
 
 pub fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    const int_ty = if (args.len == 2)
+        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        ctx.defaultIntegerIRType();
+    if (emitBozIntLiteral(ctx, args[0], int_ty)) |boz| return boz;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(value.ty)) {
         const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
         value = try complex.coerceToComplex(ctx, builder, value, target);
         value = try complex.extractComplex(ctx, builder, value, 0);
     }
-    const int_ty = if (args.len == 2)
-        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
-    else
-        ctx.defaultIntegerIRType();
     if (value.ty == int_ty) return value;
     if (isIntegerType(value.ty) or isRealType(value.ty)) {
         return casting.coerce(ctx, builder, value, int_ty);
     }
     return error.UnsupportedIntrinsicType;
+}
+
+fn emitBozIntLiteral(ctx: *Context, expr: *Expr, int_ty: IRType) ?ValueRef {
+    const lit = switch (expr.*) {
+        .literal => |literal| literal,
+        else => return null,
+    };
+    if (lit.kind != .string) return null;
+    const decoded = utils.decodeStringLiteral(ctx.allocator, lit.text) catch return null;
+    if (decoded.len == 0) return null;
+    for (decoded) |ch| {
+        if (!std.ascii.isHex(ch)) return null;
+    }
+    const parsed = std.fmt.parseInt(i64, decoded, 16) catch return null;
+    return .{ .name = ctx.intLiteral(parsed) catch return null, .ty = int_ty, .is_ptr = false };
 }
 
 fn integerKindToIRType(kind_value: i64) ?IRType {

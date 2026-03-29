@@ -169,6 +169,33 @@ test "parseDecl handles REAL kind selector in parentheses" {
     }
 }
 
+test "parseDecl handles INTEGER kind selector with nested TRANSFER call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTEGER(TRANSFER(TRANSFER(4_C_INTPTR_T, C_NULL_PTR), 1_C_INTPTR_T)) :: B\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expect(td.kind_selector != null);
+            try testing.expect(td.kind_selector.?.* == .call_or_subscript);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("B", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseDecl keeps REAL*16 as REAL" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -125,6 +125,7 @@ pub fn resultDependsOnArgs(name: []const u8) bool {
     const upper = upper_buf[0..name.len];
     if (std.mem.eql(u8, upper, "ABS")) return true;
     if (std.mem.eql(u8, upper, "REPEAT")) return true;
+    if (std.mem.eql(u8, upper, "TRANSFER")) return true;
     if (IntrinsicSameArgMap.has(upper)) return true;
     if (IntrinsicHomogeneousArgsMap.has(upper)) return true;
     return false;
@@ -161,6 +162,11 @@ pub fn inferResultType(
     if (std.mem.eql(u8, upper, "REPEAT")) {
         if (args.len == 0) return current;
         return repeatReturnType(args[0], current);
+    }
+
+    if (std.mem.eql(u8, upper, "TRANSFER")) {
+        if (args.len < 2) return current;
+        return transferReturnType(args[1], current);
     }
 
     if (IntrinsicSameArgMap.has(upper)) {
@@ -208,6 +214,11 @@ fn sameArgReturnType(arg: symbols.TypeSpec, current: symbols.TypeSpec) symbols.T
 fn repeatReturnType(arg: symbols.TypeSpec, current: symbols.TypeSpec) symbols.TypeSpec {
     if (arg.lowered_kind != .character) return current;
     return symbols.TypeSpec.fromResolvedKind(.character, .character, arg.kind_value).withCharacterLength(.deferred, null);
+}
+
+fn transferReturnType(mold: symbols.TypeSpec, current: symbols.TypeSpec) symbols.TypeSpec {
+    _ = current;
+    return mold;
 }
 
 fn homogeneousArgsReturnType(args: []const symbols.TypeSpec) !symbols.TypeSpec {
@@ -296,4 +307,15 @@ test "inferResultType recognizes ALL and SHAPE intrinsic result kinds" {
 
     const shape_result = try inferResultType("SHAPE", fixedTypeSpec(.real), &.{real_arg});
     try testing.expectEqual(ast.TypeKind.integer, shape_result.lowered_kind);
+}
+
+test "inferResultType uses mold argument type for TRANSFER" {
+    const testing = std.testing;
+
+    const int_arg = symbols.TypeSpec.fromResolvedKind(.integer, .integer, 4);
+    const c_ptr_mold = symbols.TypeSpec.fromResolvedKind(.derived, .derived, null).withDerivedTypeName("c_ptr");
+    const inferred = try inferResultType("TRANSFER", fixedTypeSpec(.integer), &.{ int_arg, c_ptr_mold });
+
+    try testing.expectEqual(ast.TypeKind.derived, inferred.lowered_kind);
+    try testing.expectEqualStrings("c_ptr", inferred.derived_type_name.?);
 }

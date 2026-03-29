@@ -34,6 +34,9 @@ fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
     if (symbols_mod.findSymbolIndex(self, name)) |idx| {
         return self.symbols.items[idx].const_value;
     }
+    if (symbols_mod.lookupHostAssociatedParameter(self, name)) |host_sym| {
+        return host_sym.const_value;
+    }
     if (!maybeBuiltinConstName(name)) return null;
     if (symbols_mod.findBuiltinConstant(self, name)) |builtin| return builtin.value;
     return null;

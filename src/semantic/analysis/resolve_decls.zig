@@ -21,13 +21,36 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector, decl.polymorphic);
     resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
-        try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable, decl.pointer);
+        var effective_type = resolved_type;
+        var effective_item = item;
+        if (decl.type_kind == .character and decl.kind_selector == null) {
+            if (try isoCBindingCharacterKindShorthandType(self, item.char_len)) |shorthand_type| {
+                effective_type = shorthand_type;
+                effective_item.char_len = null;
+            }
+        }
+        try applyDeclarator(self, effective_type, effective_item, .local, true, decl.allocatable, decl.pointer);
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
         if (decl.external) {
             self.symbols.items[idx].is_external = true;
         }
     }
+}
+
+fn isoCBindingCharacterKindShorthandType(
+    self: *context.Context,
+    char_len_expr: ?*ast.Expr,
+) !?symbols.TypeSpec {
+    const expr_node = char_len_expr orelse return null;
+    const name = switch (expr_node.*) {
+        .identifier => |ident| ident,
+        else => return null,
+    };
+    if (!std.ascii.eqlIgnoreCase(name, "c_char")) return null;
+    const builtin = symbols_mod.findBuiltinModuleConstant(self, "iso_c_binding", name) orelse return null;
+    if (builtin.type_spec.lowered_kind != .integer) return null;
+    return symbols.TypeSpec.fromResolvedKind(.character, .character, builtin.value.integer).withCharacterLength(.constant, 1);
 }
 
 pub fn applyProcedureDecl(self: *context.Context, decl: ast.ProcedureDecl) !void {
@@ -384,7 +407,7 @@ fn functionResultMismatchMessage(
         }
     }
     if (declared.lowered_kind != known.lowered_kind) return "Return type mismatch of function";
-    if (declared.kind_value != known.kind_value) return "Return type mismatch of function";
+    if (!compatibleKindValue(declared.kind_value, known.kind_value)) return "Return type mismatch of function";
     if (declared.polymorphic != known.polymorphic) return "Return type mismatch of function";
     if (declared.lowered_kind == .derived) {
         const declared_name = declared.derived_type_name orelse return "Return type mismatch of function";
@@ -392,6 +415,11 @@ fn functionResultMismatchMessage(
         if (!std.ascii.eqlIgnoreCase(declared_name, known_name)) return "Return type mismatch of function";
     }
     return null;
+}
+
+fn compatibleKindValue(a: ?i64, b: ?i64) bool {
+    if (a == null or b == null) return true;
+    return a == b;
 }
 
 fn allowsDeferredCharacterLength(self: *context.Context, sym: symbols.Symbol) bool {
@@ -471,7 +499,17 @@ pub fn resolvedDeclTypeSpec(
             if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
             return error.UnexpectedTypeDecl;
         };
-        if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
+        if (!symbols_mod.hasDerivedType(self, name)) {
+            const current_source = self.current_decl_source orelse ast.DeclSource{};
+            self.setDiagnostic(
+                if (current_source.line == 0) 1 else current_source.line,
+                if (current_source.column == 0) 1 else current_source.column,
+                catalog.semantic.unexpected_type_decl.code,
+                "is being used before it is defined",
+                current_source.text,
+            );
+            return error.UnexpectedTypeDecl;
+        }
         return symbols.TypeSpec.fromDerived(name);
     }
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);

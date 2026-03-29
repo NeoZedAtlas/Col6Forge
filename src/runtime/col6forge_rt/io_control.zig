@@ -1,5 +1,6 @@
 const std = @import("std");
 const io_unit_manager = @import("io_unit_manager.zig");
+const runtime_text = @import("runtime_text.zig");
 const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn remove(pathname: [*:0]const u8) c_int;
@@ -50,9 +51,7 @@ pub export fn col6forge_unit_pos_clear(unit: c_int) callconv(.c) void {
     io_unit_manager.posClear(unit);
 }
 
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const asConstCStr = runtime_text.asConstCStr;
 
 fn cstrSlice(value: [*:0]const u8) []const u8 {
     return std.mem.span(value);

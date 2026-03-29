@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 
 const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
@@ -48,9 +49,7 @@ fn runtimeAllocator() std.mem.Allocator {
     return std.heap.page_allocator;
 }
 
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const asConstCStr = runtime_text.asConstCStr;
 
 fn isFixedUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;

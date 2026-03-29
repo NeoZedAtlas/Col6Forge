@@ -1514,6 +1514,65 @@ fn runCaseParallel(
     _ = progress.completed.fetchAdd(1, .seq_cst);
 }
 
+test "processCase accepts repository c_ptr_tests_16 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(root_path);
+
+    const tests_dir = "tests/gcc-tests/gfortran.dg";
+    const rel_path = "c_ptr_tests_16.f90";
+    const classification = try classifyCase(allocator, allocator, tests_dir, rel_path);
+    const expectations = switch (classification) {
+        .skip => |reason| {
+            std.debug.print("unexpected skip: {s}\n", .{@tagName(reason)});
+            return error.TestUnexpectedResult;
+        },
+        .runnable => |value| value,
+    };
+
+    const input_path = try std.fs.path.join(allocator, &.{ tests_dir, rel_path });
+    defer allocator.free(input_path);
+    const work_name = try makeWorkName(allocator, rel_path);
+    defer allocator.free(work_name);
+
+    const case: TestCase = .{
+        .input_path = input_path,
+        .rel_path = rel_path,
+        .work_name = work_name,
+        .range_check = expectations.range_check,
+        .allow_argument_mismatch = expectations.allow_argument_mismatch,
+        .expect_compile_error = expectations.expect_compile_error,
+        .expect_should_fail = expectations.expect_should_fail,
+        .expected_error_patterns = expectations.expected_error_patterns,
+        .expected_warning_patterns = expectations.expected_warning_patterns,
+        .expected_aux_patterns = expectations.expected_aux_patterns,
+        .expected_output_patterns = expectations.expected_output_patterns,
+        .prune_output_patterns = expectations.prune_output_patterns,
+    };
+
+    var log_state: LogState = .{};
+    const ok = try processCase(
+        allocator,
+        root_path,
+        case,
+        .{
+            .tests_dir = tests_dir,
+            .filter = rel_path,
+            .emit = .llvm,
+            .timeout_ms = 120_000,
+            .jobs = 1,
+            .show_help = false,
+            .verbose = false,
+            .keep_work = false,
+            .strict_level = .off,
+        },
+        &log_state,
+    );
+    try testing.expect(ok);
+}
+
 fn printSummary(
     log_state: *LogState,
     runnable: usize,

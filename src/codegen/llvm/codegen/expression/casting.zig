@@ -20,6 +20,9 @@ const EmitError = anyerror;
 fn intrinsicCallType(ctx: *Context, name: []const u8) ?IRType {
     if (std.ascii.eqlIgnoreCase(name, "size")) return ctx.defaultIntegerIRType();
     if (std.ascii.eqlIgnoreCase(name, "logical")) return .i1;
+    if (std.ascii.eqlIgnoreCase(name, "c_associated")) return .i1;
+    if (std.ascii.eqlIgnoreCase(name, "c_loc")) return .ptr;
+    if (std.ascii.eqlIgnoreCase(name, "c_funloc")) return .ptr;
     return null;
 }
 

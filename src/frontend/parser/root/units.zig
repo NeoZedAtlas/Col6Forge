@@ -1125,7 +1125,7 @@ pub fn importUsedModulePreludes(self: anytype, unit: ProgramUnit) !ProgramUnit {
     for (unit.stmts) |stmt_node| {
         if (stmt_node.node != .use_stmt) continue;
         const use_stmt = stmt_node.node.use_stmt;
-        const prelude = self.module_preludes.get(use_stmt.module_name) orelse continue;
+        const prelude = try root_prelude.lookupPreludeOrBuiltin(self.arena, use_stmt.module_name, &self.module_preludes) orelse continue;
         if (!use_stmt.has_only and use_stmt.only_items.len == 0) {
             if (seen.contains(use_stmt.module_name)) continue;
             imported = try root_prelude.prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);

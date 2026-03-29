@@ -311,6 +311,11 @@ fn selectTypeClauseResolvedSpec(
 }
 
 fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError!void {
+    if (isIsoCBindingModule(use_stmt.module_name)) {
+        try installIsoCBindingImports(self, use_stmt);
+        if (use_stmt.has_only) return;
+    }
+
     if (use_stmt.only_items.len == 0) return;
 
     const may_have_builtin_consts = isIsoFortranEnvModule(use_stmt.module_name);
@@ -324,6 +329,242 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
         }
         try bindKnownUseImport(self, item.local_name, item.remote_name);
     }
+}
+
+fn installIsoCBindingImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError!void {
+    const c_ptr_local = localIsoCBindingName(use_stmt, "c_ptr");
+    const c_funptr_local = localIsoCBindingName(use_stmt, "c_funptr");
+
+    if (use_stmt.has_only) {
+        for (use_stmt.only_items) |item| {
+            if (item.generic_spec) continue;
+            if (unitAlreadyHasImportedUseDecl(self, use_stmt.module_name, item.local_name)) continue;
+            if (try bindIsoCBindingBuiltin(self, item.local_name, item.remote_name, c_ptr_local, c_funptr_local)) continue;
+            try bindKnownUseImport(self, item.local_name, item.remote_name);
+        }
+        return;
+    }
+
+    for (isoCBindingDerivedTypeNames()) |remote_name| {
+        if (isRenamedUseImport(use_stmt, remote_name)) continue;
+        if (unitAlreadyHasImportedUseDecl(self, use_stmt.module_name, remote_name)) continue;
+        _ = try bindIsoCBindingBuiltin(self, remote_name, remote_name, c_ptr_local, c_funptr_local);
+    }
+    for (isoCBindingConstantNames()) |remote_name| {
+        if (isRenamedUseImport(use_stmt, remote_name)) continue;
+        if (unitAlreadyHasImportedUseDecl(self, use_stmt.module_name, remote_name)) continue;
+        _ = try bindIsoCBindingBuiltin(self, remote_name, remote_name, c_ptr_local, c_funptr_local);
+    }
+    for (use_stmt.only_items) |item| {
+        if (item.generic_spec) continue;
+        if (unitAlreadyHasImportedUseDecl(self, use_stmt.module_name, item.local_name)) continue;
+        if (try bindIsoCBindingBuiltin(self, item.local_name, item.remote_name, c_ptr_local, c_funptr_local)) continue;
+        try bindKnownUseImport(self, item.local_name, item.remote_name);
+    }
+}
+
+fn bindIsoCBindingBuiltin(
+    self: *context.Context,
+    local_name: []const u8,
+    remote_name: []const u8,
+    c_ptr_local: []const u8,
+    c_funptr_local: []const u8,
+) ResolveError!bool {
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_ptr")) {
+        try bindIsoCBindingDerivedType(self, local_name);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_funptr")) {
+        try bindIsoCBindingDerivedType(self, local_name);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_null_ptr")) {
+        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_ptr_local), null);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_null_funptr")) {
+        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_funptr_local), null);
+        return true;
+    }
+    if (isoCBindingBuiltinConstant(remote_name, c_ptr_local, c_funptr_local)) |builtin| {
+        try bindBuiltinUseImport(self, local_name, builtin);
+        return true;
+    }
+    return false;
+}
+
+fn bindIsoCBindingDerivedType(self: *context.Context, local_name: []const u8) ResolveError!void {
+    try symbols_mod.registerDerivedType(self, .{
+        .name = local_name,
+        .bind_c = true,
+    });
+}
+
+fn bindIsoCBindingNamedConstant(
+    self: *context.Context,
+    local_name: []const u8,
+    type_spec: symbols.TypeSpec,
+    const_value: ?symbols.ConstValue,
+) ResolveError!void {
+    const idx = try symbols_mod.ensureSymbol(self, local_name);
+    const sym = &self.symbols.items[idx];
+    sym.name = local_name;
+    sym.applyTypeSpec(type_spec);
+    sym.dims = &.{};
+    sym.kind = .parameter;
+    sym.storage = .local;
+    sym.const_value = const_value;
+    sym.type_explicit = true;
+}
+
+fn isoCBindingBuiltinConstant(
+    remote_name: []const u8,
+    _: []const u8,
+    _: []const u8,
+) ?context.Context.BuiltinConstant {
+    const integer_spec = symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    const c_char_spec = symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    const c_null_char_spec = symbols.TypeSpec.fromResolvedKind(.character, .character, 1).withCharacterLength(.constant, 1);
+
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_int")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 4 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_short")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 2 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_long")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_long_long")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_int8_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 1 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_int16_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 2 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_int32_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 4 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_int64_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_intmax_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_intptr_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_size_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_ptrdiff_t")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_signed_char")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 1 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_char")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = c_char_spec, .value = .{ .integer = 1 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_bool")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 1 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_float")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 4 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_double")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_long_double")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 16 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_float_complex")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 4 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_double_complex")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 8 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_long_double_complex")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = integer_spec, .value = .{ .integer = 16 } };
+    }
+    if (std.ascii.eqlIgnoreCase(remote_name, "c_null_char")) {
+        return .{ .module_name = "iso_c_binding", .type_spec = c_null_char_spec, .value = .{ .string = "\x00" } };
+    }
+    return null;
+}
+
+fn localIsoCBindingName(use_stmt: ast.UseStmt, remote_name: []const u8) []const u8 {
+    for (use_stmt.only_items) |item| {
+        if (item.generic_spec) continue;
+        if (std.ascii.eqlIgnoreCase(item.remote_name, remote_name)) return item.local_name;
+    }
+    return remote_name;
+}
+
+fn isRenamedUseImport(use_stmt: ast.UseStmt, remote_name: []const u8) bool {
+    for (use_stmt.only_items) |item| {
+        if (item.generic_spec) continue;
+        if (!std.ascii.eqlIgnoreCase(item.remote_name, remote_name)) continue;
+        return !std.ascii.eqlIgnoreCase(item.local_name, remote_name);
+    }
+    return false;
+}
+
+fn isoCBindingDerivedTypeNames() []const []const u8 {
+    return &.{ "c_ptr", "c_funptr" };
+}
+
+fn isoCBindingConstantNames() []const []const u8 {
+    return &.{
+        "c_int",
+        "c_short",
+        "c_long",
+        "c_long_long",
+        "c_int8_t",
+        "c_int16_t",
+        "c_int32_t",
+        "c_int64_t",
+        "c_intmax_t",
+        "c_intptr_t",
+        "c_size_t",
+        "c_ptrdiff_t",
+        "c_signed_char",
+        "c_char",
+        "c_bool",
+        "c_float",
+        "c_double",
+        "c_long_double",
+        "c_float_complex",
+        "c_double_complex",
+        "c_long_double_complex",
+        "c_null_char",
+        "c_null_ptr",
+        "c_null_funptr",
+    };
+}
+
+fn unitAlreadyHasImportedUseDecl(self: *context.Context, module_name: []const u8, local_name: []const u8) bool {
+    for (self.unit.decls, 0..) |decl_node, idx| {
+        const decl_source = if (idx < self.unit.decl_sources.len) self.unit.decl_sources[idx] else ast.DeclSource{};
+        const owner_name = decl_source.owner_name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(owner_name, module_name)) continue;
+        const exported_name = declExportedName(decl_node) orelse continue;
+        if (std.ascii.eqlIgnoreCase(exported_name, local_name)) return true;
+    }
+    return false;
+}
+
+fn declExportedName(decl_node: ast.Decl) ?[]const u8 {
+    return switch (decl_node) {
+        .derived_type_def => |derived| derived.name,
+        .interface_block => |interface_block| interface_block.name,
+        .type_decl => |type_decl| if (type_decl.items.len == 1) type_decl.items[0].name else null,
+        .procedure => |procedure_decl| if (procedure_decl.items.len == 1) procedure_decl.items[0].name else null,
+        .parameter => |parameter_decl| if (parameter_decl.assigns.len == 1) parameter_decl.assigns[0].name else null,
+        else => null,
+    };
 }
 
 fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_name: []const u8) ResolveError!void {
@@ -378,6 +619,14 @@ fn bindBuiltinUseImport(
 
 fn isIsoFortranEnvModule(module_name: []const u8) bool {
     const target = "iso_fortran_env";
+    if (module_name.len != target.len) return false;
+    var buf: [32]u8 = undefined;
+    for (module_name, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
+    return std.mem.eql(u8, buf[0..module_name.len], target);
+}
+
+fn isIsoCBindingModule(module_name: []const u8) bool {
+    const target = "iso_c_binding";
     if (module_name.len != target.len) return false;
     var buf: [32]u8 = undefined;
     for (module_name, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);

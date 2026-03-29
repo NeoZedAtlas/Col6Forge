@@ -160,11 +160,8 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
 pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
     const component = try lookupComponentLayout(ctx, comp);
     if (isCharacterSubstringComponentRef(component, comp)) {
-        const base_ptr = if (component.allocatable or component.pointer)
-            try emitLoadedComponentDataPtr(ctx, builder, comp)
-        else
-            try emitComponentStoragePtr(ctx, builder, comp);
-        const range = comp.args[0].dim_range;
+        const base_ptr = try emitCharacterComponentElementPtr(ctx, builder, comp, component);
+        const range = comp.args[comp.args.len - 1].dim_range;
         const start_val = if (range.lower) |lower|
             try emitIndex(ctx, builder, lower)
         else
@@ -208,10 +205,50 @@ pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr
 fn isCharacterSubstringComponentRef(component: context.DerivedComponentLayout, comp: ast.ComponentExpr) bool {
     if (component.procedure) return false;
     if (component.type_spec.lowered_kind != .character) return false;
-    if (component.dims.len != 0) return false;
     if (!comp.has_parens) return false;
-    if (comp.args.len != 1) return false;
-    return comp.args[0].* == .dim_range;
+    if (comp.args.len != component.dims.len + 1) return false;
+    return comp.args[comp.args.len - 1].* == .dim_range;
+}
+
+fn emitCharacterComponentElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) anyerror!ValueRef {
+    const data_args = if (isCharacterSubstringComponentRef(component, comp))
+        comp.args[0..component.dims.len]
+    else
+        comp.args;
+
+    if (component.allocatable) {
+        if (data_args.len != 0 and data_args.len != component.dims.len) return error.InvalidSubscript;
+        const data_ptr = try emitLoadedComponentDataPtr(ctx, builder, comp);
+        if (data_args.len == 0) return data_ptr;
+        var offset = try emitDynamicComponentOffset(ctx, builder, comp, component);
+        if (component.elem_size != 1) {
+            offset = try binary.emitMul(ctx, builder, offset, i64Const(ctx, @intCast(component.elem_size)));
+        }
+        const gep_name = try ctx.nextTemp();
+        try builder.gep(gep_name, .i8, data_ptr, offset);
+        return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+    }
+
+    const base_ptr = try emitComponentStoragePtr(ctx, builder, comp);
+    if (component.dims.len == 0) {
+        if (data_args.len != 0) return error.InvalidSubscript;
+        return base_ptr;
+    }
+    if (data_args.len == 0) return base_ptr;
+    if (data_args.len != component.dims.len) return error.InvalidSubscript;
+
+    var offset = try emitComponentOffset(ctx, builder, component.dims, data_args);
+    if (component.elem_size != 1) {
+        offset = try binary.emitMul(ctx, builder, offset, i64Const(ctx, @intCast(component.elem_size)));
+    }
+    const gep_name = try ctx.nextTemp();
+    try builder.gep(gep_name, .i8, base_ptr, offset);
+    return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
 }
 
 pub fn emitProjectedComponentArrayView(

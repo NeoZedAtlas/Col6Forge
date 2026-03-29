@@ -33,6 +33,7 @@ const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
 const expandIoArgs = expansion.expandIoArgs;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
 const impliedStrideForDim = implied_helpers.impliedStrideForDims;
+const impliedStrideForSymbolDim = implied_helpers.impliedStrideForSymbolDim;
 const max_packed_array_elems: usize = 4096;
 
 const UnformattedArgs = struct {
@@ -363,7 +364,7 @@ fn emitDynamicImpliedDoTransfer(
         .kind = kind_info.kind,
         .elem_len = kind_info.elem_len,
         .count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step),
-        .stride = try impliedStrideForSymbolDim(ctx, builder, sym, loop_dim),
+        .stride = try impliedStrideForSymbolDim(ctx, builder, sym, loop_dim, null),
         .base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start),
     };
 }
@@ -397,21 +398,12 @@ fn emitRangeSectionTransfer(
     };
     defer if (range.lower == null) ctx.allocator.destroy(start_expr);
 
-    var stride = try impliedStrideForSymbolDim(ctx, builder, sym, dim);
-    if (range.stride) |stride_expr| {
-        var step = try expr.emitExpr(ctx, builder, stride_expr);
-        if (step.ty != .i32) step = try coerceRuntimeI32(ctx, builder, step);
-        const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, stride, step);
-        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-    }
-
     const kind_info = blockTransferKindForSymbol(ctx, sym) orelse return null;
     return .{
         .kind = kind_info.kind,
         .elem_len = kind_info.elem_len,
         .count = try emitImpliedFinalCount(ctx, builder, start_expr, range.upper, range.stride),
-        .stride = stride,
+        .stride = try impliedStrideForSymbolDim(ctx, builder, sym, dim, range.stride),
         .base_ptr = try emitImpliedBasePtr(ctx, builder, call, dim, start_expr),
     };
 }
@@ -565,12 +557,6 @@ fn emitUnformattedReadStream(ctx: *Context, builder: anytype, state: ValueRef, a
         }
     }
     try emitUnformattedReadTypedSlice(ctx, builder, state, args[chunk_start..]);
-}
-
-fn impliedStrideForSymbolDim(ctx: *Context, builder: anytype, sym: anytype, loop_dim: usize) EmitError!ValueRef {
-    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
-    if (stride.ty != .i32) stride = try coerceRuntimeI32(ctx, builder, stride);
-    return stride;
 }
 
 fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {

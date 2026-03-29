@@ -1,4 +1,8 @@
 const std = @import("std");
+const runtime_args = @import("../runtime_args.zig");
+const runtime_memory = @import("../runtime_memory.zig");
+const runtime_stride = @import("../runtime_stride.zig");
+const runtime_text = @import("../runtime_text.zig");
 pub const COL6FORGE_LIST_TOKEN_MAX = 4096;
 
 pub const FILE = opaque {};
@@ -25,74 +29,23 @@ fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
 
-fn asCStr(buf: anytype) [*:0]u8 {
-    return @ptrCast(buf);
-}
+const asCStr = runtime_text.asCStr;
+pub const asConstCStr = runtime_text.asConstCStr;
+pub const cstrlenRaw = runtime_text.cstrlenRaw;
 
-pub fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+pub const runtimeArgCount = runtime_args.runtimeArgCount;
+pub const runtimeArgPtrAt = runtime_args.runtimeArgPtrAt;
+pub const runtimeArgKindAt = runtime_args.runtimeArgKindAt;
+pub const runtimeArgLenAt = runtime_args.runtimeArgLenAt;
 
-pub fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
+pub const checkedMul = runtime_memory.checkedMul;
+pub const checkedMulI64 = runtime_memory.checkedMulI64;
+pub const checkedAdd = runtime_memory.checkedAdd;
 
-pub fn runtimeArgCount(arg_count: c_int) usize {
-    return @intCast(@max(arg_count, 0));
-}
+pub const offsetIndex = runtime_stride.offsetIndex;
+pub const complexOffsetIndex = runtime_stride.complexOffsetIndex;
 
-pub fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
-    if (idx >= total or arg_ptrs == null) return null;
-    return arg_ptrs.?[idx];
-}
-
-pub fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
-    if (idx >= total or arg_kinds == null) return 0;
-    return arg_kinds.?[idx];
-}
-
-pub fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
-    if (idx >= total or arg_lens == null) return 0;
-    return arg_lens.?[idx];
-}
-
-pub fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-pub fn checkedMulI64(lhs: i64, rhs: i64) ?i64 {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-pub fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    const out = @addWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-pub fn offsetIndex(i: c_int, stride: c_int) ?usize {
-    const iu: usize = @intCast(i);
-    const su: usize = @intCast(stride);
-    return checkedMul(iu, su);
-}
-
-pub fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
-    const idx = offsetIndex(i, stride) orelse return null;
-    return checkedMul(idx, 2);
-}
-
-pub fn offsetBytes(ptr: [*]u8, delta: i64) ?[*]u8 {
-    const base_addr: i128 = @intCast(@intFromPtr(ptr));
-    const out_addr = base_addr + delta;
-    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
-    return @ptrFromInt(@as(usize, @intCast(out_addr)));
-}
+pub const offsetBytes = runtime_memory.offsetBytes;
 
 pub const ReadTokenResult = enum {
     ok,

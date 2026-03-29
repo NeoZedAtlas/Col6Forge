@@ -508,3 +508,85 @@ test "analyzeProgram rejects function result character length mismatch" {
     defer diag_bag.release(got);
     try testing.expectEqualStrings("Character length mismatch in function result", got.message);
 }
+
+test "analyzeProgram accepts explicit default kind matching bind(c) result kind" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test_bindc_result\n" ++
+        "  use iso_c_binding\n" ++
+        "  interface\n" ++
+        "    function fun() bind(C)\n" ++
+        "      use iso_c_binding\n" ++
+        "      implicit none\n" ++
+        "      real(C_FLOAT) fun\n" ++
+        "    end function fun\n" ++
+        "  end interface\n" ++
+        "end program test_bindc_result\n" ++
+        "\n" ++
+        "function fun() bind(C)\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  real(C_FLOAT) fun\n" ++
+        "  fun = 1.0\n" ++
+        "end function fun\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena.allocator(), program, &.{}, &.{}, .{}, &diag_bag);
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "analyzeProgram accepts module procedure call with named kind parameter alias in dummy declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module fgsl\n" ++
+        "  use, intrinsic :: iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: fgsl_double = c_double\n" ++
+        "  type :: fgsl_vector\n" ++
+        "    type(c_ptr) :: gsl_vector = c_null_ptr\n" ++
+        "  end type fgsl_vector\n" ++
+        "contains\n" ++
+        "  function fgsl_vector_align(p_x, f_x)\n" ++
+        "    real(fgsl_double), pointer :: p_x(:)\n" ++
+        "    type(fgsl_vector) :: f_x\n" ++
+        "    integer :: fgsl_vector_align\n" ++
+        "    fgsl_vector_align = 4\n" ++
+        "  end function fgsl_vector_align\n" ++
+        "end module fgsl\n" ++
+        "module tmod\n" ++
+        "  use fgsl\n" ++
+        "contains\n" ++
+        "  subroutine expb_df()\n" ++
+        "    type(fgsl_vector) :: f_x\n" ++
+        "    real(fgsl_double), pointer :: p_x(:)\n" ++
+        "    integer :: status\n" ++
+        "    status = fgsl_vector_align(p_x, f_x)\n" ++
+        "  end subroutine expb_df\n" ++
+        "end module tmod\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena.allocator(), program, &.{}, &.{}, .{}, &diag_bag);
+    try testing.expect(diag_bag.take() == null);
+}

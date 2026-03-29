@@ -12,6 +12,12 @@ const interfaces = @import("interfaces.zig");
 const procedure_inference = @import("procedure_inference.zig");
 const types = @import("types.zig");
 
+const builtin_known_fn_types = [_]types.KnownFunctionType{
+    .{ .name = "c_loc", .type_spec = symbols.TypeSpec.fromDerived("c_ptr") },
+    .{ .name = "c_funloc", .type_spec = symbols.TypeSpec.fromDerived("c_funptr") },
+    .{ .name = "c_associated", .type_spec = symbols.TypeSpec.fromResolvedKind(.logical, .logical, null) },
+};
+
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !types.SemanticProgram {
     return analyzeProgramWithOptions(arena, program, .{});
 }
@@ -156,6 +162,10 @@ fn seedKnownProcedures(
     known_function_type_specs: *std.StringHashMap(symbols.TypeSpec),
     known_procedure_sigs: *std.StringHashMap(context.Context.ProcedureSig),
 ) !void {
+    for (builtin_known_fn_types) |known| {
+        const key = try symbol_lookup.lowerDup(arena, known.name);
+        try known_function_type_specs.put(key, known.resolvedSpec());
+    }
     for (known_fn_types) |known| {
         const key = try symbol_lookup.lowerDup(arena, known.name);
         try known_function_type_specs.put(key, known.resolvedSpec());

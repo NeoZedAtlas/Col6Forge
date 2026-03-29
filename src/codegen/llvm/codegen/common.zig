@@ -165,6 +165,25 @@ pub fn symbolStorageIRType(sym: input.sema.Symbol, target_layout: input.sema.Tar
         llvm_types.typeFromKindWithLayout(sym.loweredKind(), target_layout);
 }
 
+pub fn isIsoCNullPointerNamedConstant(sym: input.sema.Symbol, name: []const u8) bool {
+    if (sym.loweredKind() != .derived) return false;
+    const derived_name = sym.type_spec.derived_type_name orelse return false;
+    return (isIsoCNullPointerName(name) and std.ascii.eqlIgnoreCase(derived_name, "c_ptr")) or
+        (isIsoCNullFunPointerName(name) and std.ascii.eqlIgnoreCase(derived_name, "c_funptr"));
+}
+
+pub fn isIsoCNullPointerName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "c_null_ptr");
+}
+
+pub fn isIsoCNullFunPointerName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "c_null_funptr");
+}
+
+pub fn isIsoCNullCharName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "c_null_char");
+}
+
 fn sizeAlign(ty: ir.IRType) !SizeAlign {
     return switch (ty) {
         .i1 => .{ .size = 1, .alignment = 1 },

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const context = @import("../../context.zig");
+const evaluator = @import("../../evaluator.zig");
 const symbols = @import("../../symbol/mod.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
 
@@ -320,7 +321,7 @@ fn lookupKnownProcedureSigCaseInsensitive(
 pub fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.InterfaceProcedure) ?symbols.TypeSpec {
     if (proc_header.kind != .function) return null;
     if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
-    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
+    if (proc_header.type_spec) |type_spec| return procedureTypeSpecWithDecls(proc_header.decls, type_spec);
     return implicitTypeSpecForName(unit, proc_header.name);
 }
 
@@ -417,19 +418,20 @@ fn findInterfaceProcedureDeclaredResultTypeSpec(
     proc_header: ast.InterfaceProcedure,
 ) ?symbols.TypeSpec {
     const result_name = proc_header.result_name orelse proc_header.name;
-    for (proc_header.decls) |decl| {
+    const active_decls = if (proc_header.decls.len != 0) proc_header.decls else unit.decls;
+    for (active_decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
-                    return applyDummyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
+                    return applyDummyDeclaratorCharLen(typeDeclTypeSpecWithDecls(active_decls, type_decl), item);
                 }
             },
             .procedure => |procedure_decl| {
                 for (procedure_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
                     return switch (procedure_decl.interface) {
-                        .type_spec => |proc_type| applyDummyDeclaratorCharLen(procedureTypeSpec(proc_type), item),
+                        .type_spec => |proc_type| applyDummyDeclaratorCharLen(procedureTypeSpecWithDecls(active_decls, proc_type), item),
                         else => applyDummyDeclaratorCharLen(implicitTypeSpecForName(unit, result_name), item),
                     };
                 }
@@ -669,7 +671,7 @@ fn inferDummyArgTypeSpec(
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return applyDummyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
+                    return applyDummyDeclaratorCharLen(typeDeclTypeSpecWithDecls(decls, type_decl), item);
                 }
             },
             .procedure => |procedure_decl| {
@@ -678,7 +680,7 @@ fn inferDummyArgTypeSpec(
                     switch (procedure_decl.interface) {
                         .type_spec => |proc_type| {
                             return applyDummyDeclaratorCharLen(
-                                procedureTypeSpec(proc_type),
+                                procedureTypeSpecWithDecls(decls, proc_type),
                                 item,
                             );
                         },
@@ -703,9 +705,13 @@ fn inferDummyArgTypeSpec(
         applyDummyCharLen(implicitTypeSpecForName(unit, name), null);
 }
 
-fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
+fn typeDeclTypeSpecWithDecls(decls: []const ast.Decl, type_decl: ast.TypeDecl) symbols.TypeSpec {
     if (type_decl.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
+        return type_kind_selector.resolveSpecWithConst(
+            type_decl.type_kind,
+            type_decl.kind_selector,
+            resolveKindSelectorConstValue(decls, type_decl.kind_selector),
+        )
             .withPolymorphic(type_decl.polymorphic);
     }
     const base = if (type_decl.derived_type_name) |derived_name|
@@ -715,9 +721,17 @@ fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
     return base.withPolymorphic(type_decl.polymorphic);
 }
 
-pub fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
+fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
+    return typeDeclTypeSpecWithDecls(&.{}, type_decl);
+}
+
+pub fn procedureTypeSpecWithDecls(decls: []const ast.Decl, proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
     if (proc_type.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
+        return type_kind_selector.resolveSpecWithConst(
+            proc_type.type_kind,
+            proc_type.kind_selector,
+            resolveKindSelectorConstValue(decls, proc_type.kind_selector),
+        )
             .withPolymorphic(proc_type.polymorphic);
     }
     const base = if (proc_type.derived_type_name) |derived_name|
@@ -725,6 +739,98 @@ pub fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
     else
         symbols.TypeSpec.fromKind(.derived);
     return base.withPolymorphic(proc_type.polymorphic);
+}
+
+pub fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
+    return procedureTypeSpecWithDecls(&.{}, proc_type);
+}
+
+const ParameterResolverCtx = struct {
+    decls: []const ast.Decl,
+    stack: std.array_list.Managed([]const u8),
+};
+
+fn resolveKindSelectorConstValue(decls: []const ast.Decl, selector: ?*ast.Expr) ?symbols.ConstValue {
+    const selector_node = selector orelse return null;
+    const allocator = std.heap.page_allocator;
+    var stack = std.array_list.Managed([]const u8).init(allocator);
+    defer stack.deinit();
+    var ctx: ParameterResolverCtx = .{
+        .decls = decls,
+        .stack = stack,
+    };
+    const resolver = evaluator.ConstResolver{
+        .ctx = @ptrCast(&ctx),
+        .resolveFn = resolveParameterConstValue,
+    };
+    return evaluator.evalConst(selector_node, resolver) catch null;
+}
+
+fn resolveParameterConstValue(raw_ctx: *anyopaque, name: []const u8) ?symbols.ConstValue {
+    const ctx: *ParameterResolverCtx = @ptrCast(@alignCast(raw_ctx));
+    if (builtinKindConstantValue(name)) |value| return value;
+    for (ctx.stack.items) |active_name| {
+        if (std.ascii.eqlIgnoreCase(active_name, name)) return null;
+    }
+    ctx.stack.append(name) catch return null;
+    defer _ = ctx.stack.pop();
+    return lookupParameterConstValue(ctx, name);
+}
+
+fn lookupParameterConstValue(ctx: *ParameterResolverCtx, name: []const u8) ?symbols.ConstValue {
+    for (ctx.decls) |decl| {
+        switch (decl) {
+            .parameter => |parameter_decl| {
+                for (parameter_decl.assigns) |assign| {
+                    if (!std.ascii.eqlIgnoreCase(assign.name, name)) continue;
+                    const resolver = evaluator.ConstResolver{
+                        .ctx = @ptrCast(ctx),
+                        .resolveFn = resolveParameterConstValue,
+                    };
+                    return evaluator.evalConst(assign.value, resolver) catch null;
+                }
+            },
+            .type_decl => |type_decl| {
+                if (!type_decl.parameter) continue;
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
+                    const init = item.init orelse return null;
+                    const resolver = evaluator.ConstResolver{
+                        .ctx = @ptrCast(ctx),
+                        .resolveFn = resolveParameterConstValue,
+                    };
+                    return evaluator.evalConst(init, resolver) catch null;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn builtinKindConstantValue(name: []const u8) ?symbols.ConstValue {
+    if (std.ascii.eqlIgnoreCase(name, "c_int")) return .{ .integer = 4 };
+    if (std.ascii.eqlIgnoreCase(name, "c_short")) return .{ .integer = 2 };
+    if (std.ascii.eqlIgnoreCase(name, "c_long")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_long_long")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_int8_t")) return .{ .integer = 1 };
+    if (std.ascii.eqlIgnoreCase(name, "c_int16_t")) return .{ .integer = 2 };
+    if (std.ascii.eqlIgnoreCase(name, "c_int32_t")) return .{ .integer = 4 };
+    if (std.ascii.eqlIgnoreCase(name, "c_int64_t")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_intmax_t")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_intptr_t")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_size_t")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_ptrdiff_t")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_signed_char")) return .{ .integer = 1 };
+    if (std.ascii.eqlIgnoreCase(name, "c_char")) return .{ .integer = 1 };
+    if (std.ascii.eqlIgnoreCase(name, "c_bool")) return .{ .integer = 1 };
+    if (std.ascii.eqlIgnoreCase(name, "c_float")) return .{ .integer = 4 };
+    if (std.ascii.eqlIgnoreCase(name, "c_double")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_long_double")) return .{ .integer = 16 };
+    if (std.ascii.eqlIgnoreCase(name, "c_float_complex")) return .{ .integer = 4 };
+    if (std.ascii.eqlIgnoreCase(name, "c_double_complex")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "c_long_double_complex")) return .{ .integer = 16 };
+    return null;
 }
 
 fn implicitTypeSpecForName(unit: ast.ProgramUnit, name: []const u8) symbols.TypeSpec {

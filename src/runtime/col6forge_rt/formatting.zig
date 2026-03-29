@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 
@@ -11,11 +12,7 @@ const FmtThreadState = struct {
 };
 threadlocal var fmt_thread_state: FmtThreadState = .{};
 
-fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlenRaw = runtime_text.cstrlenRaw;
 
 fn nextFmtBuffer() *[COL6FORGE_FMT_BUFFER_LEN]u8 {
     const idx = fmt_thread_state.next_slot;
@@ -29,9 +26,7 @@ pub export fn col6forge_fmt_release_all() callconv(.c) void {
     fmt_thread_state.next_slot = 0;
 }
 
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const asConstCStr = runtime_text.asConstCStr;
 
 fn findByte(buf: []const u8, ch: u8) ?usize {
     var i: usize = 0;

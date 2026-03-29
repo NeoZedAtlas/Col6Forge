@@ -534,6 +534,7 @@ pub fn checkExplicitInterfaceRequirementForCallArgs(
     args: []const ast.CallArg,
     symbol_idx: ?usize,
 ) CheckError!void {
+    if (leaf_helpers.lookupIntrinsicArity(self, name) != null) return;
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
     if (procedure_interfaces.calleeRequiresExplicitInterface(self, name)) {
         return error.ExplicitInterfaceRequired;
@@ -576,6 +577,7 @@ pub fn checkExplicitInterfaceRequirementForExprArgs(
     args: []*ast.Expr,
     symbol_idx: ?usize,
 ) CheckError!void {
+    if (leaf_helpers.lookupIntrinsicArity(self, name) != null) return;
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
     if (procedure_interfaces.calleeRequiresExplicitInterface(self, name)) {
         return error.ExplicitInterfaceRequired;
@@ -595,6 +597,148 @@ pub fn checkExplicitInterfaceRequirementForExprArgs(
             return error.ExplicitInterfaceRequired;
         }
     }
+}
+
+pub fn checkIntrinsicCallConstraintsForCallArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []const ast.CallArg,
+) CheckError!void {
+    if (std.ascii.eqlIgnoreCase(name, "c_f_pointer")) {
+        try checkCFPointerCallConstraints(self, args);
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "c_f_procpointer")) {
+        try checkCFProcPointerCallConstraints(self, args);
+    }
+}
+
+const CFPointerActuals = struct {
+    cptr: ?*ast.Expr = null,
+    fptr: ?*ast.Expr = null,
+    shape: ?*ast.Expr = null,
+};
+
+fn collectCFPointerActuals(args: []const ast.CallArg) CFPointerActuals {
+    var actuals: CFPointerActuals = .{};
+    var positional_idx: usize = 0;
+    for (args) |arg| {
+        switch (arg) {
+            .alt_return => {},
+            .expr => |actual| {
+                if (actual.keyword) |keyword| {
+                    if (std.ascii.eqlIgnoreCase(keyword, "cptr")) {
+                        actuals.cptr = actual.value;
+                    } else if (std.ascii.eqlIgnoreCase(keyword, "fptr")) {
+                        actuals.fptr = actual.value;
+                    } else if (std.ascii.eqlIgnoreCase(keyword, "shape")) {
+                        actuals.shape = actual.value;
+                    }
+                    continue;
+                }
+                switch (positional_idx) {
+                    0 => actuals.cptr = actual.value,
+                    1 => actuals.fptr = actual.value,
+                    2 => actuals.shape = actual.value,
+                    else => {},
+                }
+                positional_idx += 1;
+            },
+        }
+    }
+    return actuals;
+}
+
+fn checkCFPointerCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    const actuals = collectCFPointerActuals(args);
+    if (actuals.cptr) |cptr| {
+        const spec = try resolve_expr.exprTypeSpec(self, cptr);
+        if (!isIsoCBindingDerivedType(self, spec, "c_ptr")) {
+            return emitIntrinsicArgDiagnostic(self, cptr, "Argument CPTR at (1) to C_F_POINTER shall have the type TYPE(C_PTR).");
+        }
+    }
+    const fptr = actuals.fptr orelse return;
+    if (!exprHasPointerAttribute(self, fptr)) {
+        return emitIntrinsicArgDiagnostic(self, fptr, "Argument FPTR at (2) to C_F_POINTER must be a pointer");
+    }
+    const fptr_spec = try resolve_expr.exprTypeSpec(self, fptr);
+    if (fptr_spec.polymorphic) {
+        return emitIntrinsicArgDiagnostic(self, fptr, "Argument FPTR at (2) to C_F_POINTER shall not be polymorphic");
+    }
+    const shape = actuals.shape orelse return;
+    if (resolve_expr.exprRank(self, fptr) != 0) return;
+
+    return emitIntrinsicArgDiagnostic(self, shape, "Unexpected SHAPE argument at (1) to C_F_POINTER with scalar FPTR");
+}
+
+fn checkCFProcPointerCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    const actuals = collectCFPointerActuals(args);
+    const cptr = actuals.cptr orelse return;
+    const spec = try resolve_expr.exprTypeSpec(self, cptr);
+    if (isIsoCBindingDerivedType(self, spec, "c_funptr")) return;
+    return emitIntrinsicArgDiagnostic(self, cptr, "Argument CPTR at (1) to C_F_PROCPOINTER shall have the type TYPE(C_FUNPTR).");
+}
+
+fn isIsoCBindingDerivedType(self: *context.Context, spec: symbols.TypeSpec, expected_name: []const u8) bool {
+    if (spec.lowered_kind != .derived) return false;
+    const actual_name = spec.derived_type_name orelse return false;
+    if (std.ascii.eqlIgnoreCase(actual_name, expected_name)) return true;
+    const strict_c_handle =
+        std.ascii.eqlIgnoreCase(expected_name, "c_ptr") or
+        std.ascii.eqlIgnoreCase(expected_name, "c_funptr");
+    if (resolve_symbols.findSymbolIndex(self, actual_name)) |idx| {
+        const alias_sym = self.symbols.items[idx];
+        if (alias_sym.type_spec.lowered_kind == .derived) {
+            if (alias_sym.type_spec.derived_type_name) |canonical_name| {
+                if (std.ascii.eqlIgnoreCase(canonical_name, expected_name)) return true;
+                if (!strict_c_handle and resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, canonical_name)) return true;
+            }
+        }
+    }
+    if (isoCBindingAliasMatches(actual_name, expected_name)) return true;
+    if (strict_c_handle) return false;
+    return resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
+}
+
+fn isoCBindingAliasMatches(actual_name: []const u8, expected_name: []const u8) bool {
+    var actual_buf: [128]u8 = undefined;
+    var expected_buf: [32]u8 = undefined;
+    if (actual_name.len > actual_buf.len or expected_name.len > expected_buf.len) return false;
+    for (actual_name, 0..) |ch, i| actual_buf[i] = std.ascii.toLower(ch);
+    for (expected_name, 0..) |ch, i| expected_buf[i] = std.ascii.toLower(ch);
+    const actual = actual_buf[0..actual_name.len];
+    const expected = expected_buf[0..expected_name.len];
+    return std.mem.indexOf(u8, actual, expected) != null;
+}
+
+fn emitIntrinsicArgDiagnostic(self: *context.Context, expr_node: *ast.Expr, message: []const u8) CheckError {
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        source.text,
+    );
+    return error.InvalidArgumentCount;
+}
+
+fn exprHasPointerAttribute(self: *context.Context, expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            break :blk self.symbols.items[idx].is_pointer;
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens) break :blk false;
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            break :blk component.pointer;
+        },
+        else => false,
+    };
 }
 
 pub fn hasVisibleGenericInterface(self: *context.Context, name: []const u8) bool {

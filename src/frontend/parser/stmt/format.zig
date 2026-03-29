@@ -368,7 +368,7 @@ fn parseFormatSequence(
                 continue;
             }
 
-            if (index.* < text.len and (text[index.*] == 'I' or text[index.*] == 'i')) {
+            if (index.* < text.len and isIntegerEditDescriptor(text[index.*])) {
                 index.* += 1;
                 const spec = try parseIntFormat(text, index);
                 try appendRepeatedItem(&items, .{ .int = spec }, count, &flat_len);
@@ -437,7 +437,7 @@ fn parseFormatSequence(
             return error.UnexpectedToken;
         }
 
-        if (ch == 'I' or ch == 'i') {
+        if (isIntegerEditDescriptor(ch)) {
             index.* += 1;
             const spec = try parseIntFormat(text, index);
             try appendItemFlat(&items, .{ .int = spec }, &flat_len);
@@ -525,6 +525,13 @@ fn appendReversionOffsetItem(arena: std.mem.Allocator, base: []FormatItem, offse
     try out.appendSlice(base);
     try out.append(.{ .reversion_offset = offset });
     return out.toOwnedSlice();
+}
+
+fn isIntegerEditDescriptor(ch: u8) bool {
+    return ch == 'I' or ch == 'i' or
+        ch == 'B' or ch == 'b' or
+        ch == 'O' or ch == 'o' or
+        ch == 'Z' or ch == 'z';
 }
 
 fn appendRepeatedItems(
@@ -719,4 +726,19 @@ test "parseInlineFormatSpec decodes Hollerith payload safely" {
     const allocator = testing.allocator;
     const items = try parseInlineFormatSpec(allocator, "8H(I5,2X)", .hollerith);
     try testing.expect(items.len > 0);
+}
+
+test "parseFormatItems accepts integer radix edit descriptors case-insensitively" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try parseFormatItems(allocator, "(z8, O4.4, b16)");
+    try testing.expectEqual(@as(usize, 4), items.len);
+    try testing.expect(items[0] == .int);
+    try testing.expectEqual(@as(usize, 8), items[0].int.width);
+    try testing.expect(items[1] == .int);
+    try testing.expectEqual(@as(usize, 4), items[1].int.width);
+    try testing.expectEqual(@as(usize, 4), items[1].int.min_digits);
+    try testing.expect(items[2] == .int);
+    try testing.expectEqual(@as(usize, 16), items[2].int.width);
 }

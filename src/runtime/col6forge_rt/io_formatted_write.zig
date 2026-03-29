@@ -1,5 +1,6 @@
 const std = @import("std");
 const dynamic_format = @import("io_dynamic_format.zig");
+const runtime_text = @import("runtime_text.zig");
 
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
@@ -14,11 +15,7 @@ extern fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, scal
 extern fn col6forge_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) [*:0]const u8;
 extern fn col6forge_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) [*:0]const u8;
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlen = runtime_text.cstrlen;
 
 const RenderBuffer = struct {
     data: ?[*]u8 = null,

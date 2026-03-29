@@ -208,7 +208,7 @@ pub fn emitWholeArrayExprAssignment(ctx: *Context, builder: anytype, assign: ast
     const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
     if (target_info.sym.dims.len == 0) return false;
     if (target_info.sym.isCharacter()) return false;
-    if (target_info.sym.loweredKind() == .derived) return false;
+    if (target_info.sym.loweredKind() == .derived and !isIsoCPointerArray(target_info.sym)) return false;
 
     const src_actual = (try resolveArrayActual(ctx, builder, assign.value)) orelse return false;
     if (src_actual.elem_ty != common.symbolElementIRType(target_info.sym, ctx.options.target_layout)) return false;
@@ -221,6 +221,13 @@ pub fn emitWholeArrayExprAssignment(ctx: *Context, builder: anytype, assign: ast
     try emitLinearCopyLoop(ctx, builder, dst_ptr, src_actual.base_ptr, src_actual.elem_ty, count);
     try emitOwnedHeapActualFree(ctx, builder, src_actual.owned_heap_ptr);
     return true;
+}
+
+fn isIsoCPointerArray(sym: ast.sema.Symbol) bool {
+    if (sym.loweredKind() != .derived) return false;
+    const derived_name = sym.type_spec.derived_type_name orelse return false;
+    return std.ascii.eqlIgnoreCase(derived_name, "c_ptr") or
+        std.ascii.eqlIgnoreCase(derived_name, "c_funptr");
 }
 
 pub fn emitWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {

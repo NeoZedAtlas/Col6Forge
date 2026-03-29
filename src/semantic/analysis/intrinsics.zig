@@ -28,9 +28,14 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "ATAN", Arity{ .min = 1, .max = 1 } },
     .{ "ATAN2", Arity{ .min = 2, .max = 2 } },
     .{ "CABS", Arity{ .min = 1, .max = 1 } },
+    .{ "C_ASSOCIATED", Arity{ .min = 1, .max = 2 } },
     .{ "CCOS", Arity{ .min = 1, .max = 1 } },
     .{ "CEXP", Arity{ .min = 1, .max = 1 } },
+    .{ "C_F_POINTER", Arity{ .min = 2, .max = 3 } },
+    .{ "C_F_PROCPOINTER", Arity{ .min = 2, .max = 2 } },
+    .{ "C_FUNLOC", Arity{ .min = 1, .max = 1 } },
     .{ "CLOG", Arity{ .min = 1, .max = 1 } },
+    .{ "C_LOC", Arity{ .min = 1, .max = 1 } },
     .{ "CMPLX", Arity{ .min = 1, .max = 2 } },
     .{ "CONJG", Arity{ .min = 1, .max = 1 } },
     .{ "COS", Arity{ .min = 1, .max = 1 } },
@@ -110,6 +115,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "SUM", Arity{ .min = 1, .max = 1 } },
     .{ "TAN", Arity{ .min = 1, .max = 1 } },
     .{ "TANH", Arity{ .min = 1, .max = 1 } },
+    .{ "TRANSFER", Arity{ .min = 2, .max = 3 } },
     .{ "UBOUND", Arity{ .min = 1, .max = 2 } },
 });
 

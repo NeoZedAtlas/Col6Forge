@@ -150,6 +150,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                         depth + 1,
                         start_source,
                         parseCallArgExpr,
+                        parseExprDepth,
                         shared.makeExprNode,
                     );
                 }
@@ -194,6 +195,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                         depth + 1,
                         start_source,
                         parseCallArgExpr,
+                        parseExprDepth,
                         shared.makeExprNode,
                     );
                 }
@@ -209,6 +211,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                     depth + 1,
                     start_source,
                     parseCallArgExpr,
+                    parseExprDepth,
                     shared.makeExprNode,
                 );
             }
@@ -220,6 +223,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                 depth + 1,
                 start_source,
                 parseCallArgExpr,
+                parseExprDepth,
                 shared.makeExprNode,
             );
         },

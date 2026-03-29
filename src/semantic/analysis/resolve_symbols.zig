@@ -431,6 +431,10 @@ fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
     return getLowercaseMapValue(Symbol, self.known_host_parameters, name);
 }
 
+pub fn lookupHostAssociatedParameter(self: *context.Context, name: []const u8) ?Symbol {
+    return findKnownHostParameter(self, name);
+}
+
 fn putBuiltinConstant(
     self: *context.Context,
     module_name: []const u8,

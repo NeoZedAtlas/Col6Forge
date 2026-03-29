@@ -280,6 +280,113 @@ test "parseStatement handles PRINT statement" {
     try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
 }
 
+test "parseStatement handles PRINT with inline string format" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PRINT '(Z8)', A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .write);
+    const write_stmt = stmt_node.node.write;
+    try testing.expect(write_stmt.format == .inline_items);
+    try testing.expect(write_stmt.format.inline_items.len > 0);
+    try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
+}
+
+test "parseStatement handles free-form lowercase PRINT with inline string format" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "print '(z8)', a\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .write);
+    const write_stmt = stmt_node.node.write;
+    try testing.expect(write_stmt.format == .inline_items);
+    try testing.expect(write_stmt.format.inline_items.len > 0);
+    try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
+}
+
+test "lexer preserves free-form PRINT inline format and trailing comma as separate tokens" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "print '(z8)', a\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var diag_bag = parse_diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(allocator);
+    defer lex_diag_bag.deinit();
+
+    const tokens = try lexer.lexLogicalLineWithDiagnostics(allocator, lines[0], &lex_diag_bag);
+    defer allocator.free(tokens);
+    try testing.expect(tokens.len >= 4);
+    try testing.expectEqual(lexer.TokenKind.identifier, tokens[0].kind);
+    try testing.expectEqual(lexer.TokenKind.string, tokens[1].kind);
+    try testing.expectEqual(lexer.TokenKind.comma, tokens[2].kind);
+    try testing.expectEqual(lexer.TokenKind.identifier, tokens[3].kind);
+}
+
+test "parseStatementWithDiagnostics accepts free-form lowercase PRINT with radix inline format" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "print '(z8)', a\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena.allocator());
+    defer lex_diag_bag.deinit();
+
+    const stmt_node = try parseStatementWithDiagnostics(
+        arena.allocator(),
+        lines,
+        &idx,
+        &do_ctx,
+        &param_ints,
+        &param_strings,
+        &array_names,
+        &diag_bag,
+        &lex_diag_bag,
+    );
+
+    try testing.expect(stmt_node.node == .write);
+    try testing.expectEqual(@as(usize, 1), idx);
+    try testing.expect(!diag_bag.has());
+}
+
 test "parseStatement handles labeled FORMAT statement" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -27,6 +27,7 @@ const EmitError = shared.EmitError;
 pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
     return switch (expr.*) {
         .identifier => |name| blk: {
+            if (common.isIsoCNullCharName(name)) break :blk true;
             const sym = ctx.findSymbol(name) orelse break :blk false;
             break :blk sym.isCharacter();
         },
@@ -55,6 +56,7 @@ pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
 pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
     switch (expr.*) {
         .identifier => |name| {
+            if (common.isIsoCNullCharName(name)) return 1;
             const sym = ctx.findSymbol(name) orelse return null;
             if (!sym.isCharacter()) return null;
             return common.constantCharacterLen(sym);
@@ -218,6 +220,21 @@ pub fn emitCharacterValuePlanImpl(
                         return emitCharacterValuePlanImpl(ctx, builder, subst.actuals[idx], depth);
                     }
                 }
+            }
+            if (common.isIsoCNullCharName(name)) {
+                const buf_name = try ctx.nextTemp();
+                try builder.alloca(buf_name, .i8);
+                const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(.{ .name = "0", .ty = .i8, .is_ptr = false }, buf_ptr);
+                const len_val = try ctx.constI32(1);
+                return try shared.validatedCharacterValuePlan(.{
+                    .ptr = buf_ptr,
+                    .logical_len = len_val,
+                    .storage_len = len_val,
+                    .logical_len_const = 1,
+                    .storage_len_const = 1,
+                    .kind = .literal_temp,
+                });
             }
             const sym = ctx.findSymbol(name) orelse return null;
             if (!sym.isCharacter()) return null;
@@ -644,10 +661,9 @@ fn componentCharacterConstLen(component: cg_context.DerivedComponentLayout) ?usi
 }
 
 fn isCharacterComponentSubstringRef(component: cg_context.DerivedComponentLayout, comp: ast.ComponentExpr) bool {
-    if (component.dims.len != 0) return false;
     if (!comp.has_parens) return false;
-    if (comp.args.len != 1) return false;
-    return comp.args[0].* == .dim_range;
+    if (comp.args.len != component.dims.len + 1) return false;
+    return comp.args[comp.args.len - 1].* == .dim_range;
 }
 
 fn emitCharacterComponentPlan(
@@ -692,7 +708,7 @@ fn emitCharacterComponentLenValue(
     if (!isCharacterComponentSubstringRef(component, comp)) {
         return base_len_val;
     }
-    const range = comp.args[0].dim_range;
+    const range = comp.args[comp.args.len - 1].dim_range;
     var end_val = base_len_val orelse return null;
     if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
         end_val = try coerceCharacterLenToI32(ctx, builder, try memory.emitIndex(ctx, builder, range.upper));
@@ -714,7 +730,7 @@ fn componentSubstringLen(
     if (!isCharacterComponentSubstringRef(component, comp)) return componentCharacterConstLen(component);
     const base_len_usize = componentCharacterConstLen(component) orelse return null;
     const base_len = std.math.cast(i64, base_len_usize) orelse return null;
-    const range = comp.args[0].dim_range;
+    const range = comp.args[comp.args.len - 1].dim_range;
     const start_val = if (range.lower) |start_expr| int_eval.intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size)
         base_len

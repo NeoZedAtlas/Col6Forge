@@ -29,6 +29,15 @@ pub const ImportedPreludeDecls = struct {
     decl_sources: []const DeclSource,
 };
 
+pub fn lookupPreludeOrBuiltin(
+    arena: std.mem.Allocator,
+    module_name: []const u8,
+    preludes: *const ModulePreludeMap,
+) !?ModulePrelude {
+    if (preludes.get(module_name)) |prelude| return prelude;
+    return try builtinModulePrelude(arena, module_name);
+}
+
 pub fn importPreludeDecls(
     arena: std.mem.Allocator,
     decls: []const Decl,
@@ -41,7 +50,7 @@ pub fn importPreludeDecls(
     var imported_sources = decl_sources;
     var seen_full_imports = CaseInsensitiveStringHashMap(void).initContext(arena, .{});
     for (module_uses) |module_use| {
-        const prelude = preludes.get(module_use.module_name) orelse continue;
+        const prelude = try lookupPreludeOrBuiltin(arena, module_use.module_name, preludes) orelse continue;
         if (!module_use.has_only and module_use.only_items.len == 0) {
             if (seen_full_imports.contains(module_use.module_name)) continue;
         }
@@ -85,6 +94,170 @@ pub fn importPreludeDecls(
         }
     }
     return .{ .decls = imported_decls, .decl_sources = imported_sources };
+}
+
+fn builtinModulePrelude(arena: std.mem.Allocator, module_name: []const u8) !?ModulePrelude {
+    if (std.ascii.eqlIgnoreCase(module_name, "iso_c_binding")) {
+        return try isoCBindingPrelude(arena);
+    }
+    return null;
+}
+
+fn isoCBindingPrelude(arena: std.mem.Allocator) !ModulePrelude {
+    var decls = std.array_list.Managed(Decl).init(arena);
+    var decl_sources = std.array_list.Managed(DeclSource).init(arena);
+
+    try appendBuiltinDerivedType(&decls, &decl_sources, "iso_c_binding", "c_ptr");
+    try appendBuiltinDerivedType(&decls, &decl_sources, "iso_c_binding", "c_funptr");
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_int", 4);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_short", 2);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_long", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_long_long", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_int8_t", 1);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_int16_t", 2);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_int32_t", 4);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_int64_t", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_intmax_t", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_intptr_t", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_size_t", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_ptrdiff_t", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_signed_char", 1);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_char", 1);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_bool", 1);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_float", 4);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_double", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_long_double", 16);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_float_complex", 4);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_double_complex", 8);
+    try appendBuiltinIntegerConstant(&decls, &decl_sources, "iso_c_binding", "c_long_double_complex", 16);
+    try appendBuiltinCharacterConstant(&decls, &decl_sources, "iso_c_binding", "c_null_char", "\x00");
+    try appendBuiltinDerivedObject(&decls, &decl_sources, "iso_c_binding", "c_ptr", "c_null_ptr");
+    try appendBuiltinDerivedObject(&decls, &decl_sources, "iso_c_binding", "c_funptr", "c_null_funptr");
+
+    return .{
+        .decls = try decls.toOwnedSlice(),
+        .decl_sources = try decl_sources.toOwnedSlice(),
+    };
+}
+
+fn appendBuiltinDerivedType(
+    decls: *std.array_list.Managed(Decl),
+    decl_sources: *std.array_list.Managed(DeclSource),
+    module_name: []const u8,
+    name: []const u8,
+) !void {
+    try decls.append(.{
+        .derived_type_def = .{
+            .name = name,
+            .bind_c = true,
+        },
+    });
+    try decl_sources.append(builtinDeclSource(module_name));
+}
+
+fn appendBuiltinIntegerConstant(
+    decls: *std.array_list.Managed(Decl),
+    decl_sources: *std.array_list.Managed(DeclSource),
+    module_name: []const u8,
+    name: []const u8,
+    value: i64,
+) !void {
+    const expr = try integerLiteralExpr(decls.allocator, value);
+    const items = try decls.allocator.alloc(ast.Declarator, 1);
+    items[0] = .{
+        .name = name,
+        .dims = &.{},
+        .char_len = null,
+        .init = expr,
+    };
+    try decls.append(.{
+        .type_decl = .{
+            .type_kind = .integer,
+            .items = items,
+            .parameter = true,
+        },
+    });
+    try decl_sources.append(builtinDeclSource(module_name));
+}
+
+fn appendBuiltinCharacterConstant(
+    decls: *std.array_list.Managed(Decl),
+    decl_sources: *std.array_list.Managed(DeclSource),
+    module_name: []const u8,
+    name: []const u8,
+    value: []const u8,
+) !void {
+    const init_expr = try stringLiteralExpr(decls.allocator, value);
+    const char_len = try integerLiteralExpr(decls.allocator, 1);
+    const items = try decls.allocator.alloc(ast.Declarator, 1);
+    items[0] = .{
+        .name = name,
+        .dims = &.{},
+        .char_len = char_len,
+        .init = init_expr,
+    };
+    try decls.append(.{
+        .type_decl = .{
+            .type_kind = .character,
+            .items = items,
+            .parameter = true,
+        },
+    });
+    try decl_sources.append(builtinDeclSource(module_name));
+}
+
+fn appendBuiltinDerivedObject(
+    decls: *std.array_list.Managed(Decl),
+    decl_sources: *std.array_list.Managed(DeclSource),
+    module_name: []const u8,
+    derived_type_name: []const u8,
+    name: []const u8,
+) !void {
+    const items = try decls.allocator.alloc(ast.Declarator, 1);
+    items[0] = .{
+        .name = name,
+        .dims = &.{},
+        .char_len = null,
+        .init = null,
+    };
+    try decls.append(.{
+        .type_decl = .{
+            .type_kind = .derived,
+            .derived_type_name = derived_type_name,
+            .items = items,
+        },
+    });
+    try decl_sources.append(builtinDeclSource(module_name));
+}
+
+fn builtinDeclSource(module_name: []const u8) DeclSource {
+    return .{
+        .owner_name = module_name,
+    };
+}
+
+fn integerLiteralExpr(arena: std.mem.Allocator, value: i64) !*ast.Expr {
+    const text = try std.fmt.allocPrint(arena, "{d}", .{value});
+    const expr = try arena.create(ast.Expr);
+    expr.* = .{
+        .literal = .{
+            .kind = .integer,
+            .text = text,
+        },
+    };
+    return expr;
+}
+
+fn stringLiteralExpr(arena: std.mem.Allocator, value: []const u8) !*ast.Expr {
+    const text = try std.fmt.allocPrint(arena, "'{s}'", .{value});
+    const expr = try arena.create(ast.Expr);
+    expr.* = .{
+        .literal = .{
+            .kind = .string,
+            .text = text,
+        },
+    };
+    return expr;
 }
 
 fn renameFullPreludeDecls(

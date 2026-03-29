@@ -124,7 +124,17 @@ pub fn resolvedDeclTypeSpec(
             if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
             return error.UnexpectedTypeDecl;
         };
-        if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
+        if (!symbols_mod.hasDerivedType(self, name)) {
+            const loc = currentDeclLocation(self);
+            self.setDiagnostic(
+                loc.line,
+                loc.column,
+                catalog.semantic.unexpected_type_decl.code,
+                "is being used before it is defined",
+                loc.text,
+            );
+            return error.UnexpectedTypeDecl;
+        }
         return symbols.TypeSpec.fromDerived(name);
     }
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);

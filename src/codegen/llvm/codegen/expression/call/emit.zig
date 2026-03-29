@@ -226,6 +226,27 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                         return .{ .ptr = ptr };
                     }
                 }
+                if (!ctx.locals.contains(name) and common.isIsoCNullPointerNamedConstant(sym, name)) {
+                    const tmp = try ctx.nextTemp();
+                    try builder.alloca(tmp, .ptr);
+                    const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                    try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = false }, ptr);
+                    return .{ .ptr = ptr };
+                }
+            }
+            if (common.isIsoCNullPointerName(name) or common.isIsoCNullFunPointerName(name)) {
+                const tmp = try ctx.nextTemp();
+                try builder.alloca(tmp, .ptr);
+                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = false }, ptr);
+                return .{ .ptr = ptr };
+            }
+            if (common.isIsoCNullCharName(name)) {
+                const tmp = try ctx.nextTemp();
+                try builder.alloca(tmp, .i8);
+                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                try builder.store(.{ .name = "0", .ty = .i8, .is_ptr = false }, ptr);
+                return .{ .ptr = ptr };
             }
             return .{ .ptr = try ctx.getPointer(name) };
         },

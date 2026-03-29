@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 
 const FILE = opaque {};
 
@@ -24,11 +25,7 @@ fn resolvePauseAction(mode: c_int, interactive: bool) PauseAction {
     };
 }
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlen = runtime_text.cstrlen;
 
 fn isInteractiveStdio() bool {
     return std.fs.File.stdin().isTty() and std.fs.File.stderr().isTty();

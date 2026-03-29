@@ -337,6 +337,103 @@ test "explicit interface import can reference host derived type" {
     try testing.expect(diag.take() == null);
 }
 
+test "use iso_c_binding full import provides builtin derived types and constants to declarations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr) :: p0 = c_null_ptr\n" ++
+        "  type(c_funptr) :: fp = c_null_funptr\n" ++
+        "  character(kind=c_char), dimension(1) :: s = c_null_char\n" ++
+        "  integer(c_int) :: i\n" ++
+        "  real(c_double) :: x\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+}
+
+test "use iso_c_binding only rename provides builtin derived types and kind constants" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  use iso_c_binding, only: cptr_t => c_ptr, cint_t => c_int, cchar_t => c_char\n" ++
+        "  implicit none\n" ++
+        "  type(cptr_t) :: p0\n" ++
+        "  integer(cint_t) :: i\n" ++
+        "  character(kind=cchar_t,len=1) :: ch\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+}
+
+test "character c_char shorthand and c_loc intrinsic resolve through iso_c_binding" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr), target :: argv\n" ++
+        "  character(c_char), dimension(1) :: s = c_null_char\n" ++
+        "  interface\n" ++
+        "    subroutine sub1(x)\n" ++
+        "      import :: c_ptr\n" ++
+        "      type(c_ptr), intent(in) :: x\n" ++
+        "    end subroutine sub1\n" ++
+        "  end interface\n" ++
+        "  call sub1(c_loc(argv))\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+}
+
+test "contained procedure can use host-associated iso_c_binding c_char in character shorthand" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    character(c_char), dimension(1) :: text = c_null_char\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 2), sem.units.len);
+}
+
 test "unnamed explicit interface body in module prelude is callable from contained procedure" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -706,6 +803,161 @@ test "optional dummy without visible interface requires explicit interface" {
     const got = diag.take() orelse return error.TestExpectedEqual;
     defer diag.releaseTaken(got);
     try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
+}
+
+test "intrinsic call with keyword actuals does not require explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "function c_f_string(cptr) result(fptr)\n" ++
+        "  use iso_c_binding\n" ++
+        "  implicit none\n" ++
+        "  type(c_ptr), intent(in) :: cptr\n" ++
+        "  character(kind=c_char), dimension(:), pointer :: fptr\n" ++
+        "  interface\n" ++
+        "     function strlen(string) result(len) bind(c,name=\"strlen\")\n" ++
+        "       import\n" ++
+        "       type(c_ptr), value :: string\n" ++
+        "       integer(c_int) :: len\n" ++
+        "     end function strlen\n" ++
+        "  end interface\n" ++
+        "  call c_f_pointer(fptr=fptr, cptr=cptr, shape=[strlen(cptr)])\n" ++
+        "end function c_f_string\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    try analyzer_instance.analyze();
+    try testing.expect(diag.take() == null);
+}
+
+test "c_f_pointer rejects shape actual for scalar fptr" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  use iso_c_binding\n" ++
+        "  type(c_ptr) :: cp\n" ++
+        "  integer, pointer :: p\n" ++
+        "  call c_f_pointer(cp, p, shape=[2])\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "Unexpected SHAPE argument") != null);
+}
+
+test "c_f_pointer rejects non-pointer fptr actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  use iso_c_binding\n" ++
+        "contains\n" ++
+        "  subroutine s(cp)\n" ++
+        "    type(c_ptr), value :: cp\n" ++
+        "    integer :: x\n" ++
+        "    call c_f_pointer(cp, x)\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "must be a pointer") != null);
 }
 
 test "array-valued function without visible interface requires explicit interface" {
@@ -2461,6 +2713,31 @@ test "character component substring resolves as character expression" {
         "  type(t) :: a\n" ++
         "  character(2) :: part\n" ++
         "  part = a%name(2:3)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "character array component element substring resolves as character expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: t\n" ++
+        "    character(2) :: name(2)\n" ++
+        "  end type\n" ++
+        "  type(t) :: a\n" ++
+        "  character(1) :: part\n" ++
+        "  part = a%name(1)(1:1)\n" ++
         "end program p\n";
     const lines = try free_form.normalizeFreeForm(allocator, source);
     defer free_form.freeLogicalLines(allocator, lines);

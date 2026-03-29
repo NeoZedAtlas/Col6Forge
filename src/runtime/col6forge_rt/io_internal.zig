@@ -1,29 +1,18 @@
 const std = @import("std");
 const io_common = @import("io_common.zig");
+const runtime_args = @import("runtime_args.zig");
+const runtime_memory = @import("runtime_memory.zig");
+const runtime_text = @import("runtime_text.zig");
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
 
-fn asCStr(buf: anytype) [*:0]u8 {
-    return @ptrCast(buf);
-}
+const asCStr = runtime_text.asCStr;
+const asConstCStr = runtime_text.asConstCStr;
 
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
-
-fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    const out = @addWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
+const checkedMul = runtime_memory.checkedMul;
+const checkedAdd = runtime_memory.checkedAdd;
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
@@ -32,11 +21,7 @@ extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_i
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 
-fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlenRaw = runtime_text.cstrlenRaw;
 
 fn trimAsciiSpace(text: []const u8) []const u8 {
     var start: usize = 0;
@@ -90,24 +75,10 @@ fn isAllAsterisksSlice(text: []const u8) bool {
     return true;
 }
 
-fn runtimeArgCount(arg_count: c_int) usize {
-    return @intCast(@max(arg_count, 0));
-}
-
-fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
-    if (idx >= total or arg_ptrs == null) return null;
-    return arg_ptrs.?[idx];
-}
-
-fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
-    if (idx >= total or arg_kinds == null) return 0;
-    return arg_kinds.?[idx];
-}
-
-fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
-    if (idx >= total or arg_lens == null) return 0;
-    return arg_lens.?[idx];
-}
+const runtimeArgCount = runtime_args.runtimeArgCount;
+const runtimeArgPtrAt = runtime_args.runtimeArgPtrAt;
+const runtimeArgKindAt = runtime_args.runtimeArgKindAt;
+const runtimeArgLenAt = runtime_args.runtimeArgLenAt;
 
 const InternalListWriter = struct {
     dst: [*]u8,

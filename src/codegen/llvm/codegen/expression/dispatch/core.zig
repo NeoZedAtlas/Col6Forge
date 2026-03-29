@@ -80,9 +80,17 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     }
                 }
             }
-            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            const sym = ctx.findSymbol(name) orelse {
+                if (common.isIsoCNullPointerName(name) or common.isIsoCNullFunPointerName(name)) {
+                    return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+                }
+                return error.UnknownSymbol;
+            };
             if (sym.kind == .parameter) {
                 if (sym.const_value) |cv| return casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
+            }
+            if (!ctx.locals.contains(name) and common.isIsoCNullPointerNamedConstant(sym, name)) {
+                return .{ .name = "null", .ty = .ptr, .is_ptr = false };
             }
             if (sym.is_pointer) {
                 const ptr = try ctx.getPointer(name);
@@ -232,7 +240,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 }
                 const ty = ctx.typeFromKind(sym.loweredKind());
-                const load_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
+                const load_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
                 const tmp = try ctx.nextTemp();
                 try builder.load(tmp, load_ty, ptr);
                 var value = ValueRef{ .name = tmp, .ty = load_ty, .is_ptr = false };

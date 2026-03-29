@@ -227,7 +227,7 @@ pub fn resolveComponentExpr(
             return;
         }
         if (isCharacterComponentSubstringRef(component, comp)) {
-            try validateCharacterComponentSubstringArgs(self, expr_node, comp.args, deps);
+            try validateCharacterComponentSubstringArgs(self, expr_node, component.dims, comp.args, deps);
             try deps.cacheExprType(self, expr_node, component.type_spec);
             return;
         }
@@ -617,20 +617,23 @@ pub fn isCharacterComponentSubstringRef(
 ) bool {
     if (component.procedure) return false;
     if (component.type_spec.lowered_kind != .character) return false;
-    if (component.dims.len != 0) return false;
     if (!comp.has_parens) return false;
-    if (comp.args.len != 1) return false;
-    return comp.args[0].* == .dim_range;
+    if (comp.args.len != component.dims.len + 1) return false;
+    return comp.args[comp.args.len - 1].* == .dim_range;
 }
 
 pub fn validateCharacterComponentSubstringArgs(
     self: *context.Context,
     expr_node: *ast.Expr,
+    component_dims: []*ast.Expr,
     args: []*ast.Expr,
     comptime deps: anytype,
 ) ResolveError!void {
-    if (args.len != 1) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_count.code, "Subscript count mismatch");
-    const range = switch (args[0].*) {
+    if (args.len != component_dims.len + 1) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_count.code, "Subscript count mismatch");
+    if (component_dims.len != 0) {
+        try validateComponentArgs(self, expr_node, component_dims, args[0..component_dims.len], deps);
+    }
+    const range = switch (args[args.len - 1].*) {
         .dim_range => |range| range,
         else => return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context"),
     };

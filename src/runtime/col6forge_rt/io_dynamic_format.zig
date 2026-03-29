@@ -1,5 +1,6 @@
 ﻿const std = @import("std");
 
+const runtime_text = @import("runtime_text.zig");
 const TabKind = enum { absolute, relative_right, relative_left };
 const BlankCtrl = enum { nulls, zeros };
 const SignCtrl = enum { default, plus, suppress };
@@ -383,9 +384,7 @@ fn trimFormatCopy(allocator: std.mem.Allocator, fmt_ptr: ?[*]const u8, fmt_len: 
     return allocator.dupe(u8, src[s..e]);
 }
 
-fn asConstCStr(slice: []const u8) [*:0]const u8 {
-    return @ptrCast(slice.ptr);
-}
+const sliceAsConstCStr = runtime_text.sliceAsConstCStr;
 
 fn appendEscapedLiteral(buf: *std.array_list.Managed(u8), text: []const u8) !void {
     for (text) |ch| {
@@ -809,7 +808,7 @@ pub export fn col6forge_write_fmt_expr_v(unit: c_int, fmt_ptr: ?[*]const u8, fmt
     const lowered = lowerWriteFormatAuto(false, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return if (strict_status != 0) 1 else 0;
     defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     if (lowered.uses_stream) return executeLoweredWriteStreamExternal(unit, lowered.bytes, arg_ptrs, arg_kinds, arg_count, strict_status);
-    return col6forge_write_v(unit, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, strict_status);
+    return col6forge_write_v(unit, sliceAsConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, strict_status);
 }
 
 pub export fn col6forge_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) void {
@@ -819,19 +818,19 @@ pub export fn col6forge_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count
         executeLoweredWriteStreamInternal(buf, len, count, lowered.bytes, arg_ptrs, arg_kinds, arg_count);
         return;
     }
-    col6forge_write_internal_v(buf, len, count, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
+    col6forge_write_internal_v(buf, len, count, sliceAsConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
 }
 
 pub export fn col6forge_read_fmt_expr_core(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, status_mode: c_int) callconv(.c) c_int {
     const lowered = lowerFormat(.read_any, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return if (status_mode != 0) 1 else -1;
     defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
-    return col6forge_formatted_read_core(unit, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, status_mode);
+    return col6forge_formatted_read_core(unit, sliceAsConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, status_mode);
 }
 
 pub export fn col6forge_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) c_int {
     const lowered = lowerFormat(.read_any, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return 1;
     defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
-    return col6forge_read_internal_core(buf, len, count, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
+    return col6forge_read_internal_core(buf, len, count, sliceAsConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
 }
 
 test "lowerWrite maps A descriptor with D kind to numeric format" {

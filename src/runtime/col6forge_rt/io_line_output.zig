@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 
 const FILE = opaque {};
 extern fn fwrite(ptr: ?*const anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
@@ -12,11 +13,7 @@ extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_unit_stream_acquire_write(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
 extern fn col6forge_unit_stream_release_write(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlen = runtime_text.cstrlen;
 
 var line_output_mutex: std.Thread.Mutex = .{};
 

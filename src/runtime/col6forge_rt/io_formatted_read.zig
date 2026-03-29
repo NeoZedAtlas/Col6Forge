@@ -2,6 +2,7 @@ const std = @import("std");
 const dynamic_format = @import("io_dynamic_format.zig");
 const io_common = @import("io_common.zig");
 const io_control = @import("io_control.zig");
+const runtime_text = @import("runtime_text.zig");
 
 const c_begin_stream = @extern(
     *const fn (unit: c_int, fmt: ?[*:0]const u8, status_mode: c_int) callconv(.c) ?*anyopaque,
@@ -34,20 +35,15 @@ extern fn col6forge_open_unit_blank_code(unit: c_int) c_int;
 extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
 extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
 
-fn asCStr(buf: anytype) [*:0]u8 {
-    return @ptrCast(buf);
-}
-
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const asCStr = runtime_text.asCStr;
+const asConstCStr = runtime_text.asConstCStr;
 
 const RuntimeArgSlot = struct {
     available: bool,
     ptr: ?*anyopaque,
 };
 
-fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) RuntimeArgSlot {
+fn runtimeArgSlotAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) RuntimeArgSlot {
     if (idx >= total or arg_ptrs == null) {
         return .{ .available = false, .ptr = null };
     }
@@ -901,7 +897,7 @@ pub export fn col6forge_formatted_read_core(
 
         const takes_arg = conv == 'd' or conv == 'f' or conv == 'S' or conv == 'c' or conv == 'L';
         if (!takes_arg) continue;
-        const arg_slot = runtimeArgPtrAt(arg_ptrs, arg_index, total_args);
+        const arg_slot = runtimeArgSlotAt(arg_ptrs, arg_index, total_args);
         if (!arg_slot.available) break;
         const arg = arg_slot.ptr orelse {
             arg_index += 1;
@@ -1013,24 +1009,24 @@ pub export fn col6forge_formatted_read_core(
     return assigned;
 }
 
-test "runtimeArgPtrAt handles missing and null entries" {
+test "runtimeArgSlotAt handles missing and null entries" {
     var value: u8 = 1;
     var ptrs = [_]?*anyopaque{ @ptrCast(&value), null };
     const raw: [*]?*anyopaque = &ptrs;
 
-    const missing = runtimeArgPtrAt(null, 0, 2);
+    const missing = runtimeArgSlotAt(null, 0, 2);
     try std.testing.expect(!missing.available);
     try std.testing.expect(missing.ptr == null);
 
-    const out_of_range = runtimeArgPtrAt(raw, 2, 2);
+    const out_of_range = runtimeArgSlotAt(raw, 2, 2);
     try std.testing.expect(!out_of_range.available);
     try std.testing.expect(out_of_range.ptr == null);
 
-    const present = runtimeArgPtrAt(raw, 0, 2);
+    const present = runtimeArgSlotAt(raw, 0, 2);
     try std.testing.expect(present.available);
     try std.testing.expect(present.ptr != null);
 
-    const null_entry = runtimeArgPtrAt(raw, 1, 2);
+    const null_entry = runtimeArgSlotAt(raw, 1, 2);
     try std.testing.expect(null_entry.available);
     try std.testing.expect(null_entry.ptr == null);
 }

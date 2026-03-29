@@ -3,6 +3,8 @@
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
+const runtime_args = @import("runtime_args.zig");
+const runtime_text = @import("runtime_text.zig");
 
 extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
 extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
@@ -12,21 +14,9 @@ extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]
 extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn col6forge_fmt_release_all() void;
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
-
-fn cstrnlen(text: [*:0]const u8, limit: usize) usize {
-    var i: usize = 0;
-    while (i < limit and text[i] != 0) : (i += 1) {}
-    return i;
-}
-
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const cstrlen = runtime_text.cstrlen;
+const cstrnlen = runtime_text.cstrnlen;
+const asConstCStr = runtime_text.asConstCStr;
 const RenderBuffer = struct {
     data: ?[*]u8 = null,
     len: usize = 0,
@@ -78,21 +68,9 @@ const RenderBuffer = struct {
     }
 };
 
-fn runtimeArgCount(arg_count: c_int) usize {
-    return @intCast(@max(arg_count, 0));
-}
-
-fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
-    if (idx >= total) return null;
-    if (arg_ptrs == null) return null;
-    return arg_ptrs.?[idx];
-}
-
-fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
-    if (idx >= total) return 0;
-    if (arg_kinds == null) return 0;
-    return arg_kinds.?[idx];
-}
+const runtimeArgCount = runtime_args.runtimeArgCount;
+const runtimeArgPtrAt = runtime_args.runtimeArgPtrAt;
+const runtimeArgKindAt = runtime_args.runtimeArgKindAt;
 
 fn addRecordOffset(base: c_int, offset: usize) ?c_int {
     if (offset > @as(usize, @intCast(std.math.maxInt(c_int)))) return null;

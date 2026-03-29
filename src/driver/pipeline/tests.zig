@@ -1682,6 +1682,88 @@ test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 case"
     try testing.expect(diag_bag.take() == null);
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts repository c_ptr_tests_16 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/c_ptr_tests_16.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository c_ptr_tests_16 with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/c_ptr_tests_16.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try std.testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository c_ptr_tests_16 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/c_ptr_tests_16.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics rejects repository gomp c_ptr_tests_21 declare variant type mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidArgumentCount,
+        runPipelineWithOptionsAndDiagnostics(
+            allocator,
+            "tests/gcc-tests/gfortran.dg/gomp/c_ptr_tests_21.f90",
+            .llvm,
+            .{},
+            &diag_bag,
+        ),
+    );
+    const got = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_type.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "variant 'foo_variant' and base 'foo'") != null);
+    try testing.expect(std.mem.indexOf(u8, got.message, "Type mismatch in argument 'c_bv'") != null);
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 absolute path" {
     const testing = std.testing;
     const allocator = testing.allocator;

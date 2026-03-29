@@ -1,14 +1,11 @@
 const std = @import("std");
+const runtime_text = @import("runtime_text.zig");
 const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) c_int;
 
-fn cstrlen(text: [*:0]const u8) usize {
-    var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {}
-    return i;
-}
+const cstrlen = runtime_text.cstrlen;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -146,9 +143,7 @@ pub fn parseFortranRealFieldDetailed(field: []const u8, precision: c_int) ?RealF
     };
 }
 
-fn asCStr(buf: anytype) [*:0]u8 {
-    return @ptrCast(buf);
-}
+const asCStr = runtime_text.asCStr;
 
 fn copyCharField(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void {
     if (dst == null or len <= 0) return;

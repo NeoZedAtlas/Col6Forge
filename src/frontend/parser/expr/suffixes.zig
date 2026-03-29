@@ -13,6 +13,7 @@ pub fn parseComponentSuffixes(
     depth: usize,
     source: SourceRef,
     comptime parseCallArgExprFn: anytype,
+    comptime parseExprDepthFn: anytype,
     comptime makeExprNodeFn: anytype,
 ) ParseExprError!*Expr {
     if (depth >= shared.max_expression_depth) return error.ExpressionDepthExceeded;
@@ -35,8 +36,65 @@ pub fn parseComponentSuffixes(
             .args = try args.toOwnedSlice(),
             .has_parens = has_parens,
         } }, source);
+        current = try parseTrailingComponentSubstringSuffix(
+            lp,
+            arena,
+            current,
+            depth + 1,
+            source,
+            parseExprDepthFn,
+            makeExprNodeFn,
+        );
     }
     return current;
+}
+
+fn parseTrailingComponentSubstringSuffix(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    expr_node: *Expr,
+    depth: usize,
+    source: SourceRef,
+    comptime parseExprDepthFn: anytype,
+    comptime makeExprNodeFn: anytype,
+) ParseExprError!*Expr {
+    if (depth >= shared.max_expression_depth) return error.ExpressionDepthExceeded;
+    if (expr_node.* != .component) return expr_node;
+    if (!lp.peekIs(.l_paren)) return expr_node;
+
+    var lookahead = lp.*;
+    _ = lookahead.consume(.l_paren);
+    if (!shared.hasSubstringRange(lookahead)) return expr_node;
+
+    const comp = expr_node.component;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var start_expr: ?*Expr = null;
+    if (!lp.peekIs(.colon)) {
+        start_expr = try parseExprDepthFn(lp, arena, 0, depth + 1);
+    }
+    _ = lp.expect(.colon) orelse return error.UnexpectedToken;
+    const upper_expr = if (lp.peekIs(.r_paren))
+        try makeExprNodeFn(arena, .{ .literal = .{ .kind = .assumed_size, .text = "*" } }, source)
+    else
+        try parseExprDepthFn(lp, arena, 0, depth + 1);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    const range_expr = try makeExprNodeFn(arena, .{ .dim_range = .{
+        .lower = start_expr,
+        .upper = upper_expr,
+        .stride = null,
+        .assumed_shape = false,
+    } }, source);
+
+    const new_args = try arena.alloc(*Expr, comp.args.len + 1);
+    @memcpy(new_args[0..comp.args.len], comp.args);
+    new_args[comp.args.len] = range_expr;
+    return makeExprNodeFn(arena, .{ .component = .{
+        .base = comp.base,
+        .name = comp.name,
+        .args = new_args,
+        .has_parens = true,
+    } }, source);
 }
 
 pub fn parseLiteralSubstringSuffix(

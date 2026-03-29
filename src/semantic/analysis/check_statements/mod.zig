@@ -179,6 +179,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");
             }
             try expr_semantics.checkSpecialCallConstraints(self, call.name, procedure_calls.collectCallExprArgsScratch(self, call.args));
+            try procedure_calls.checkIntrinsicCallConstraintsForCallArgs(self, call.name, call.args);
             try procedure_calls.checkExplicitInterfaceRequirementForCallArgs(self, call.name, call.args, call_idx);
             try procedure_calls.checkKnownProcedureCallArity(
                 self,
@@ -386,10 +387,25 @@ fn dummyArgTypeCompatible(
 
     const expected_name = expected.derived_type_name orelse return false;
     const actual_name = actual.derived_type_name orelse return false;
+    const expected_iso_family = isoCBindingHandleFamily(expected_name);
+    const actual_iso_family = isoCBindingHandleFamily(actual_name);
+    if (expected_iso_family != null or actual_iso_family != null) {
+        return expected_iso_family != null and actual_iso_family != null and expected_iso_family.? == actual_iso_family.?;
+    }
     return if (expected.polymorphic)
         resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
     else
         resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
+}
+
+fn isoCBindingHandleFamily(name: []const u8) ?enum { c_ptr, c_funptr } {
+    var lower_buf: [128]u8 = undefined;
+    if (name.len > lower_buf.len) return null;
+    for (name, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
+    const lower = lower_buf[0..name.len];
+    if (std.mem.indexOf(u8, lower, "c_funptr") != null) return .c_funptr;
+    if (std.mem.indexOf(u8, lower, "c_ptr") != null) return .c_ptr;
+    return null;
 }
 
 fn intrinsicAssignmentTypeCompatible(

@@ -1,4 +1,8 @@
 const std = @import("std");
+const runtime_args = @import("runtime_args.zig");
+const runtime_memory = @import("runtime_memory.zig");
+const runtime_stride = @import("runtime_stride.zig");
+const runtime_text = @import("runtime_text.zig");
 const COL6FORGE_LIST_TOKEN_MAX = 4096;
 
 const FILE = opaque {};
@@ -24,74 +28,23 @@ fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
 
-fn asCStr(buf: anytype) [*:0]u8 {
-    return @ptrCast(buf);
-}
+const asCStr = runtime_text.asCStr;
+const asConstCStr = runtime_text.asConstCStr;
+const cstrlenRaw = runtime_text.cstrlenRaw;
 
-fn asConstCStr(buf: anytype) [*:0]const u8 {
-    return @ptrCast(buf);
-}
+const runtimeArgCount = runtime_args.runtimeArgCount;
+const runtimeArgPtrAt = runtime_args.runtimeArgPtrAt;
+const runtimeArgKindAt = runtime_args.runtimeArgKindAt;
+const runtimeArgLenAt = runtime_args.runtimeArgLenAt;
 
-fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
+const checkedMul = runtime_memory.checkedMul;
+const checkedMulI64 = runtime_memory.checkedMulI64;
+const checkedAdd = runtime_memory.checkedAdd;
 
-fn runtimeArgCount(arg_count: c_int) usize {
-    return @intCast(@max(arg_count, 0));
-}
+const offsetIndex = runtime_stride.offsetIndex;
+const complexOffsetIndex = runtime_stride.complexOffsetIndex;
 
-fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
-    if (idx >= total or arg_ptrs == null) return null;
-    return arg_ptrs.?[idx];
-}
-
-fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
-    if (idx >= total or arg_kinds == null) return 0;
-    return arg_kinds.?[idx];
-}
-
-fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
-    if (idx >= total or arg_lens == null) return 0;
-    return arg_lens.?[idx];
-}
-
-fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-fn checkedMulI64(lhs: i64, rhs: i64) ?i64 {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    const out = @addWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-fn offsetIndex(i: c_int, stride: c_int) ?usize {
-    const iu: usize = @intCast(i);
-    const su: usize = @intCast(stride);
-    return checkedMul(iu, su);
-}
-
-fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
-    const idx = offsetIndex(i, stride) orelse return null;
-    return checkedMul(idx, 2);
-}
-
-fn offsetBytes(ptr: [*]u8, delta: i64) ?[*]u8 {
-    const base_addr: i128 = @intCast(@intFromPtr(ptr));
-    const out_addr = base_addr + delta;
-    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
-    return @ptrFromInt(@as(usize, @intCast(out_addr)));
-}
+const offsetBytes = runtime_memory.offsetBytes;
 
 const ReadTokenResult = enum {
     ok,
@@ -1316,6 +1269,8 @@ pub export fn col6forge_read_list_mix_v_n(
 test "list index helpers detect arithmetic overflow" {
     try std.testing.expectEqual(@as(usize, 12), offsetIndex(3, 4).?);
     try std.testing.expectEqual(@as(usize, 24), complexOffsetIndex(3, 4).?);
+    try std.testing.expect(offsetIndex(-1, 4) == null);
+    try std.testing.expect(offsetIndex(1, 0) == null);
     var values: [4]c_int = .{ 11, 22, 33, 44 };
     const back = offsetBytes(@ptrCast(&values[3]), -2 * @as(i64, @sizeOf(c_int))).?;
     const back_val: *c_int = @ptrCast(@alignCast(back));

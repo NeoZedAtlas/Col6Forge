@@ -1,4 +1,8 @@
 const std = @import("std");
+const runtime_args = @import("runtime_args.zig");
+const runtime_memory = @import("runtime_memory.zig");
+const runtime_stride = @import("runtime_stride.zig");
+const runtime_text = @import("runtime_text.zig");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
@@ -49,24 +53,10 @@ const ListWriter = struct {
     }
 };
 
-fn runtimeArgCount(arg_count: c_int) usize {
-    return @intCast(@max(arg_count, 0));
-}
-
-fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
-    if (idx >= total or arg_ptrs == null) return null;
-    return arg_ptrs.?[idx];
-}
-
-fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
-    if (idx >= total or arg_kinds == null) return 0;
-    return arg_kinds.?[idx];
-}
-
-fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
-    if (idx >= total or arg_lens == null) return 0;
-    return arg_lens.?[idx];
-}
+const runtimeArgCount = runtime_args.runtimeArgCount;
+const runtimeArgPtrAt = runtime_args.runtimeArgPtrAt;
+const runtimeArgKindAt = runtime_args.runtimeArgKindAt;
+const runtimeArgLenAt = runtime_args.runtimeArgLenAt;
 
 fn statusError(strict_status: c_int) c_int {
     return if (strict_status != 0) 1 else 0;
@@ -78,48 +68,16 @@ fn snprintfCount(written: c_int, cap: usize) ?usize {
     return if (n < cap) n else cap - 1;
 }
 
-fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
+const checkedMul = runtime_memory.checkedMul;
+const checkedMulI64 = runtime_memory.checkedMulI64;
+const checkedAdd = runtime_memory.checkedAdd;
 
-fn checkedMulI64(lhs: i64, rhs: i64) ?i64 {
-    const out = @mulWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
+const offsetIndex = runtime_stride.offsetIndex;
+const complexOffsetIndex = runtime_stride.complexOffsetIndex;
 
-fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    const out = @addWithOverflow(lhs, rhs);
-    if (out[1] != 0) return null;
-    return out[0];
-}
-
-fn offsetIndex(i: c_int, stride: c_int) ?usize {
-    const iu: usize = @intCast(i);
-    const su: usize = @intCast(stride);
-    return checkedMul(iu, su);
-}
-
-fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
-    const idx = offsetIndex(i, stride) orelse return null;
-    return checkedMul(idx, 2);
-}
-
-fn offsetBytes(ptr: [*]u8, delta: i64) ?[*]u8 {
-    const base_addr: i128 = @intCast(@intFromPtr(ptr));
-    const out_addr = base_addr + delta;
-    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
-    return @ptrFromInt(@as(usize, @intCast(out_addr)));
-}
-
-fn offsetConstBytes(ptr: [*]const u8, delta: i64) ?[*]const u8 {
-    const base_addr: i128 = @intCast(@intFromPtr(ptr));
-    const out_addr = base_addr + delta;
-    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
-    return @ptrFromInt(@as(usize, @intCast(out_addr)));
-}
+const offsetBytes = runtime_memory.offsetBytes;
+const offsetConstBytes = runtime_memory.offsetConstBytes;
+const asConstCStr = runtime_text.asConstCStr;
 
 fn formatI32(value: c_int, tmp: *[64]u8) ?[]const u8 {
     const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%d", value), tmp.len) orelse return null;
