@@ -62,6 +62,25 @@ pub const Index = struct {
         return null;
     }
 
+    pub fn findAnyAlias(self: Index, symbol_name: []const u8) ?usize {
+        for (self.symbol_aliases.items) |alias| {
+            if (std.mem.eql(u8, alias.name, symbol_name)) return alias.start_idx;
+        }
+        return null;
+    }
+
+    pub fn findFirstSymbolUse(self: Index, symbol_name: []const u8) ?usize {
+        const call_idx = self.findFunctionCall(symbol_name);
+        const alias_idx = self.findAnyAlias(symbol_name);
+        return switch (call_idx != null) {
+            true => switch (alias_idx != null) {
+                true => @min(call_idx.?, alias_idx.?),
+                false => call_idx.?,
+            },
+            false => alias_idx,
+        };
+    }
+
     pub fn findMemberAccessPath(self: Index, needle: []const u8) ?usize {
         for (self.member_accesses.items) |access| {
             if (matchesMemberAccessNeedle(access.path, needle)) return access.start_idx;

@@ -5,9 +5,7 @@ const rules = @import("rules/mod.zig");
 pub const file_rules =
     rules.text.file_rules ++
     rules.legacy_calls.file_rules ++
-    rules.call_paths.file_rules ++
-    rules.alias_paths.file_rules ++
-    rules.import_usage.file_rules ++
+    rules.usage.file_rules ++
     rules.imports.file_rules ++
     rules.ownership.file_rules;
 
@@ -37,25 +35,18 @@ fn validateRule(rule: model.AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
         .forbidden_text, .forbidden_import_path_fragment, .forbidden_member_access_path => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
-        .required_import_path_fragment_for_symbol_use => {
-            if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle;
-            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
-            if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
-        },
         .forbidden_function_call => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
             if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
+            if (rule.alias_path != null) return error.AuditRuleUnexpectedAliasPath;
         },
-        .required_function_call_path => {
+        .owned_symbol_usage => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
-            if (rule.call_path == null or rule.call_path.?.len == 0) return error.AuditRuleMissingCallPath;
-            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
-        },
-        .required_symbol_alias_path => {
-            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
-            if (rule.call_path == null or rule.call_path.?.len == 0) return error.AuditRuleMissingCallPath;
-            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+            const has_import = rule.needle != null and rule.needle.?.len != 0;
+            const has_call_path = rule.call_path != null and rule.call_path.?.len != 0;
+            const has_alias_path = rule.alias_path != null and rule.alias_path.?.len != 0;
+            if (!has_import and !has_call_path and !has_alias_path) return error.AuditRuleMissingUsageConstraint;
         },
         .owned_symbol_definition => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
@@ -63,10 +54,12 @@ fn validateRule(rule: model.AuditRule) !void {
             if (rule.definition_kind == null) return error.AuditRuleMissingDefinitionKind;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
             if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
+            if (rule.alias_path != null) return error.AuditRuleUnexpectedAliasPath;
         },
         .bare_error_code_literal, .error_catalog_consistency => {
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
             if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
+            if (rule.alias_path != null) return error.AuditRuleUnexpectedAliasPath;
         },
     }
 }
@@ -79,9 +72,7 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
         std.mem.eql(u8, rel_path, "devtools/constraints/registry.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/text.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/legacy_calls.zig") or
-        std.mem.eql(u8, rel_path, "devtools/constraints/rules/call_paths.zig") or
-        std.mem.eql(u8, rel_path, "devtools/constraints/rules/alias_paths.zig") or
-        std.mem.eql(u8, rel_path, "devtools/constraints/rules/import_usage.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/usage.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/ownership.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/project.zig") or
@@ -131,7 +122,7 @@ test "prefix exclusions suppress otherwise matching rules" {
     const rule = model.AuditRule{
         .id = "AR-TEST-002",
         .title = "prefix exclusion rule",
-        .kind = .required_import_path_fragment_for_symbol_use,
+        .kind = .owned_symbol_usage,
         .scope = .{ .prefix = "src/runtime/" },
         .needle = "runtime_args.zig",
         .symbol_name = "runtimeArgCount",

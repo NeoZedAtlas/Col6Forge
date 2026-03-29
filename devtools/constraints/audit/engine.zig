@@ -98,16 +98,6 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
-        .required_import_path_fragment_for_symbol_use => {
-            const fragment = rule.needle orelse return error.AuditRuleMissingNeedle;
-            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
-            if (symbol_index.findFunctionCall(symbol_name)) |idx| {
-                if (!imports.hasLiteralContaining(text, fragment)) {
-                    reportViolation(rel_path, idx, text, rule.id, rule.title, fragment);
-                    failures.* += 1;
-                }
-            }
-        },
         .forbidden_function_call => {
             const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
             if (symbol_index.findFunctionCall(symbol_name)) |idx| {
@@ -115,22 +105,7 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
-        .required_function_call_path => {
-            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
-            const required_path = rule.call_path orelse return error.AuditRuleMissingCallPath;
-            if (symbol_index.findFunctionCallOutsidePath(symbol_name, required_path)) |idx| {
-                reportViolation(rel_path, idx, text, rule.id, rule.title, required_path);
-                failures.* += 1;
-            }
-        },
-        .required_symbol_alias_path => {
-            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
-            const required_path = rule.call_path orelse return error.AuditRuleMissingCallPath;
-            if (symbol_index.findAliasOutsidePath(symbol_name, required_path)) |idx| {
-                reportViolation(rel_path, idx, text, rule.id, rule.title, required_path);
-                failures.* += 1;
-            }
-        },
+        .owned_symbol_usage => try applyOwnedSymbolUsage(rule, rel_path, text, symbol_index, failures),
         .forbidden_member_access_path => {
             const needle = rule.needle orelse return error.AuditRuleMissingNeedle;
             if (symbol_index.findMemberAccessPath(needle)) |idx| {
@@ -150,6 +125,40 @@ fn applyFileRule(
         },
         .bare_error_code_literal => scanBareErrorCodeLiterals(rule, rel_path, text, failures),
         .error_catalog_consistency => return error.InvalidFileRuleKind,
+    }
+}
+
+fn applyOwnedSymbolUsage(
+    rule: model.AuditRule,
+    rel_path: []const u8,
+    text: []const u8,
+    symbol_index: symbols.Index,
+    failures: *usize,
+) !void {
+    const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
+    const first_use_idx = symbol_index.findFirstSymbolUse(symbol_name) orelse return;
+
+    if (rule.needle) |fragment| {
+        if (!imports.hasLiteralContaining(text, fragment)) {
+            reportViolation(rel_path, first_use_idx, text, rule.id, rule.title, fragment);
+            failures.* += 1;
+            return;
+        }
+    }
+
+    if (rule.call_path) |required_call_path| {
+        if (symbol_index.findFunctionCallOutsidePath(symbol_name, required_call_path)) |idx| {
+            reportViolation(rel_path, idx, text, rule.id, rule.title, required_call_path);
+            failures.* += 1;
+            return;
+        }
+    }
+
+    if (rule.alias_path) |required_alias_path| {
+        if (symbol_index.findAliasOutsidePath(symbol_name, required_alias_path)) |idx| {
+            reportViolation(rel_path, idx, text, rule.id, rule.title, required_alias_path);
+            failures.* += 1;
+        }
     }
 }
 
