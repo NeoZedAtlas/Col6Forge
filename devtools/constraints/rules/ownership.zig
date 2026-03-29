@@ -41,6 +41,16 @@ const common_specs = [_]OwnerSpec{
     },
 };
 
+const frontend_specs = [_]OwnerSpec{
+    .{
+        .id = "AR-OWN-029",
+        .title = "parser end-keyword helper owner",
+        .symbol_name = "isEndKeywordLine",
+        .definition_kind = .function,
+        .owner_exact_path = "src/frontend/parser/stmt/helpers.zig",
+    },
+};
+
 const codegen_type_specs = [_]OwnerSpec{
     .{
         .id = "AR-OWN-002",
@@ -245,6 +255,7 @@ const runtime_text_specs = [_]OwnerSpec{
 };
 
 const common_rules = buildOwnerRules(.{ .domain = .common }, common_specs[0..]);
+const frontend_rules = buildOwnerRules(.{ .domain = .frontend }, frontend_specs[0..]);
 const codegen_type_rules = buildOwnerRules(.{ .domain = .codegen }, codegen_type_specs[0..]);
 const semantic_rules = buildOwnerRules(.{ .domain = .semantic }, semantic_specs[0..]);
 const implied_helper_rules = buildOwnerRules(.{ .domain = .codegen }, implied_helper_specs[0..]);
@@ -255,6 +266,7 @@ const runtime_text_rules = buildOwnerRules(.{ .domain = .runtime }, runtime_text
 
 pub const file_rules =
     common_rules ++
+    frontend_rules ++
     codegen_type_rules ++
     semantic_rules ++
     implied_helper_rules ++
