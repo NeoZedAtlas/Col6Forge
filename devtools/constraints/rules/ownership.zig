@@ -32,6 +32,13 @@ const common_specs = [_]OwnerSpec{
         .definition_kind = .type_struct,
         .owner_exact_path = "src/common/case_insensitive.zig",
     },
+    .{
+        .id = "AR-OWN-027",
+        .title = "procedure pass argument index helper owner",
+        .symbol_name = "procedurePassArgIndex",
+        .definition_kind = .function,
+        .owner_exact_path = "src/common/procedure_pass.zig",
+    },
 };
 
 const codegen_type_specs = [_]OwnerSpec{
