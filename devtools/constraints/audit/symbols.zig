@@ -10,19 +10,36 @@ pub const FunctionDefinition = struct {
     start_idx: usize,
 };
 
+pub const MemberAccess = struct {
+    path: []const u8,
+    start_idx: usize,
+};
+
 pub const Index = struct {
     function_calls: std.ArrayListUnmanaged(FunctionCall) = .{},
     function_definitions: std.ArrayListUnmanaged(FunctionDefinition) = .{},
+    member_accesses: std.ArrayListUnmanaged(MemberAccess) = .{},
+    owned_strings: std.ArrayListUnmanaged([]u8) = .{},
 
     pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
         self.function_calls.deinit(allocator);
         self.function_definitions.deinit(allocator);
+        self.member_accesses.deinit(allocator);
+        for (self.owned_strings.items) |value| allocator.free(value);
+        self.owned_strings.deinit(allocator);
         self.* = .{};
     }
 
     pub fn findFunctionCall(self: Index, symbol_name: []const u8) ?usize {
         for (self.function_calls.items) |call| {
             if (std.mem.eql(u8, call.name, symbol_name)) return call.start_idx;
+        }
+        return null;
+    }
+
+    pub fn findMemberAccessPath(self: Index, needle: []const u8) ?usize {
+        for (self.member_accesses.items) |access| {
+            if (matchesMemberAccessNeedle(access.path, needle)) return access.start_idx;
         }
         return null;
     }
@@ -59,6 +76,8 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
         while (idx < text.len and isIdentifierContinue(text[idx])) : (idx += 1) {}
         const ident = text[start_idx..idx];
         const next_idx = skipWhitespace(text, idx);
+
+        idx = try maybeAppendMemberAccess(allocator, &out, text, ident, start_idx, idx);
 
         if (std.mem.eql(u8, ident, "pub")) {
             saw_pub = true;
@@ -117,6 +136,53 @@ fn isCallLikeKeyword(ident: []const u8) bool {
         std.mem.eql(u8, ident, "orelse");
 }
 
+fn maybeAppendMemberAccess(
+    allocator: std.mem.Allocator,
+    out: *Index,
+    text: []const u8,
+    head: []const u8,
+    start_idx: usize,
+    cursor_start: usize,
+) !usize {
+    var cursor = cursor_start;
+    var builder = std.ArrayList(u8).empty;
+    defer builder.deinit(allocator);
+
+    var saw_dot = false;
+    try builder.appendSlice(allocator, head);
+
+    while (true) {
+        const dot_idx = skipWhitespace(text, cursor);
+        if (dot_idx >= text.len or text[dot_idx] != '.') break;
+
+        const ident_start = skipWhitespace(text, dot_idx + 1);
+        if (ident_start >= text.len or !isIdentifierStart(text[ident_start])) break;
+
+        var ident_end = ident_start + 1;
+        while (ident_end < text.len and isIdentifierContinue(text[ident_end])) : (ident_end += 1) {}
+
+        saw_dot = true;
+        try builder.append(allocator, '.');
+        try builder.appendSlice(allocator, text[ident_start..ident_end]);
+        cursor = ident_end;
+    }
+
+    if (saw_dot) {
+        const owned = try builder.toOwnedSlice(allocator);
+        try out.owned_strings.append(allocator, owned);
+        try out.member_accesses.append(allocator, .{
+            .path = owned,
+            .start_idx = start_idx,
+        });
+    }
+    return cursor;
+}
+
+fn matchesMemberAccessNeedle(path: []const u8, needle: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, needle)) return false;
+    return path.len == needle.len or path[needle.len] == '.';
+}
+
 fn skipQuotedLiteral(text: []const u8, start: usize) usize {
     const quote = text[start];
     var idx = start + 1;
@@ -141,6 +207,7 @@ test "builds function definition and call index" {
     try std.testing.expect(index.findFunctionCall("helper") != null);
     try std.testing.expect(index.findFunctionCall("legacy") != null);
     try std.testing.expect(index.findFunctionCall("if") == null);
+    try std.testing.expect(index.findMemberAccessPath("mod.legacy") != null);
 }
 
 test "ignores comments and string literals" {
@@ -154,4 +221,17 @@ test "ignores comments and string literals" {
     try std.testing.expect(index.findFunctionCall("emitWriteFormatted") == null);
     try std.testing.expect(index.findFunctionCall("emitReadFormatted") == null);
     try std.testing.expect(index.findFunctionCall("realCall") != null);
+}
+
+test "indexes member access chains with boundary-aware matching" {
+    const text =
+        "const x = sym.compat.type_kind;\n" ++
+        "const y = sym.char_len_kind;\n";
+    var index = try buildIndex(std.testing.allocator, text);
+    defer index.deinit(std.testing.allocator);
+
+    try std.testing.expect(index.findMemberAccessPath("sym.compat") != null);
+    try std.testing.expect(index.findMemberAccessPath("sym.compat.type_kind") != null);
+    try std.testing.expect(index.findMemberAccessPath("sym.char_len") == null);
+    try std.testing.expect(index.findMemberAccessPath("sym.char_len_kind") != null);
 }

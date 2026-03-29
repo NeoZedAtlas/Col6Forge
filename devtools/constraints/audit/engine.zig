@@ -105,6 +105,13 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
+        .forbidden_member_access_path => {
+            const needle = rule.needle orelse return error.AuditRuleMissingNeedle;
+            if (symbol_index.findMemberAccessPath(needle)) |idx| {
+                reportViolation(rel_path, idx, text, rule.id, rule.title, needle);
+                failures.* += 1;
+            }
+        },
         .owned_symbol_definition => {
             const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
             const owner_path = rule.owner_exact_path orelse return error.AuditRuleMissingOwnerPath;

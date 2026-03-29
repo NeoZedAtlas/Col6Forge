@@ -33,7 +33,7 @@ pub fn validateRules() !void {
 fn validateRule(rule: model.AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
-        .forbidden_text, .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
+        .forbidden_text, .forbidden_import_path_fragment, .forbidden_member_access_path => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
         .forbidden_function_call => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;

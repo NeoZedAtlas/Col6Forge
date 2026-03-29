@@ -16,6 +16,7 @@ pub const RuleKind = enum {
     forbidden_text,
     forbidden_import_path_fragment,
     forbidden_function_call,
+    forbidden_member_access_path,
     owned_symbol_definition,
     bare_error_code_literal,
     error_catalog_consistency,
