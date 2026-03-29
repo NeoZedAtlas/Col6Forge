@@ -4,7 +4,9 @@ const rules = @import("rules/mod.zig");
 
 pub const file_rules =
     rules.text.file_rules ++
-    rules.calls.file_rules ++
+    rules.legacy_calls.file_rules ++
+    rules.call_paths.file_rules ++
+    rules.import_usage.file_rules ++
     rules.imports.file_rules ++
     rules.ownership.file_rules;
 
@@ -70,7 +72,9 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
         std.mem.eql(u8, rel_path, "devtools/constraints/model.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/registry.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/text.zig") or
-        std.mem.eql(u8, rel_path, "devtools/constraints/rules/calls.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/legacy_calls.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/call_paths.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/import_usage.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/ownership.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/project.zig") or
@@ -114,6 +118,20 @@ test "domain-scoped rule only applies inside its source domain" {
     };
     try std.testing.expect(ruleAppliesToFile(rule, "src/semantic/a.zig", .semantic));
     try std.testing.expect(!ruleAppliesToFile(rule, "src/codegen/a.zig", .codegen));
+}
+
+test "prefix exclusions suppress otherwise matching rules" {
+    const rule = model.AuditRule{
+        .id = "AR-TEST-002",
+        .title = "prefix exclusion rule",
+        .kind = .required_import_path_fragment_for_symbol_use,
+        .scope = .{ .prefix = "src/runtime/" },
+        .needle = "runtime_args.zig",
+        .symbol_name = "runtimeArgCount",
+        .excluded_path_prefixes = &.{"src/runtime/facade/"},
+    };
+    try std.testing.expect(ruleAppliesToFile(rule, "src/runtime/core/a.zig", .runtime));
+    try std.testing.expect(!ruleAppliesToFile(rule, "src/runtime/facade/a.zig", .runtime));
 }
 
 test "registry validates" {
