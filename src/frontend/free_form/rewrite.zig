@@ -59,17 +59,9 @@ pub fn rewriteAndAppend(
         const right = std.mem.trim(u8, stmt.text[dcolon + 2 ..], " \t");
         const left_compact = try predicates.compactUpper(allocator, left);
         defer allocator.free(left_compact);
-        if (std.mem.indexOf(u8, left_compact, ",PARAMETER")) |param_idx_compact| {
-            var param_idx: usize = left.len;
-            var seen: usize = 0;
-            var i: usize = 0;
-            while (i < left.len and seen < param_idx_compact) : (i += 1) {
-                if (left[i] == ' ' or left[i] == '\t') continue;
-                seen += 1;
-                param_idx = i + 1;
-            }
-            while (param_idx > 0 and (left[param_idx - 1] == ' ' or left[param_idx - 1] == '\t')) : (param_idx -= 1) {}
-            const type_spec = std.mem.trim(u8, left[0..param_idx], " \t");
+        if (std.mem.indexOf(u8, left_compact, ",PARAMETER") != null) {
+            const type_spec = try removeParameterAttribute(allocator, left);
+            defer allocator.free(type_spec);
             const mapped = try parameters.mapTypeSpec(allocator, type_spec, kind_state.*);
             defer allocator.free(mapped);
             const simplified = try parameters.simplifyParameterAssigns(allocator, right, kind_state.*);
@@ -147,4 +139,29 @@ pub fn rewriteAndAppend(
     }
 
     try mapped_text.appendMappedLogicalLine(list, try mapped_text.dupMappedText(allocator, stmt), start_line, end_line);
+}
+
+fn removeParameterAttribute(allocator: std.mem.Allocator, left: []const u8) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+
+    var rest = left;
+    var emitted_any = false;
+    while (true) {
+        const next_idx = predicates.indexOfTopLevelScalar(rest, ',') orelse rest.len;
+        const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+        if (seg.len != 0) {
+            const compact = try predicates.compactUpper(allocator, seg);
+            defer allocator.free(compact);
+            if (!std.mem.eql(u8, compact, "PARAMETER")) {
+                if (emitted_any) try out.appendSlice(", ");
+                try out.appendSlice(seg);
+                emitted_any = true;
+            }
+        }
+        if (next_idx == rest.len) break;
+        rest = rest[next_idx + 1 ..];
+    }
+
+    return out.toOwnedSlice();
 }

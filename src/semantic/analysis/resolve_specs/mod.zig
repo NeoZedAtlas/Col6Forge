@@ -131,6 +131,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 var sym = &self.symbols.items[idx];
                 sym.kind = .parameter;
                 sym.storage = .local;
+                if (sym.dims.len != 0) continue;
                 const assigned_value = check_const.checkParameterAssign(self, assign) catch |err| {
                     if (err == error.ParameterNotConstant) {
                         setParameterNotConstantDiagnostic(self, assign.name);

@@ -135,6 +135,19 @@ test "normalizeFreeForm preserves DIMENSION attribute for scalar PARAMETER rewri
     try testing.expectEqualStrings("PARAMETER (info_original = 1)", lines[1].text);
 }
 
+test "normalizeFreeForm preserves DIMENSION attribute when PARAMETER appears before it" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer, parameter, dimension(ncases) :: info_original = 1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, src_text);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("INTEGER, dimension(ncases) info_original", lines[0].text);
+    try testing.expectEqualStrings("PARAMETER (info_original = 1)", lines[1].text);
+}
+
 test "normalizeFreeForm does not infer WP kind from unrelated module use" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -187,6 +200,19 @@ test "normalizeFreeForm preserves modern PARAMETER declarations with declarator 
 
     try testing.expectEqual(@as(usize, 1), lines.len);
     try testing.expectEqualStrings("integer, parameter :: c_index(8) = unpack([1,2],[.true.,.false.],0)", lines[0].text);
+}
+
+test "normalizeFreeForm preserves array rank for DIMENSION attribute PARAMETER reshape rewrite" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer, parameter, dimension(nx,ny,nz) :: p = reshape((/ (i**2, i=1,size(p)) /), shape(p))\n";
+    const lines = try free_form.normalizeFreeForm(allocator, src_text);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("INTEGER, dimension(nx,ny,nz) p", lines[0].text);
+    try testing.expectEqualStrings("PARAMETER (p = reshape((/ (i**2, i=1,size(p)) /), shape(p)))", lines[1].text);
 }
 
 test "normalizeFreeForm preserves modern PARAMETER declarations with declarator suffix and array constructor init" {

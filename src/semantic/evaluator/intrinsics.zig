@@ -23,6 +23,7 @@ const ConstCallKind = enum {
     selected_real_kind,
     selected_int_kind,
     selected_char_kind,
+    same_type_as,
     kind,
     bit_size,
     storage_size,
@@ -33,6 +34,7 @@ const ConstCallKind = enum {
     ceiling,
     int,
     size,
+    extends_type_of,
 };
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
@@ -53,6 +55,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "SELECTED_REAL_KIND", .selected_real_kind },
     .{ "SELECTED_INT_KIND", .selected_int_kind },
     .{ "SELECTED_CHAR_KIND", .selected_char_kind },
+    .{ "SAME_TYPE_AS", .same_type_as },
     .{ "KIND", .kind },
     .{ "BIT_SIZE", .bit_size },
     .{ "STORAGE_SIZE", .storage_size },
@@ -64,6 +67,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "CEILING", .ceiling },
     .{ "INT", .int },
     .{ "SIZE", .size },
+    .{ "EXTENDS_TYPE_OF", .extends_type_of },
 });
 
 pub fn evalConstCall(
@@ -182,6 +186,13 @@ pub fn evalConstCall(
             };
             return .{ .integer = selectedCharKind(text) };
         },
+        .same_type_as => {
+            if (call.args.len != 2) return null;
+            const res = resolver orelse return null;
+            const lhs = res.exprTypeSpec(call.args[0]) orelse return null;
+            const rhs = res.exprTypeSpec(call.args[1]) orelse return null;
+            return .{ .logical = evalConstSameTypeAs(call.args[0], lhs, call.args[1], rhs, res) orelse return null };
+        },
         .kind => {
             if (call.args.len != 1) return null;
             return .{ .integer = (try evalConstKind(call.args[0], resolver, eval_const_fn)) orelse return null };
@@ -237,6 +248,13 @@ pub fn evalConstCall(
                 };
             } else null;
             return .{ .integer = res.arrayExtent(name, dim) orelse return null };
+        },
+        .extends_type_of => {
+            if (call.args.len != 2) return null;
+            const res = resolver orelse return null;
+            const lhs = res.exprTypeSpec(call.args[0]) orelse return null;
+            const rhs = res.exprTypeSpec(call.args[1]) orelse return null;
+            return .{ .logical = evalConstExtendsTypeOf(call.args[0], lhs, call.args[1], rhs, res) orelse return null };
         },
     }
 }
@@ -324,6 +342,68 @@ fn selectedCharKind(selector: []const u8) i64 {
     if (std.ascii.eqlIgnoreCase(trimmed, "default")) return 1;
     if (std.ascii.eqlIgnoreCase(trimmed, "iso_10646")) return 4;
     return -1;
+}
+
+fn evalConstSameTypeAs(
+    lhs_expr: *const ast.Expr,
+    lhs: symbols.TypeSpec,
+    rhs_expr: *const ast.Expr,
+    rhs: symbols.TypeSpec,
+    resolver: evaluator.ConstResolver,
+) ?bool {
+    _ = resolver;
+    if (@intFromPtr(lhs_expr) == @intFromPtr(rhs_expr)) return true;
+    if (lhs.lowered_kind != rhs.lowered_kind) return false;
+    if (lhs.polymorphic or rhs.polymorphic) return null;
+    return typeSpecsExactlyMatch(lhs, rhs);
+}
+
+fn evalConstExtendsTypeOf(
+    lhs_expr: *const ast.Expr,
+    lhs: symbols.TypeSpec,
+    rhs_expr: *const ast.Expr,
+    rhs: symbols.TypeSpec,
+    resolver: evaluator.ConstResolver,
+) ?bool {
+    if (@intFromPtr(lhs_expr) == @intFromPtr(rhs_expr)) return true;
+    if (lhs.lowered_kind != .derived or rhs.lowered_kind != .derived) {
+        if (lhs.polymorphic or rhs.polymorphic) return null;
+        return typeSpecsExactlyMatch(lhs, rhs);
+    }
+
+    const lhs_name = lhs.derived_type_name orelse return null;
+    const rhs_name = rhs.derived_type_name orelse return null;
+
+    if (!lhs.polymorphic and !rhs.polymorphic) {
+        return resolver.derivedExtends(lhs_name, rhs_name);
+    }
+
+    if (lhs.polymorphic and rhs.polymorphic) {
+        if (!resolver.derivedExtends(lhs_name, rhs_name) and !resolver.derivedExtends(rhs_name, lhs_name)) return false;
+        return null;
+    }
+
+    if (lhs.polymorphic) {
+        if (resolver.derivedExtends(lhs_name, rhs_name)) return true;
+        if (!resolver.derivedExtends(rhs_name, lhs_name)) return false;
+        return null;
+    }
+
+    if (!resolver.derivedExtends(lhs_name, rhs_name)) return false;
+    return null;
+}
+
+fn typeSpecsExactlyMatch(lhs: symbols.TypeSpec, rhs: symbols.TypeSpec) bool {
+    if (lhs.lowered_kind != rhs.lowered_kind) return false;
+    if (lhs.kind_value != rhs.kind_value) return false;
+    if (lhs.char_len_kind != rhs.char_len_kind) return false;
+    if (lhs.char_len != rhs.char_len) return false;
+    if (lhs.polymorphic != rhs.polymorphic) return false;
+    if (lhs.lowered_kind != .derived) return true;
+    if (lhs.derived_type_name == null or rhs.derived_type_name == null) {
+        return lhs.derived_type_name == null and rhs.derived_type_name == null;
+    }
+    return std.ascii.eqlIgnoreCase(lhs.derived_type_name.?, rhs.derived_type_name.?);
 }
 
 fn evalConstExprMeasure(

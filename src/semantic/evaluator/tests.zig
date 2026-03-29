@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const evaluator = @import("mod.zig");
+const symbols = @import("../symbol/mod.zig");
 
 const ConstResolver = evaluator.ConstResolver;
 const evalConst = evaluator.evalConst;
@@ -31,6 +32,29 @@ fn testMeasureExpr(_: *anyopaque, expr: *const ast.Expr, measure: evaluator.Expr
             else => null,
         },
     };
+}
+
+fn testExprTypeSpec(_: *anyopaque, expr: *const ast.Expr) ?symbols.TypeSpec {
+    return switch (expr.*) {
+        .identifier => |name| {
+            if (std.ascii.eqlIgnoreCase(name, "a1")) return symbols.TypeSpec.fromDerived("t1");
+            if (std.ascii.eqlIgnoreCase(name, "a11")) return symbols.TypeSpec.fromDerived("t11");
+            if (std.ascii.eqlIgnoreCase(name, "a2")) return symbols.TypeSpec.fromDerived("t2");
+            if (std.ascii.eqlIgnoreCase(name, "b1")) return symbols.TypeSpec.fromDerived("t1").withPolymorphic(true);
+            if (std.ascii.eqlIgnoreCase(name, "b11")) return symbols.TypeSpec.fromDerived("t11").withPolymorphic(true);
+            if (std.ascii.eqlIgnoreCase(name, "b2")) return symbols.TypeSpec.fromDerived("t2").withPolymorphic(true);
+            return null;
+        },
+        else => null,
+    };
+}
+
+fn testDerivedExtends(_: *anyopaque, candidate: []const u8, base: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(candidate, base)) return true;
+    if (std.ascii.eqlIgnoreCase(candidate, "t11") and std.ascii.eqlIgnoreCase(base, "t1")) return true;
+    if (std.ascii.eqlIgnoreCase(candidate, "t111") and std.ascii.eqlIgnoreCase(base, "t11")) return true;
+    if (std.ascii.eqlIgnoreCase(candidate, "t111") and std.ascii.eqlIgnoreCase(base, "t1")) return true;
+    return false;
 }
 
 test "const call dispatch recognizes DATAN alias" {
@@ -397,6 +421,53 @@ test "evalConst decodes doubled-quote string when allocator is provided" {
     const value = (try evalConst(&expr, resolver)) orelse return error.TestExpectedEqual;
     switch (value) {
         .string => |bytes| try testing.expectEqualStrings("A'B", bytes),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch folds SAME_TYPE_AS and EXTENDS_TYPE_OF when static types are sufficient" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var sentinel: u8 = 0;
+
+    const same_lhs = try a.create(ast.Expr);
+    same_lhs.* = .{ .identifier = "a11" };
+    const same_rhs = try a.create(ast.Expr);
+    same_rhs.* = .{ .identifier = "a1" };
+    const same_args = try a.alloc(*ast.Expr, 2);
+    same_args[0] = same_lhs;
+    same_args[1] = same_rhs;
+    const same_call = try a.create(ast.Expr);
+    same_call.* = .{ .call_or_subscript = .{ .name = "same_type_as", .args = same_args } };
+
+    const extends_lhs = try a.create(ast.Expr);
+    extends_lhs.* = .{ .identifier = "b11" };
+    const extends_rhs = try a.create(ast.Expr);
+    extends_rhs.* = .{ .identifier = "a1" };
+    const extends_args = try a.alloc(*ast.Expr, 2);
+    extends_args[0] = extends_lhs;
+    extends_args[1] = extends_rhs;
+    const extends_call = try a.create(ast.Expr);
+    extends_call.* = .{ .call_or_subscript = .{ .name = "extends_type_of", .args = extends_args } };
+
+    const resolver = ConstResolver{
+        .ctx = &sentinel,
+        .resolveFn = nullResolveConst,
+        .exprTypeSpecFn = testExprTypeSpec,
+        .derivedExtendsFn = testDerivedExtends,
+    };
+
+    const same_value = (try evalConst(same_call, resolver)) orelse return error.TestExpectedEqual;
+    switch (same_value) {
+        .logical => |v| try testing.expect(!v),
+        else => return error.TestExpectedEqual,
+    }
+
+    const extends_value = (try evalConst(extends_call, resolver)) orelse return error.TestExpectedEqual;
+    switch (extends_value) {
+        .logical => |v| try testing.expect(v),
         else => return error.TestExpectedEqual,
     }
 }

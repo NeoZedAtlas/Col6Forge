@@ -16,8 +16,10 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "ALL", .logical },
     .{ "ALLOCATED", .logical },
     .{ "ASSOCIATED", .logical },
+    .{ "EXTENDS_TYPE_OF", .logical },
     .{ "LOGICAL", .logical },
     .{ "PRESENT", .logical },
+    .{ "SAME_TYPE_AS", .logical },
     .{ "KIND", .integer },
     .{ "INT", .integer },
     .{ "IFIX", .integer },
@@ -91,7 +93,6 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
 
 const IntrinsicSameArgMap = std.StaticStringMap(void).initComptime(.{
     .{ "SQRT", {} },
-    .{ "SUM", {} },
     .{ "EXP", {} },
     .{ "ALOG", {} },
     .{ "ALOG10", {} },
@@ -146,6 +147,11 @@ pub fn inferResultType(
     }
 
     if (std.mem.eql(u8, upper, "RESHAPE")) {
+        if (args.len == 0) return current;
+        return args[0];
+    }
+
+    if (std.mem.eql(u8, upper, "SUM")) {
         if (args.len == 0) return current;
         return args[0];
     }
@@ -318,4 +324,21 @@ test "inferResultType uses mold argument type for TRANSFER" {
 
     try testing.expectEqual(ast.TypeKind.derived, inferred.lowered_kind);
     try testing.expectEqualStrings("c_ptr", inferred.derived_type_name.?);
+}
+
+test "inferResultType keeps SUM element type and type inquiry intrinsics return LOGICAL" {
+    const testing = std.testing;
+
+    const int_arg = symbols.TypeSpec.fromResolvedKind(.integer, .integer, 4);
+    const derived_arg = symbols.TypeSpec.fromDerived("t");
+
+    const sum_result = try inferResultType("SUM", fixedTypeSpec(.real), &.{ int_arg });
+    try testing.expectEqual(ast.TypeKind.integer, sum_result.lowered_kind);
+    try testing.expectEqual(@as(?i64, 4), sum_result.kind_value);
+
+    const same_result = try inferResultType("SAME_TYPE_AS", fixedTypeSpec(.real), &.{ derived_arg, derived_arg });
+    try testing.expectEqual(ast.TypeKind.logical, same_result.lowered_kind);
+
+    const extends_result = try inferResultType("EXTENDS_TYPE_OF", fixedTypeSpec(.real), &.{ derived_arg, derived_arg });
+    try testing.expectEqual(ast.TypeKind.logical, extends_result.lowered_kind);
 }

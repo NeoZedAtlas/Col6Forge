@@ -257,8 +257,46 @@ pub fn exprRankForCallOrSubscript(
     const kind: ResolvedRefKind = deps.refKindIndex(self, @intFromPtr(expr_node)) orelse
         (if (sym.dims.len > 0) .subscript else .call);
     if (kind == .subscript) return 0;
-    if (resolvedProcedureSig(self, call.name, false, visibleSingleTargetGenericSig(self, call.name))) |sig| return sig.result_rank;
+    if (resolvedProcedureSig(self, call.name, false, visibleSingleTargetGenericSig(self, call.name))) |sig| {
+        if (sym.is_intrinsic or symbols_mod.isIntrinsicName(call.name)) {
+            if (intrinsicResultRank(self, call.name, call.args, deps)) |rank| return rank;
+        }
+        if (sig.elemental and sig.result_rank == 0) {
+            return elementalActualRank(self, call.args, deps);
+        }
+        return sig.result_rank;
+    }
     return sym.dims.len;
+}
+
+fn intrinsicResultRank(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) ?usize {
+    var upper_buf: [64]u8 = undefined;
+    if (name.len > upper_buf.len) return null;
+    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+    const upper = upper_buf[0..name.len];
+
+    if (std.mem.eql(u8, upper, "SUM")) {
+        if (args.len == 0) return 0;
+        const array_rank = deps.exprRank(self, args[0]);
+        if (args.len >= 2) return array_rank -| 1;
+        return 0;
+    }
+    return null;
+}
+
+fn elementalActualRank(
+    self: *context.Context,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) usize {
+    var rank: usize = 0;
+    for (args) |arg| rank = @max(rank, deps.exprRank(self, arg));
+    return rank;
 }
 
 pub fn exprRankForComponent(

@@ -1802,6 +1802,138 @@ test "parity and norm2 DIM arguments must stay scalar" {
     try testing.expect(std.mem.indexOf(u8, second.message, "must be a scalar") != null);
 }
 
+test "free-form rewritten array PARAMETER keeps array shape on PARAMETER statement lane" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer, parameter :: nx = 2, ny = 3\n" ++
+        "  integer, parameter, dimension(nx,ny) :: a = reshape((/(i, i=1,size(a))/), shape(a))\n" ++
+        "  print *, a(1,1)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = try split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag);
+    try testing.expect(!diag_bag.has());
+}
+
+test "elemental scalar dummy accepts array actual and SUM DIM result keeps reduced rank" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer :: a(2,3,4)\n" ++
+        "  integer :: r(2,4)\n" ++
+        "  r = sum(eid(a), 2)\n" ++
+        "contains\n" ++
+        "  elemental integer function eid(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "    eid = x\n" ++
+        "  end function eid\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "SUM DIM result may flow into rank-matching array dummy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer :: a(2,3,4)\n" ++
+        "  integer :: y(2,4)\n" ++
+        "  y = neid2(sum(a, 2))\n" ++
+        "contains\n" ++
+        "  function neid2(x)\n" ++
+        "    integer, intent(in) :: x(:,:)\n" ++
+        "    integer :: neid2(size(x,1), size(x,2))\n" ++
+        "    neid2 = x\n" ++
+        "  end function neid2\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "combined elemental and non-elemental calls accept SUM DIM array result inside larger expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer :: a(3,4,5)\n" ++
+        "  integer :: ay(3,5)\n" ++
+        "  if (any(1 + eid(sum(a,2)) + ay + neid2(sum(a,2)) + 1 /= 3*ay + 2)) stop 1\n" ++
+        "contains\n" ++
+        "  elemental function eid(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "    integer :: eid\n" ++
+        "    eid = x\n" ++
+        "  end function eid\n" ++
+        "  function neid2(x)\n" ++
+        "    integer, intent(in) :: x(:,:)\n" ++
+        "    integer :: neid2(size(x,1), size(x,2))\n" ++
+        "    neid2 = x\n" ++
+        "  end function neid2\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "array sections remain definable actuals for elemental INTENT OUT dummy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer :: b(3,2)\n" ++
+        "  call set(b(2:,1), [1,2])\n" ++
+        "  call set(b(:,1), [1,2,3])\n" ++
+        "contains\n" ++
+        "  elemental subroutine set(o, i)\n" ++
+        "    integer, intent(out) :: o\n" ++
+        "    integer, intent(in) :: i\n" ++
+        "    o = i\n" ++
+        "  end subroutine set\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "allow argument mismatch suppresses implicit external hard errors across contained procedures" {
     const testing = std.testing;
     const allocator = testing.allocator;

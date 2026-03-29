@@ -323,10 +323,45 @@ fn shapeIntrinsicSubject(expr_node: *Expr) ?*Expr {
 fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?WholeArrayView {
     return switch (expr_node.*) {
         .identifier => |name| wholeArraySymbolView(ctx, name),
-        .call_or_subscript => |call| wholeArraySectionView(ctx, call),
+        .call_or_subscript => |call| blk: {
+            if (wholeArraySectionView(ctx, call)) |view| break :blk view;
+            if (std.ascii.eqlIgnoreCase(call.name, "sum")) {
+                if (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) |actual| {
+                    const count = staticSumDimResultCount(ctx, call) orelse break :blk null;
+                    break :blk .{
+                        .base_ptr = actual.base_ptr,
+                        .elem_ty = actual.elem_ty,
+                        .count = count,
+                    };
+                }
+            }
+            break :blk null;
+        },
         .component => |comp| wholeProjectedComponentView(ctx, builder, comp),
         else => null,
     };
+}
+
+fn staticSumDimResultCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    if (!std.ascii.eqlIgnoreCase(call.name, "sum")) return null;
+    if (call.args.len < 2) return null;
+    const dim_value = evalConstIntArg(ctx, call.args[1]) orelse return null;
+    if (dim_value <= 0) return null;
+    const reduce_idx: usize = @intCast(dim_value - 1);
+    const source_name = switch (call.args[0].*) {
+        .identifier => |name| name,
+        else => return null,
+    };
+    const sym = ctx.findSymbol(source_name) orelse return null;
+    if (reduce_idx >= sym.dims.len) return null;
+    var total: usize = 1;
+    for (sym.dims, 0..) |dim, idx| {
+        if (idx == reduce_idx) continue;
+        var one_dim = [_]*ast.Expr{@constCast(dim)};
+        const extent = common.arrayElementCount(ctx.sem, one_dim[0..]) catch return null;
+        total = std.math.mul(usize, total, extent) catch return null;
+    }
+    return total;
 }
 
 fn wholeArraySymbolView(ctx: *Context, name: []const u8) ?WholeArrayView {

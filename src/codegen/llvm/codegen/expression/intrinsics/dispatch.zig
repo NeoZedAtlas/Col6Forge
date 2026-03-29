@@ -4,6 +4,7 @@ const utils = @import("../../utils.zig");
 const casting = @import("../casting.zig");
 const call = @import("../call/mod.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const resolution = @import("../dispatch/resolution.zig");
 const shared = @import("shared.zig");
 const numeric = @import("numeric.zig");
 const libm = @import("libm.zig");
@@ -170,7 +171,9 @@ const IntrinsicTag = enum {
     internal_literal_substring,
     allocated,
     associated,
+    extends_type_of,
     present,
+    same_type_as,
     transfer,
     c_loc,
     c_funloc,
@@ -275,7 +278,9 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "__col6forge_substring", .internal_literal_substring },
     .{ "allocated", .allocated },
     .{ "associated", .associated },
+    .{ "extends_type_of", .extends_type_of },
     .{ "present", .present },
+    .{ "same_type_as", .same_type_as },
     .{ "transfer", .transfer },
     .{ "c_loc", .c_loc },
     .{ "c_funloc", .c_funloc },
@@ -411,7 +416,9 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .internal_literal_substring => return emitIntrinsicInternalLiteralSubstring(ctx, builder, args),
         .allocated => return emitIntrinsicAllocated(args),
         .associated => return emitIntrinsicAllocated(args),
+        .extends_type_of => return emitDeclaredLogicalIntrinsicCall(ctx, builder, name, args),
         .present => return emitIntrinsicAllocated(args),
+        .same_type_as => return emitDeclaredLogicalIntrinsicCall(ctx, builder, name, args),
         .transfer => return emitIntrinsicTransfer(ctx, builder, args),
         .c_loc => return emitIntrinsicCLoc(ctx, builder, args),
         .c_funloc => return emitIntrinsicCFunloc(ctx, args),
@@ -421,6 +428,11 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .clog => return emitComplexClog(ctx, builder, args),
         .csqrt => return emitComplexCsqrt(ctx, builder, args),
     }
+}
+
+fn emitDeclaredLogicalIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
+    const fn_name = try resolution.ensureExternalDeclForCall(ctx, name, .i1, args, false);
+    return call.emitCall(ctx, builder, fn_name, .i1, args, false);
 }
 
 fn emitIntrinsicCLoc(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {

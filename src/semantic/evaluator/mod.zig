@@ -19,6 +19,8 @@ pub const ConstResolver = struct {
     internStringFn: ?*const fn (ctx: *anyopaque, text: []const u8) anyerror![]const u8 = null,
     arrayExtentFn: ?*const fn (ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 = null,
     exprMeasureFn: ?*const fn (ctx: *anyopaque, expr: *const ast.Expr, measure: ExprMeasureKind) ?i64 = null,
+    exprTypeSpecFn: ?*const fn (ctx: *anyopaque, expr: *const ast.Expr) ?symbols.TypeSpec = null,
+    derivedExtendsFn: ?*const fn (ctx: *anyopaque, candidate: []const u8, base: []const u8) bool = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
@@ -38,6 +40,16 @@ pub const ConstResolver = struct {
     pub fn exprMeasure(self: ConstResolver, expr: *const ast.Expr, measure: ExprMeasureKind) ?i64 {
         if (self.exprMeasureFn) |measure_fn| return measure_fn(self.ctx, expr, measure);
         return null;
+    }
+
+    pub fn exprTypeSpec(self: ConstResolver, expr: *const ast.Expr) ?symbols.TypeSpec {
+        if (self.exprTypeSpecFn) |type_spec_fn| return type_spec_fn(self.ctx, expr);
+        return null;
+    }
+
+    pub fn derivedExtends(self: ConstResolver, candidate: []const u8, base: []const u8) bool {
+        if (self.derivedExtendsFn) |extends_fn| return extends_fn(self.ctx, candidate, base);
+        return false;
     }
 };
 

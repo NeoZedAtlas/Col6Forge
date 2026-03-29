@@ -73,6 +73,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "DTANH", Arity{ .min = 1, .max = 1 } },
     .{ "EPSILON", Arity{ .min = 1, .max = 1 } },
     .{ "EXP", Arity{ .min = 1, .max = 1 } },
+    .{ "EXTENDS_TYPE_OF", Arity{ .min = 2, .max = 2 } },
     .{ "FLOAT", Arity{ .min = 1, .max = 1 } },
     .{ "HUGE", Arity{ .min = 1, .max = 1 } },
     .{ "IABS", Arity{ .min = 1, .max = 1 } },
@@ -107,12 +108,13 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "SELECTED_CHAR_KIND", Arity{ .min = 1, .max = 1 } },
     .{ "SHAPE", Arity{ .min = 1, .max = 1 } },
     .{ "SIZE", Arity{ .min = 1, .max = 2 } },
+    .{ "SAME_TYPE_AS", Arity{ .min = 2, .max = 2 } },
     .{ "SIGN", Arity{ .min = 2, .max = 2 } },
     .{ "SIN", Arity{ .min = 1, .max = 1 } },
     .{ "SINH", Arity{ .min = 1, .max = 1 } },
     .{ "SNGL", Arity{ .min = 1, .max = 1 } },
     .{ "SQRT", Arity{ .min = 1, .max = 1 } },
-    .{ "SUM", Arity{ .min = 1, .max = 1 } },
+    .{ "SUM", Arity{ .min = 1, .max = 3 } },
     .{ "TAN", Arity{ .min = 1, .max = 1 } },
     .{ "TANH", Arity{ .min = 1, .max = 1 } },
     .{ "TRANSFER", Arity{ .min = 2, .max = 3 } },
@@ -142,6 +144,9 @@ test "intrinsic lookup is case-insensitive" {
     try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 2 }), arity("all"));
     try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 1 }), arity("shape"));
     try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 2 }), arity("real"));
+    try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 3 }), arity("sum"));
+    try testing.expectEqual(@as(?Arity, .{ .min = 2, .max = 2 }), arity("same_type_as"));
+    try testing.expectEqual(@as(?Arity, .{ .min = 2, .max = 2 }), arity("extends_type_of"));
     try testing.expectEqual(@as(?Arity, .{ .min = 0, .max = 1 }), arity("rand"));
     try testing.expectEqual(@as(?Arity, null), arity("not_an_intrinsic"));
 }

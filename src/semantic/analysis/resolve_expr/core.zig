@@ -163,7 +163,10 @@ pub fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
         },
         .array_constructor => 1,
         .call_or_subscript => |call| blk: {
-            break :blk calls.exprRankForCallOrSubscript(self, expr, call, .{ .refKindIndex = refKindIndex });
+            break :blk calls.exprRankForCallOrSubscript(self, expr, call, .{
+                .refKindIndex = refKindIndex,
+                .exprRank = exprRank,
+            });
         },
         .component => |comp| blk: {
             break :blk calls.exprRankForComponent(self, comp, .{ .exprTypeSpec = exprTypeSpec });

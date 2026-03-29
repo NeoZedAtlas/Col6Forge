@@ -1121,10 +1121,13 @@ fn checkDataActualArgCompatibility(
     if ((formal.intent == .out or formal.intent == .inout) and !exprIsVariableDefinitionActual(self, actual_expr)) {
         return emitVariableDefinitionContextDiagnostic(self, callee_name, formal.name, actual_expr);
     }
-    const actual_rank = resolve_expr.exprRank(self, actual_expr);
+    const actual_rank = procedureActualExprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+    }
+    if (formal.rank == 0 and actual_rank > 0 and calleeAllowsElementalArrayActuals(self, callee_name)) {
+        return;
     }
     if (formal.rank == actual_rank) {
         try checkExplicitShapeElementSufficiency(self, formal, actual_expr);
@@ -1141,6 +1144,47 @@ fn checkDataActualArgCompatibility(
         }
     }
     return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
+}
+
+fn calleeAllowsElementalArrayActuals(self: *context.Context, callee_name: ?[]const u8) bool {
+    const name = callee_name orelse return false;
+    const sig = resolvedProcedureSig(self, name) orelse return false;
+    return sig.elemental;
+}
+
+fn procedureActualExprRank(self: *context.Context, expr: *ast.Expr) usize {
+    return switch (expr.*) {
+        .call_or_subscript => |call| procedureActualCallExprRank(self, expr, call),
+        else => resolve_expr.exprRank(self, expr),
+    };
+}
+
+fn procedureActualCallExprRank(
+    self: *context.Context,
+    expr: *ast.Expr,
+    call: ast.CallOrSubscript,
+) usize {
+    if (resolve_symbols.isIntrinsicName(call.name)) {
+        var upper_buf: [64]u8 = undefined;
+        if (call.name.len <= upper_buf.len) {
+            for (call.name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+            const upper = upper_buf[0..call.name.len];
+            if (std.mem.eql(u8, upper, "SUM")) {
+                if (call.args.len == 0) return 0;
+                const array_rank = resolve_expr.exprRank(self, call.args[0]);
+                if (call.args.len >= 2) return array_rank -| 1;
+                return 0;
+            }
+        }
+    }
+    if (resolvedProcedureSig(self, call.name)) |sig| {
+        if (sig.elemental and sig.result_rank == 0) {
+            var rank: usize = 0;
+            for (call.args) |arg| rank = @max(rank, resolve_expr.exprRank(self, arg));
+            return rank;
+        }
+    }
+    return resolve_expr.exprRank(self, expr);
 }
 
 fn checkProcedureDummyCompatibility(
@@ -1611,10 +1655,7 @@ fn exprIsVariableDefinitionActual(self: *context.Context, expr: *ast.Expr) bool 
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false;
             const sym = self.symbols.items[idx];
             if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk false;
-            for (call.args) |arg| {
-                if (arg.* == .dim_range) break :blk false;
-            }
-            break :blk true;
+            break :blk subscriptActualIsVariableDefinition(self, call.args);
         },
         .substring => |sub| blk: {
             if (sub.args.len != 0) {
@@ -1626,6 +1667,33 @@ fn exprIsVariableDefinitionActual(self: *context.Context, expr: *ast.Expr) bool 
         },
         else => false,
     };
+}
+
+fn subscriptActualIsVariableDefinition(self: *context.Context, args: []const *ast.Expr) bool {
+    for (args) |arg| {
+        switch (arg.*) {
+            .dim_range => |range| {
+                if (!tripletIsVariableDefinition(self, range)) return false;
+            },
+            else => {
+                if (resolve_expr.exprRank(self, arg) != 0) return false;
+            },
+        }
+    }
+    return true;
+}
+
+fn tripletIsVariableDefinition(self: *context.Context, range: ast.DimRange) bool {
+    if (range.lower) |lower| {
+        if (resolve_expr.exprRank(self, lower) != 0) return false;
+    }
+    if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+        if (resolve_expr.exprRank(self, range.upper) != 0) return false;
+    }
+    if (range.stride) |stride| {
+        if (resolve_expr.exprRank(self, stride) != 0) return false;
+    }
+    return true;
 }
 
 fn checkImplicitExternalCallConsistencyForCall(

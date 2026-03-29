@@ -25,6 +25,8 @@ fn evalConstUncached(self: *context.Context, expr: *ast.Expr) anyerror!?ConstVal
         .internStringFn = internConstString,
         .arrayExtentFn = resolveArrayExtent,
         .exprMeasureFn = resolveConstExprMeasure,
+        .exprTypeSpecFn = resolveConstExprTypeSpec,
+        .derivedExtendsFn = resolveDerivedTypeExtends,
     };
     return evaluator.evalConst(expr, resolver);
 }
@@ -71,6 +73,16 @@ fn resolveConstExprMeasure(
 ) ?i64 {
     const self: *context.Context = @ptrCast(@alignCast(ctx));
     return constExprMeasure(self, @constCast(expr), measure);
+}
+
+fn resolveConstExprTypeSpec(ctx: *anyopaque, expr: *const ast.Expr) ?symbols.TypeSpec {
+    const self: *context.Context = @ptrCast(@alignCast(ctx));
+    return resolve_expr.exprTypeSpec(self, @constCast(expr)) catch null;
+}
+
+fn resolveDerivedTypeExtends(ctx: *anyopaque, candidate: []const u8, base: []const u8) bool {
+    const self: *context.Context = @ptrCast(@alignCast(ctx));
+    return symbols_mod.isSameOrExtension(self, candidate, base);
 }
 
 fn constExprMeasure(

@@ -1354,6 +1354,43 @@ test "emitModuleToWriter lowers SUM over implied-do array constructor" {
     try testing.expect(std.mem.indexOf(u8, output, "sum_implied_head") != null);
 }
 
+test "emitModuleToWriter lowers SAME_TYPE_AS and EXTENDS_TYPE_OF through external logical declarations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  type t1\n" ++
+        "    integer :: a\n" ++
+        "  end type t1\n" ++
+        "  type, extends(t1) :: t11\n" ++
+        "    integer :: b\n" ++
+        "  end type t11\n" ++
+        "  type(t1) :: a1\n" ++
+        "  class(t11), allocatable :: b11\n" ++
+        "  logical :: same, ext\n" ++
+        "  same = same_type_as(a1, a1)\n" ++
+        "  ext = extends_type_of(b11, a1)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "type_inquiry_intrinsics.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "declare i32 @same_type_as_") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "declare i32 @extends_type_of_") != null);
+}
+
 test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy ABI" {
     const testing = std.testing;
     const allocator = testing.allocator;
