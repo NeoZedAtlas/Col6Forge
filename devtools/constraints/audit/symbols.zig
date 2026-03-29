@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const FunctionCall = struct {
     name: []const u8,
+    path: []const u8,
     start_idx: usize,
 };
 
@@ -33,6 +34,14 @@ pub const Index = struct {
     pub fn findFunctionCall(self: Index, symbol_name: []const u8) ?usize {
         for (self.function_calls.items) |call| {
             if (std.mem.eql(u8, call.name, symbol_name)) return call.start_idx;
+        }
+        return null;
+    }
+
+    pub fn findFunctionCallOutsidePath(self: Index, symbol_name: []const u8, required_path: []const u8) ?usize {
+        for (self.function_calls.items) |call| {
+            if (!std.mem.eql(u8, call.name, symbol_name)) continue;
+            if (!std.mem.eql(u8, call.path, required_path)) return call.start_idx;
         }
         return null;
     }
@@ -75,9 +84,10 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
         idx += 1;
         while (idx < text.len and isIdentifierContinue(text[idx])) : (idx += 1) {}
         const ident = text[start_idx..idx];
-        const next_idx = skipWhitespace(text, idx);
 
-        idx = try maybeAppendMemberAccess(allocator, &out, text, ident, start_idx, idx);
+        const access = try parseAccessPath(allocator, &out, text, ident, start_idx, idx);
+        idx = access.cursor;
+        const next_idx = skipWhitespace(text, idx);
 
         if (std.mem.eql(u8, ident, "pub")) {
             saw_pub = true;
@@ -103,8 +113,10 @@ pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !Index {
         saw_pub = false;
         if (isCallLikeKeyword(ident)) continue;
         if (next_idx < text.len and text[next_idx] == '(') {
+            const call_name = lastPathSegment(access.path);
             try out.function_calls.append(allocator, .{
-                .name = ident,
+                .name = call_name,
+                .path = access.path,
                 .start_idx = start_idx,
             });
         }
@@ -136,14 +148,19 @@ fn isCallLikeKeyword(ident: []const u8) bool {
         std.mem.eql(u8, ident, "orelse");
 }
 
-fn maybeAppendMemberAccess(
+const AccessPath = struct {
+    path: []const u8,
+    cursor: usize,
+};
+
+fn parseAccessPath(
     allocator: std.mem.Allocator,
     out: *Index,
     text: []const u8,
     head: []const u8,
     start_idx: usize,
     cursor_start: usize,
-) !usize {
+) !AccessPath {
     var cursor = cursor_start;
     var builder = std.ArrayList(u8).empty;
     defer builder.deinit(allocator);
@@ -174,13 +191,25 @@ fn maybeAppendMemberAccess(
             .path = owned,
             .start_idx = start_idx,
         });
+        return .{
+            .path = owned,
+            .cursor = cursor,
+        };
     }
-    return cursor;
+    return .{
+        .path = head,
+        .cursor = cursor,
+    };
 }
 
 fn matchesMemberAccessNeedle(path: []const u8, needle: []const u8) bool {
     if (!std.mem.startsWith(u8, path, needle)) return false;
     return path.len == needle.len or path[needle.len] == '.';
+}
+
+fn lastPathSegment(path: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, path, '.') orelse return path;
+    return path[dot + 1 ..];
 }
 
 fn skipQuotedLiteral(text: []const u8, start: usize) usize {
@@ -206,6 +235,7 @@ test "builds function definition and call index" {
     try std.testing.expectEqual(@as(usize, 2), index.function_definitions.items.len);
     try std.testing.expect(index.findFunctionCall("helper") != null);
     try std.testing.expect(index.findFunctionCall("legacy") != null);
+    try std.testing.expect(index.findFunctionCallOutsidePath("legacy", "mod.legacy") == null);
     try std.testing.expect(index.findFunctionCall("if") == null);
     try std.testing.expect(index.findMemberAccessPath("mod.legacy") != null);
 }
@@ -234,4 +264,17 @@ test "indexes member access chains with boundary-aware matching" {
     try std.testing.expect(index.findMemberAccessPath("sym.compat.type_kind") != null);
     try std.testing.expect(index.findMemberAccessPath("sym.char_len") == null);
     try std.testing.expect(index.findMemberAccessPath("sym.char_len_kind") != null);
+}
+
+test "tracks qualified function call paths" {
+    const text =
+        "fn run() void {\n" ++
+        "    shared.runtimeArgCount(arg_count);\n" ++
+        "    runtimeArgCount(arg_count);\n" ++
+        "}\n";
+    var index = try buildIndex(std.testing.allocator, text);
+    defer index.deinit(std.testing.allocator);
+
+    try std.testing.expect(index.findFunctionCallOutsidePath("runtimeArgCount", "shared.runtimeArgCount") != null);
+    try std.testing.expect(index.findFunctionCallOutsidePath("runtimeArgCount", "runtimeArgCount") != null);
 }

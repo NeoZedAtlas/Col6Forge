@@ -105,6 +105,14 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
+        .required_function_call_path => {
+            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
+            const required_path = rule.call_path orelse return error.AuditRuleMissingCallPath;
+            if (symbol_index.findFunctionCallOutsidePath(symbol_name, required_path)) |idx| {
+                reportViolation(rel_path, idx, text, rule.id, rule.title, required_path);
+                failures.* += 1;
+            }
+        },
         .forbidden_member_access_path => {
             const needle = rule.needle orelse return error.AuditRuleMissingNeedle;
             if (symbol_index.findMemberAccessPath(needle)) |idx| {

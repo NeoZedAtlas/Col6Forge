@@ -37,14 +37,24 @@ fn validateRule(rule: model.AuditRule) !void {
         .forbidden_function_call => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+            if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
+        },
+        .required_function_call_path => {
+            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
+            if (rule.call_path == null or rule.call_path.?.len == 0) return error.AuditRuleMissingCallPath;
+            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
         },
         .owned_symbol_definition => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.owner_exact_path == null or rule.owner_exact_path.?.len == 0) return error.AuditRuleMissingOwnerPath;
             if (rule.definition_kind == null) return error.AuditRuleMissingDefinitionKind;
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+            if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
         },
-        .bare_error_code_literal, .error_catalog_consistency => if (rule.needle != null) return error.AuditRuleUnexpectedNeedle,
+        .bare_error_code_literal, .error_catalog_consistency => {
+            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+            if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
+        },
     }
 }
 
