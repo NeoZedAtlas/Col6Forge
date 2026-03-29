@@ -5,6 +5,7 @@ const registry = @import("../registry.zig");
 const declarations = @import("declarations.zig");
 const domains = @import("domains.zig");
 const imports = @import("imports.zig");
+const symbols = @import("symbols.zig");
 
 pub fn run(allocator: std.mem.Allocator, root: []const u8) !usize {
     try registry.validateRules();
@@ -42,7 +43,7 @@ fn scanTree(allocator: std.mem.Allocator, root: []const u8, failures: *usize) !v
         const text = try std.fs.cwd().readFileAlloc(allocator, rel_path, 16 * 1024 * 1024);
         defer allocator.free(text);
 
-        try scanFile(rel_path, domain, text, failures);
+        try scanFile(allocator, rel_path, domain, text, failures);
     }
 }
 
@@ -55,14 +56,18 @@ fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn scanFile(
+    allocator: std.mem.Allocator,
     rel_path: []const u8,
     domain: model.SourceDomain,
     text: []const u8,
     failures: *usize,
 ) !void {
+    var symbol_index = try symbols.buildIndex(allocator, text);
+    defer symbol_index.deinit(allocator);
+
     for (registry.file_rules) |rule| {
         if (!registry.ruleAppliesToFile(rule, rel_path, domain)) continue;
-        try applyFileRule(rule, rel_path, domain, text, failures);
+        try applyFileRule(rule, rel_path, domain, text, symbol_index, failures);
     }
 }
 
@@ -71,6 +76,7 @@ fn applyFileRule(
     rel_path: []const u8,
     domain: model.SourceDomain,
     text: []const u8,
+    symbol_index: symbols.Index,
     failures: *usize,
 ) !void {
     _ = domain;
@@ -89,6 +95,13 @@ fn applyFileRule(
                 cursor = match.next_cursor;
                 if (std.mem.indexOf(u8, match.literal, fragment) == null) continue;
                 reportViolation(rel_path, match.start_idx, text, rule.id, rule.title, match.literal);
+                failures.* += 1;
+            }
+        },
+        .forbidden_function_call => {
+            const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
+            if (symbol_index.findFunctionCall(symbol_name)) |idx| {
+                reportViolation(rel_path, idx, text, rule.id, rule.title, symbol_name);
                 failures.* += 1;
             }
         },

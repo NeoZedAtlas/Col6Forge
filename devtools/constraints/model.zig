@@ -15,6 +15,7 @@ pub const SourceDomain = enum {
 pub const RuleKind = enum {
     forbidden_text,
     forbidden_import_path_fragment,
+    forbidden_function_call,
     owned_symbol_definition,
     bare_error_code_literal,
     error_catalog_consistency,

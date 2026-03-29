@@ -4,6 +4,7 @@ const rules = @import("rules/mod.zig");
 
 pub const file_rules =
     rules.text.file_rules ++
+    rules.calls.file_rules ++
     rules.imports.file_rules ++
     rules.ownership.file_rules;
 
@@ -33,6 +34,10 @@ fn validateRule(rule: model.AuditRule) !void {
     if (rule.id.len == 0 or rule.title.len == 0) return error.IncompleteAuditRule;
     switch (rule.kind) {
         .forbidden_text, .forbidden_import_path_fragment => if (rule.needle == null or rule.needle.?.len == 0) return error.AuditRuleMissingNeedle,
+        .forbidden_function_call => {
+            if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
+            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
+        },
         .owned_symbol_definition => {
             if (rule.symbol_name == null or rule.symbol_name.?.len == 0) return error.AuditRuleMissingSymbolName;
             if (rule.owner_exact_path == null or rule.owner_exact_path.?.len == 0) return error.AuditRuleMissingOwnerPath;
@@ -50,11 +55,13 @@ pub fn isAllowedCompatFile(rel_path: []const u8) bool {
         std.mem.eql(u8, rel_path, "devtools/constraints/model.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/registry.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/text.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/rules/calls.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/ownership.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/project.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/rules/mod.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/declarations.zig") or
+        std.mem.eql(u8, rel_path, "devtools/constraints/audit/symbols.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/engine.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/imports.zig") or
         std.mem.eql(u8, rel_path, "devtools/constraints/audit/domains.zig");
