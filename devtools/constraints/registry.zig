@@ -87,6 +87,9 @@ pub fn ruleAppliesToFile(rule: model.AuditRule, rel_path: []const u8, domain: mo
     for (rule.excluded_exact_paths) |excluded| {
         if (std.mem.eql(u8, rel_path, excluded)) return false;
     }
+    for (rule.excluded_path_prefixes) |excluded_prefix| {
+        if (std.mem.startsWith(u8, rel_path, excluded_prefix)) return false;
+    }
     return switch (rule.scope) {
         .any => true,
         .prefix => |prefix| std.mem.startsWith(u8, rel_path, prefix),

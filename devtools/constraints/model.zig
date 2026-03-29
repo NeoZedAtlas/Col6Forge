@@ -48,5 +48,6 @@ pub const AuditRule = struct {
     owner_exact_path: ?[]const u8 = null,
     definition_kind: ?DefinitionKind = null,
     excluded_exact_paths: []const []const u8 = &.{},
+    excluded_path_prefixes: []const []const u8 = &.{},
     exclude_tests: bool = false,
 };
