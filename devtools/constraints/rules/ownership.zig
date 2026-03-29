@@ -172,4 +172,22 @@ pub const file_rules = [_]model.AuditRule{
         .definition_kind = .function,
         .owner_exact_path = "src/runtime/col6forge_rt/runtime_memory.zig",
     },
+    .{
+        .id = "AR-OWN-020",
+        .title = "runtime element offset helper owner",
+        .kind = .owned_symbol_definition,
+        .scope = .{ .domain = .runtime },
+        .symbol_name = "offsetIndex",
+        .definition_kind = .function,
+        .owner_exact_path = "src/runtime/col6forge_rt/runtime_stride.zig",
+    },
+    .{
+        .id = "AR-OWN-021",
+        .title = "runtime complex element offset helper owner",
+        .kind = .owned_symbol_definition,
+        .scope = .{ .domain = .runtime },
+        .symbol_name = "complexOffsetIndex",
+        .definition_kind = .function,
+        .owner_exact_path = "src/runtime/col6forge_rt/runtime_stride.zig",
+    },
 };
