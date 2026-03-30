@@ -55,6 +55,8 @@ pub fn collectPreludeState(
                     .arg_count = unit.args.len,
                     .alt_return_count = unit.alt_return_dummy_count,
                     .args = try input.sema.inferProcedureArgSigs(scratch, unit),
+                    .pure = unit.pure,
+                    .elemental = unit.elemental,
                     .is_pointer = function_type.inferProcedureIsPointer(unit),
                     .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
                     .result_type_spec = if (unit.kind == .function) function_type.inferFunctionTypeSpec(unit) else null,
@@ -114,6 +116,8 @@ fn installExplicitInterfaceProcedureSigs(
                 .arg_count = proc_header.args.len,
                 .alt_return_count = proc_header.alt_return_dummy_count,
                 .args = try procedure_inference.inferInterfaceProcedureArgSigs(arena, unit, proc_header),
+                .pure = proc_header.pure,
+                .elemental = proc_header.elemental,
                 .is_pointer = false,
                 .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
                 .result_type_spec = if (proc_header.kind == .function)

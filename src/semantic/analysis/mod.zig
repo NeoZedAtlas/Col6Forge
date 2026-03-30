@@ -1934,6 +1934,88 @@ test "array sections remain definable actuals for elemental INTENT OUT dummy" {
     _ = try split_api.analyzeProgram(arena.allocator(), program);
 }
 
+test "array sections preserve rank for assumed-size and contiguous dummy compatibility" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine test1\n" ++
+        "  integer, pointer, contiguous :: p(:)\n" ++
+        "  integer, target :: a(3)\n" ++
+        "  p => a\n" ++
+        "  call foo(p(::1))\n" ++
+        "contains\n" ++
+        "  subroutine foo(x)\n" ++
+        "    integer :: x(*)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n" ++
+        "\n" ++
+        "subroutine test2\n" ++
+        "  integer :: a(8)\n" ++
+        "  call bar(a(::1))\n" ++
+        "contains\n" ++
+        "  subroutine bar(x)\n" ++
+        "    integer, contiguous :: x(:)\n" ++
+        "  end subroutine bar\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "pointer dummy accepts null intrinsic actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer, pointer, contiguous :: x(:) => null()\n" ++
+        "  call foo(null())\n" ++
+        "  call foo(null(x))\n" ++
+        "contains\n" ++
+        "  subroutine foo(a)\n" ++
+        "    integer, pointer, optional, contiguous :: a(:)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "contiguous pointer rejects definitely noncontiguous section target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  real, pointer, contiguous :: r(:)\n" ++
+        "  real, target :: x(45)\n" ++
+        "  r => x(::3)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.AssignmentTypeMismatch, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.assignment_type_mismatch.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "non-contiguous target") != null);
+}
+
 test "allow argument mismatch suppresses implicit external hard errors across contained procedures" {
     const testing = std.testing;
     const allocator = testing.allocator;

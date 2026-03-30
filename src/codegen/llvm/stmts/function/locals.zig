@@ -207,6 +207,7 @@ pub fn installIncomingArrayDescriptor(
 
 pub fn symbolHasDeferredDims(sym: ast.sema.Symbol) bool {
     if (sym.dims.len == 0) return false;
+    if (sym.is_pointer or sym.is_allocatable) return true;
     for (sym.dims) |dim| {
         switch (dim.*) {
             .dim_range => |range| if (range.assumed_shape) return true,

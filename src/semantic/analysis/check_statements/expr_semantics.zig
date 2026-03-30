@@ -488,7 +488,14 @@ pub fn isPointerValuedExpr(self: *context.Context, expr: *ast.Expr) bool {
 pub fn isAddressableDataTargetExpr(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
         .identifier => true,
-        .component => |comp| !comp.has_parens or resolvedKindFor(self, expr) == .subscript,
+        .component => |comp| blk: {
+            if (!comp.has_parens or resolvedKindFor(self, expr) == .subscript) break :blk true;
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            break :blk !component.procedure;
+        },
         .call_or_subscript => |call| blk: {
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);

@@ -1117,6 +1117,7 @@ fn checkDataActualArgCompatibility(
     actual_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
+    if (formal.pointer and isNullPointerIntrinsic(actual_expr)) return;
     try resolve_expr.resolveExpr(self, actual_expr);
     if ((formal.intent == .out or formal.intent == .inout) and !exprIsVariableDefinitionActual(self, actual_expr)) {
         return emitVariableDefinitionContextDiagnostic(self, callee_name, formal.name, actual_expr);
@@ -1125,6 +1126,9 @@ fn checkDataActualArgCompatibility(
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+    }
+    if (formal.pointer and formal.contiguous and exprIsDefinitelyNoncontiguous(self, actual_expr)) {
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "must be simply contiguous");
     }
     if (formal.rank == 0 and actual_rank > 0 and calleeAllowsElementalArrayActuals(self, callee_name)) {
         return;
@@ -1146,10 +1150,189 @@ fn checkDataActualArgCompatibility(
     return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
 }
 
+pub fn rejectDefinitelyNoncontiguousPointerAssociation(
+    self: *context.Context,
+    target_expr: *ast.Expr,
+    value_expr: *ast.Expr,
+) CheckError!void {
+    if (!exprIsDeclaredContiguousPointerTarget(self, target_expr)) return;
+    if (!exprIsDefinitelyNoncontiguous(self, value_expr)) return;
+    return emitProcedureActualDiagnostic(
+        self,
+        value_expr,
+        error.AssignmentTypeMismatch,
+        "Assignment to contiguous pointer from non-contiguous target",
+    );
+}
+
 fn calleeAllowsElementalArrayActuals(self: *context.Context, callee_name: ?[]const u8) bool {
     const name = callee_name orelse return false;
     const sig = resolvedProcedureSig(self, name) orelse return false;
     return sig.elemental;
+}
+
+fn isNullPointerIntrinsic(expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .call_or_subscript => |call| std.ascii.eqlIgnoreCase(call.name, "null"),
+        else => false,
+    };
+}
+
+fn exprIsDeclaredContiguousPointerTarget(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            break :blk sym.is_pointer and sym.contiguous;
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens) break :blk false;
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            if (!component.pointer) break :blk false;
+            break :blk derivedComponentDeclaredContiguous(self, derived_name, comp.name);
+        },
+        else => false,
+    };
+}
+
+fn derivedComponentDeclaredContiguous(
+    self: *context.Context,
+    derived_name: []const u8,
+    component_name: []const u8,
+) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .derived_type_def) continue;
+        if (!std.ascii.eqlIgnoreCase(decl.derived_type_def.name, derived_name)) continue;
+        for (decl.derived_type_def.components) |component_decl| {
+            if (!component_decl.contiguous) continue;
+            for (component_decl.items) |item| {
+                if (std.ascii.eqlIgnoreCase(item.name, component_name)) return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+fn exprIsDefinitelyNoncontiguous(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .call_or_subscript => |call| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            const kind = self.ref_kind_index.get(@intFromPtr(expr)) orelse
+                (if (sym.dims.len > 0) symbols.ResolvedRefKind.subscript else symbols.ResolvedRefKind.call);
+            if (kind != .subscript or call.args.len != sym.dims.len) break :blk false;
+            break :blk sectionIsDefinitelyNoncontiguous(self, sym.dims, call.args);
+        },
+        .component => |comp| blk: {
+            const component = componentInfoForExpr(self, comp) orelse break :blk false;
+            if (comp.args.len != component.dims.len) break :blk false;
+            break :blk sectionIsDefinitelyNoncontiguous(self, component.dims, comp.args);
+        },
+        else => false,
+    };
+}
+
+const SectionClass = enum {
+    scalar,
+    full,
+    nonfull_unit,
+    strided_nonunit,
+    unknown,
+};
+
+fn sectionIsDefinitelyNoncontiguous(
+    self: *context.Context,
+    dims: []const *ast.Expr,
+    args: []const *ast.Expr,
+) bool {
+    if (args.len == 0 or args.len != dims.len) return false;
+
+    var saw_nonfull_idx: ?usize = null;
+    for (args, 0..) |arg, idx| {
+        const class = classifySectionArg(self, dims[idx], arg);
+        switch (class) {
+            .scalar, .full => {},
+            .nonfull_unit => {
+                if (saw_nonfull_idx != null) return true;
+                saw_nonfull_idx = idx;
+            },
+            .strided_nonunit => return true,
+            .unknown => return false,
+        }
+    }
+
+    if (saw_nonfull_idx) |idx| {
+        var later = idx + 1;
+        while (later < args.len) : (later += 1) {
+            const later_class = classifySectionArg(self, dims[later], args[later]);
+            if (later_class != .scalar) return true;
+        }
+    }
+    return false;
+}
+
+fn classifySectionArg(
+    self: *context.Context,
+    dim: *ast.Expr,
+    arg: *ast.Expr,
+) SectionClass {
+    return switch (arg.*) {
+        .dim_range => |range| classifyDimRangeSection(self, dim, range),
+        else => if (resolve_expr.exprRank(self, arg) == 0) .scalar else .unknown,
+    };
+}
+
+fn classifyDimRangeSection(
+    self: *context.Context,
+    dim: *ast.Expr,
+    range: ast.DimRange,
+) SectionClass {
+    const extent = rangeExtent(self, dim, range) orelse return .unknown;
+    if (extent <= 1) return .full;
+
+    const stride = if (range.stride) |stride_expr| constIntValue(self, stride_expr) orelse return .unknown else 1;
+    if (stride == 0) return .unknown;
+    if (stride != 1) return .strided_nonunit;
+
+    if (rangeMatchesWholeDimension(self, dim, range)) return .full;
+    return .nonfull_unit;
+}
+
+fn rangeMatchesWholeDimension(
+    self: *context.Context,
+    dim: *ast.Expr,
+    range: ast.DimRange,
+) bool {
+    const lower = if (range.lower) |lower_expr| constIntValue(self, lower_expr) orelse return false else 1;
+    const dim_lower = dimensionLowerBound(self, dim) orelse return false;
+    if (lower != dim_lower) return false;
+
+    if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return true;
+
+    const upper = constIntValue(self, range.upper) orelse return false;
+    const dim_extent = dimensionExtent(self, dim) orelse return false;
+    if (dim_extent < 0) return false;
+    const dim_upper = dim_lower + dim_extent - 1;
+    return upper == dim_upper;
+}
+
+fn rangeExtent(self: *context.Context, dim: *ast.Expr, range: ast.DimRange) ?i64 {
+    const upper = (blk: {
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
+            const dim_lower = dimensionLowerBound(self, dim) orelse break :blk null;
+            const dim_extent = dimensionExtent(self, dim) orelse break :blk null;
+            if (dim_extent < 0) break :blk null;
+            break :blk dim_lower + dim_extent - 1;
+        }
+        break :blk constIntValue(self, range.upper) orelse return null;
+    }) orelse return null;
+    const lower = if (range.lower) |lower_expr| constIntValue(self, lower_expr) orelse return null else 1;
+    const stride = if (range.stride) |stride_expr| constIntValue(self, stride_expr) orelse return null else 1;
+    return tripletExtent(lower, upper, stride);
 }
 
 fn procedureActualExprRank(self: *context.Context, expr: *ast.Expr) usize {

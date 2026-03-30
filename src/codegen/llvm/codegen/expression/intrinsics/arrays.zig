@@ -20,7 +20,21 @@ const isIntegerType = shared.isIntegerType;
 const isRealType = shared.isRealType;
 const shapeSubjectExtents = array_actuals.shapeSubjectExtents;
 pub fn emitIntrinsicSum(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 1) {
+        if (try array_actuals.resolveArrayActual(ctx, builder, args[0])) |actual| {
+            return emitScalarArraySumReduction(ctx, builder, actual, null);
+        }
+    } else if (args.len == 2 or args.len == 3) {
+        const actual = (try array_actuals.resolveArrayActual(ctx, builder, args[0])) orelse return error.InvalidIntrinsicCall;
+        try actual.validate();
+        const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.InvalidIntrinsicCall;
+        if (actual.extents.len != 1 or dim_value != 1) return error.InvalidIntrinsicCall;
+        const mask = if (args.len == 3) try analyzeScalarSumMask(ctx, builder, args[2]) else null;
+        return emitScalarArraySumReduction(ctx, builder, actual, mask);
+    } else {
+        return error.InvalidIntrinsicCall;
+    }
+
     const acc_ty = try inferSumAccumulatorType(ctx, args[0]);
     const acc_ptr_name = try ctx.nextTemp();
     try builder.alloca(acc_ptr_name, acc_ty);
@@ -30,6 +44,99 @@ pub fn emitIntrinsicSum(ctx: *Context, builder: anytype, args: []*Expr) EmitErro
 
     const acc_name = try ctx.nextTemp();
     try builder.load(acc_name, acc_ty, acc_ptr);
+    return .{ .name = acc_name, .ty = acc_ty, .is_ptr = false };
+}
+
+const ScalarSumMask = struct {
+    scalar_value: ?ValueRef = null,
+    array_actual: ?ArrayActualPlan = null,
+};
+
+fn analyzeScalarSumMask(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ScalarSumMask {
+    if (try array_actuals.resolveArrayActual(ctx, builder, expr)) |actual| {
+        try actual.validate();
+        if (actual.extents.len != 1) return error.InvalidIntrinsicCall;
+        return .{ .array_actual = actual };
+    }
+    return .{ .scalar_value = try emitLogicalCast(ctx, builder, try dispatch.emitExpr(ctx, builder, expr)) };
+}
+
+fn emitScalarSumMaskValue(
+    ctx: *Context,
+    builder: anytype,
+    mask: ScalarSumMask,
+    idx_val: ValueRef,
+) EmitError!ValueRef {
+    if (mask.array_actual) |actual| {
+        return emitLogicalCast(ctx, builder, try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual));
+    }
+    return mask.scalar_value orelse .{ .name = "1", .ty = .i1, .is_ptr = false };
+}
+
+fn emitScalarArraySumReduction(
+    ctx: *Context,
+    builder: anytype,
+    actual: ArrayActualPlan,
+    mask: ?ScalarSumMask,
+) EmitError!ValueRef {
+    try actual.validate();
+
+    const acc_ty = actual.elem_ty;
+    const acc_ptr_name = try ctx.nextTemp();
+    try builder.alloca(acc_ptr_name, acc_ty);
+    const acc_ptr = ValueRef{ .name = acc_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(utils.zeroValue(acc_ty), acc_ptr);
+
+    var elem_count = try ctx.constI64(1);
+    for (actual.extents) |extent| {
+        elem_count = try binary.emitMul(ctx, builder, elem_count, extent);
+    }
+    const loop_preheader = try ctx.nextLabel("sum_scalar_array_preheader");
+    const loop_body = try ctx.nextLabel("sum_scalar_array_body");
+    const loop_exit = try ctx.nextLabel("sum_scalar_array_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(try ctx.constI64(0), idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const src_val = try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual);
+    const current_name = try ctx.nextTemp();
+    try builder.load(current_name, acc_ty, acc_ptr);
+    const current = ValueRef{ .name = current_name, .ty = acc_ty, .is_ptr = false };
+    const updated = try binary.emitAdd(ctx, builder, current, src_val);
+    if (mask) |resolved_mask| {
+        const mask_val = try emitScalarSumMaskValue(ctx, builder, resolved_mask, idx_val);
+        const store_name = try ctx.nextTemp();
+        try builder.select(store_name, acc_ty, mask_val, updated, current);
+        try builder.store(.{ .name = store_name, .ty = acc_ty, .is_ptr = false }, acc_ptr);
+    } else {
+        try builder.store(updated, acc_ptr);
+    }
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, try ctx.constI64(1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
+    const acc_name = try ctx.nextTemp();
+    try builder.load(acc_name, acc_ty, acc_ptr);
+    if (mask) |resolved_mask| {
+        if (resolved_mask.array_actual) |mask_actual| {
+            try array_actuals.emitOwnedHeapActualFree(ctx, builder, mask_actual.owned_heap_ptr);
+        }
+    }
+    try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
     return .{ .name = acc_name, .ty = acc_ty, .is_ptr = false };
 }
 
@@ -202,6 +309,7 @@ const WholeArrayView = struct {
     elem_ty: IRType,
     count: ?usize = null,
     stride_bytes: usize = 0,
+    owned_heap_ptr: ?ValueRef = null,
 };
 
 const ConstructorView = struct {
@@ -242,26 +350,43 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
 
     if (try supportedWholeArrayView(ctx, builder, bin.left)) |left_view| {
         if (supportedConstructorView(bin.right)) |right_ctor| {
-            return try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
+            const reduced = try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            return reduced;
         }
         if (try analyzeMergeViewPlan(ctx, builder, bin.right)) |right_merge| {
-            return try emitWholeArrayMergeViewReduction(ctx, builder, bin.op, left_view, right_merge);
+            const reduced = try emitWholeArrayMergeViewReduction(ctx, builder, bin.op, left_view, right_merge);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            try freeMergeViewPlanOwnedActuals(ctx, builder, right_merge);
+            return reduced;
         }
         if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
             if (left_view.count == null or right_view.count == null) return null;
             if (left_view.count.? != right_view.count.?) return null;
-            return try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, left_view, right_view);
+            const reduced = try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, left_view, right_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
-        return try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
+        const reduced = try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
+        try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+        return reduced;
     }
     if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
         if (try analyzeMergeViewPlan(ctx, builder, bin.left)) |left_merge| {
-            return try emitMergeViewWholeArrayReduction(ctx, builder, bin.op, left_merge, right_view);
+            const reduced = try emitMergeViewWholeArrayReduction(ctx, builder, bin.op, left_merge, right_view);
+            try freeMergeViewPlanOwnedActuals(ctx, builder, left_merge);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
         if (supportedConstructorView(bin.left)) |left_ctor| {
-            return try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
+            const reduced = try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
-        return try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, right_view);
+        const reduced = try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, right_view);
+        try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+        return reduced;
     }
     if (supportedConstructorView(bin.left)) |left_ctor| {
         if (supportedConstructorView(bin.right)) |right_ctor| {
@@ -286,26 +411,43 @@ fn emitWholeArrayAllReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
 
     if (try supportedWholeArrayView(ctx, builder, bin.left)) |left_view| {
         if (supportedConstructorView(bin.right)) |right_ctor| {
-            return try emitWholeArrayConstructorReductionAll(ctx, builder, bin.op, left_view, right_ctor);
+            const reduced = try emitWholeArrayConstructorReductionAll(ctx, builder, bin.op, left_view, right_ctor);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            return reduced;
         }
         if (try analyzeMergeViewPlan(ctx, builder, bin.right)) |right_merge| {
-            return try emitWholeArrayMergeViewReductionAll(ctx, builder, bin.op, left_view, right_merge);
+            const reduced = try emitWholeArrayMergeViewReductionAll(ctx, builder, bin.op, left_view, right_merge);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            try freeMergeViewPlanOwnedActuals(ctx, builder, right_merge);
+            return reduced;
         }
         if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
             if (left_view.count == null or right_view.count == null) return null;
             if (left_view.count.? != right_view.count.?) return null;
-            return try emitWholeArrayWholeArrayReductionAll(ctx, builder, bin.op, left_view, right_view);
+            const reduced = try emitWholeArrayWholeArrayReductionAll(ctx, builder, bin.op, left_view, right_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
-        return try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, left_view, bin.right);
+        const reduced = try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, left_view, bin.right);
+        try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
+        return reduced;
     }
     if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
         if (try analyzeMergeViewPlan(ctx, builder, bin.left)) |left_merge| {
-            return try emitMergeViewWholeArrayReductionAll(ctx, builder, bin.op, left_merge, right_view);
+            const reduced = try emitMergeViewWholeArrayReductionAll(ctx, builder, bin.op, left_merge, right_view);
+            try freeMergeViewPlanOwnedActuals(ctx, builder, left_merge);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
         if (supportedConstructorView(bin.left)) |left_ctor| {
-            return try emitConstructorWholeArrayReductionAll(ctx, builder, bin.op, left_ctor, right_view);
+            const reduced = try emitConstructorWholeArrayReductionAll(ctx, builder, bin.op, left_ctor, right_view);
+            try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+            return reduced;
         }
-        return try emitScalarWholeArrayReductionAll(ctx, builder, bin.op, bin.left, right_view);
+        const reduced = try emitScalarWholeArrayReductionAll(ctx, builder, bin.op, bin.left, right_view);
+        try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
+        return reduced;
     }
     if (supportedConstructorView(bin.left)) |left_ctor| {
         if (supportedConstructorView(bin.right)) |right_ctor| {
@@ -358,17 +500,18 @@ fn shapeIntrinsicSubject(expr_node: *Expr) ?*Expr {
 }
 
 fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?WholeArrayView {
-    return switch (expr_node.*) {
+    const direct_view = try switch (expr_node.*) {
         .identifier => |name| wholeArraySymbolView(ctx, name),
         .call_or_subscript => |call| blk: {
             if (try wholeArraySectionView(ctx, builder, call)) |view| break :blk view;
             if (std.ascii.eqlIgnoreCase(call.name, "sum") or std.ascii.eqlIgnoreCase(call.name, "merge")) {
                 if (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) |actual| {
                     const count = staticIntrinsicArrayResultCount(ctx, actual.extents) orelse staticWholeArrayExprCount(ctx, expr_node) orelse break :blk null;
-                    break :blk .{
+                    break :blk WholeArrayView{
                         .base_ptr = actual.base_ptr,
                         .elem_ty = actual.elem_ty,
                         .count = count,
+                        .owned_heap_ptr = actual.owned_heap_ptr,
                     };
                 }
             }
@@ -377,6 +520,18 @@ fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) Em
         .component => |comp| wholeProjectedComponentView(ctx, builder, comp),
         else => null,
     };
+    if (direct_view) |view| return view;
+
+    if (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) |actual| {
+        const count = staticIntrinsicArrayResultCount(ctx, actual.extents) orelse staticWholeArrayExprCount(ctx, expr_node) orelse return null;
+        return WholeArrayView{
+            .base_ptr = actual.base_ptr,
+            .elem_ty = actual.elem_ty,
+            .count = count,
+            .owned_heap_ptr = actual.owned_heap_ptr,
+        };
+    }
+    return null;
 }
 
 fn staticIntrinsicArrayResultCount(
@@ -398,6 +553,27 @@ fn staticWholeArrayExprCount(ctx: *Context, expr_node: *Expr) ?usize {
     return switch (expr_node.*) {
         .identifier => |name| staticSymbolArrayCount(ctx, name),
         .call_or_subscript => |call| staticCallArrayCount(ctx, call),
+        .binary => |bin| blk: {
+            const shape = staticBinaryShape(ctx, bin) orelse break :blk null;
+            defer ctx.allocator.free(shape);
+            var count: usize = 1;
+            for (shape) |extent| {
+                count = std.math.mul(usize, count, extent) catch return null;
+            }
+            break :blk count;
+        },
+        .unary => |un| blk: {
+            const shape = switch (un.op) {
+                .plus, .minus => staticExprShape(ctx, un.expr),
+                else => null,
+            } orelse break :blk null;
+            defer ctx.allocator.free(shape);
+            var count: usize = 1;
+            for (shape) |extent| {
+                count = std.math.mul(usize, count, extent) catch return null;
+            }
+            break :blk count;
+        },
         else => null,
     };
 }
@@ -410,6 +586,7 @@ fn staticSymbolArrayCount(ctx: *Context, name: []const u8) ?usize {
 
 fn staticCallArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     if (staticSectionArrayCount(ctx, call)) |count| return count;
+    if (staticVectorSubscriptArrayCount(ctx, call)) |count| return count;
     if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumArrayCount(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeArrayCount(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeArrayCount(ctx, call);
@@ -417,20 +594,13 @@ fn staticCallArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
 }
 
 fn staticSectionArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
-    const sym = ctx.findSymbol(call.name) orelse return null;
-    if (sym.dims.len == 0 or sym.isCharacter()) return null;
-    if (call.args.len != sym.dims.len) return null;
-
+    const shape = staticSectionShape(ctx, call) orelse return null;
+    defer ctx.allocator.free(shape);
     var count: usize = 1;
-    var has_range = false;
-    for (call.args, 0..) |arg, idx| {
-        if (arg.* != .dim_range) continue;
-        if (!isFullDimRange(arg)) return null;
-        has_range = true;
-        const extent = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch return null;
+    for (shape) |extent| {
         count = std.math.mul(usize, count, extent) catch return null;
     }
-    return if (has_range) count else null;
+    return count;
 }
 
 fn staticSumArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
@@ -463,8 +633,36 @@ fn staticExprShape(ctx: *Context, expr_node: *Expr) ?[]usize {
     return switch (expr_node.*) {
         .identifier => |name| staticSymbolShape(ctx, name),
         .call_or_subscript => |call| staticCallShape(ctx, call),
+        .binary => |bin| staticBinaryShape(ctx, bin),
+        .unary => |un| switch (un.op) {
+            .plus, .minus => cloneStaticShape(ctx, un.expr),
+            else => null,
+        },
         else => null,
     };
+}
+
+fn staticBinaryShape(ctx: *Context, bin: ast.BinaryExpr) ?[]usize {
+    switch (bin.op) {
+        .add, .sub, .mul, .div => {},
+        else => return null,
+    }
+    const left_shape = staticExprShape(ctx, bin.left);
+    const right_shape = staticExprShape(ctx, bin.right);
+    if (left_shape == null and right_shape == null) return null;
+    if (left_shape != null and right_shape != null) {
+        defer ctx.allocator.free(left_shape.?);
+        defer ctx.allocator.free(right_shape.?);
+        if (left_shape.?.len != right_shape.?.len) return null;
+        for (left_shape.?, right_shape.?) |lhs, rhs| {
+            if (lhs != rhs) return null;
+        }
+        const cloned = ctx.allocator.alloc(usize, left_shape.?.len) catch return null;
+        @memcpy(cloned, left_shape.?);
+        return cloned;
+    }
+    if (left_shape) |shape| return shape;
+    return right_shape;
 }
 
 fn staticSymbolShape(ctx: *Context, name: []const u8) ?[]usize {
@@ -482,10 +680,48 @@ fn staticSymbolShape(ctx: *Context, name: []const u8) ?[]usize {
 
 fn staticCallShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
     if (staticSectionShape(ctx, call)) |shape| return shape;
+    if (staticVectorSubscriptShape(ctx, call)) |shape| return shape;
     if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumShape(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeShape(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeShape(ctx, call);
     return null;
+}
+
+fn staticVectorSubscriptArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    const shape = staticVectorSubscriptShape(ctx, call) orelse return null;
+    defer ctx.allocator.free(shape);
+    var count: usize = 1;
+    for (shape) |extent| {
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
+}
+
+fn staticVectorSubscriptShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    if (call.args.len != sym.dims.len) return null;
+
+    var vector_rank: usize = 0;
+    for (call.args) |arg| {
+        if (arg.* == .dim_range) return null;
+        if (staticExprShape(ctx, arg)) |shape| {
+            defer ctx.allocator.free(shape);
+            if (shape.len != 1) return null;
+            vector_rank += 1;
+        }
+    }
+    if (vector_rank == 0) return null;
+
+    const result = ctx.allocator.alloc(usize, vector_rank) catch return null;
+    var out_idx: usize = 0;
+    for (call.args) |arg| {
+        const shape = staticExprShape(ctx, arg) orelse continue;
+        defer ctx.allocator.free(shape);
+        result[out_idx] = shape[0];
+        out_idx += 1;
+    }
+    return result;
 }
 
 fn staticReshapeArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
@@ -539,17 +775,38 @@ fn staticSectionShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
     var out_idx: usize = 0;
     for (call.args, 0..) |arg, idx| {
         if (arg.* != .dim_range) continue;
-        if (!isFullDimRange(arg)) {
-            ctx.allocator.free(shape);
-            return null;
-        }
-        shape[out_idx] = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch {
+        const extent = staticSectionRangeExtent(ctx, sym, idx, arg) orelse {
             ctx.allocator.free(shape);
             return null;
         };
+        shape[out_idx] = extent;
         out_idx += 1;
     }
     return shape;
+}
+
+fn staticSectionRangeExtent(
+    ctx: *Context,
+    sym: ast.sema.Symbol,
+    dim_idx: usize,
+    expr_node: *Expr,
+) ?usize {
+    if (expr_node.* != .dim_range) return null;
+    const range = expr_node.dim_range;
+    if (range.stride != null) return null;
+
+    const dim_extent = common.arrayElementCount(ctx.sem, sym.dims[dim_idx .. dim_idx + 1]) catch return null;
+    const lower_i64 = if (range.lower) |lower| staticConstIntExpr(ctx, lower) orelse return null else 1;
+    const upper_i64 = if (range.assumed_shape or (range.upper.* == .literal and range.upper.literal.kind == .assumed_size))
+        @as(i64, @intCast(dim_extent))
+    else
+        staticConstIntExpr(ctx, range.upper) orelse return null;
+    if (lower_i64 < 1 or upper_i64 < 0) return null;
+    if (lower_i64 > upper_i64) return 0;
+    const lower = std.math.cast(usize, lower_i64) orelse return null;
+    const upper = std.math.cast(usize, upper_i64) orelse return null;
+    if (lower > dim_extent or upper > dim_extent) return null;
+    return upper - lower + 1;
 }
 
 fn staticSumShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
@@ -606,6 +863,25 @@ fn staticConstIntExpr(ctx: *Context, expr_node: *Expr) ?i64 {
             };
             break :blk null;
         },
+        .unary => |un| blk: {
+            const value = staticConstIntExpr(ctx, un.expr) orelse break :blk null;
+            break :blk switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        .binary => |bin| blk: {
+            const left = staticConstIntExpr(ctx, bin.left) orelse break :blk null;
+            const right = staticConstIntExpr(ctx, bin.right) orelse break :blk null;
+            break :blk switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                else => null,
+            };
+        },
         else => null,
     };
 }
@@ -619,6 +895,7 @@ fn wholeArraySymbolView(ctx: *Context, name: []const u8) ?WholeArrayView {
         .base_ptr = base_ptr,
         .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
         .count = count,
+        .owned_heap_ptr = null,
     };
 }
 
@@ -633,9 +910,8 @@ fn wholeArraySectionView(ctx: *Context, builder: anytype, call: ast.CallOrSubscr
     for (call.args, 0..) |arg, idx| {
         if (arg.* == .dim_range) {
             if (saw_scalar) return null;
-            if (!isFullDimRange(arg)) return null;
+            const extent = staticSectionRangeExtent(ctx, sym, idx, arg) orelse return null;
             has_range = true;
-            const extent = common.arrayElementCount(ctx.sem, sym.dims[idx .. idx + 1]) catch return null;
             count = std.math.mul(usize, count, extent) catch return null;
             continue;
         }
@@ -665,7 +941,29 @@ fn wholeProjectedComponentView(
         .elem_ty = view.elem_ty,
         .count = view.count,
         .stride_bytes = view.stride_bytes,
+        .owned_heap_ptr = null,
     };
+}
+
+fn freeWholeArrayViewOwnedActual(ctx: *Context, builder: anytype, view: WholeArrayView) EmitError!void {
+    if (view.owned_heap_ptr) |owned_heap_ptr| {
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, owned_heap_ptr);
+    }
+}
+
+fn freeMergeViewPlanOwnedActuals(ctx: *Context, builder: anytype, plan: MergeViewPlan) EmitError!void {
+    if (plan.true_view) |view| try freeWholeArrayViewOwnedActual(ctx, builder, view);
+    if (plan.true_actual) |actual| {
+        if (actual.owned_heap_ptr) |owned_heap_ptr| try array_actuals.emitOwnedHeapActualFree(ctx, builder, owned_heap_ptr);
+    }
+    if (plan.false_view) |view| try freeWholeArrayViewOwnedActual(ctx, builder, view);
+    if (plan.false_actual) |actual| {
+        if (actual.owned_heap_ptr) |owned_heap_ptr| try array_actuals.emitOwnedHeapActualFree(ctx, builder, owned_heap_ptr);
+    }
+    if (plan.mask_view) |view| try freeWholeArrayViewOwnedActual(ctx, builder, view);
+    if (plan.mask_actual) |actual| {
+        if (actual.owned_heap_ptr) |owned_heap_ptr| try array_actuals.emitOwnedHeapActualFree(ctx, builder, owned_heap_ptr);
+    }
 }
 
 fn isFullDimRange(expr_node: *Expr) bool {
@@ -1506,6 +1804,28 @@ fn integerKindToIRType(kind_value: i64) ?IRType {
 
 pub fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    return .{ .name = "1", .ty = .i1, .is_ptr = false };
+}
+
+fn isGuaranteedContiguousInquiryArg(ctx: *Context, expr_node: *Expr) bool {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk false;
+            if (sym.dims.len == 0) break :blk false;
+            break :blk sym.is_allocatable or (sym.is_pointer and sym.contiguous);
+        },
+        else => false,
+    };
+}
+
+pub fn emitIntrinsicIsContiguous(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (isGuaranteedContiguousInquiryArg(ctx, args[0])) {
+        return .{ .name = "1", .ty = .i1, .is_ptr = false };
+    }
+    if (try array_actuals.analyzeAddressableArrayActual(ctx, builder, args[0])) |actual| {
+        return .{ .name = if (actual.contiguous) "1" else "0", .ty = .i1, .is_ptr = false };
+    }
     return .{ .name = "1", .ty = .i1, .is_ptr = false };
 }
 

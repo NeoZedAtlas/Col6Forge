@@ -1249,6 +1249,63 @@ test "emitModuleToWriter lowers character whole-array section scalar assignment 
     try testing.expect(std.mem.indexOf(u8, output, "str_loop_cond") != null);
 }
 
+test "emitModuleToWriter lowers rank-4 whole-array section scalar assignment through array fill loop" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  real(8) arr(4,4,4,4)\n" ++
+        "  arr(:,:,:,:) = 1d0\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "rank4_section_scalar_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "arr_fill_head") != null);
+}
+
+test "emitModuleToWriter lowers SUM DIM with rank-4 array-compare mask" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  real(8) arr(4,4,4,4)\n" ++
+        "  real(8) out(4,4,4)\n" ++
+        "  arr(:,:,:,:) = 1d0\n" ++
+        "  out = sum(arr, dim=1, mask=(arr(:,:,:,:) > 0d0))\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "rank4_sum_mask_compare.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "binary_arg_head") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "sum_dim_preheader") != null);
+}
+
 test "character substring compare narrows runtime helper lengths to i32" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1389,6 +1446,82 @@ test "emitModuleToWriter lowers SAME_TYPE_AS and EXTENDS_TYPE_OF through externa
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "declare i32 @same_type_as_") != null);
     try testing.expect(std.mem.indexOf(u8, output, "declare i32 @extends_type_of_") != null);
+}
+
+test "emitModuleToWriter lowers elemental function SUM DIM chains and transpose reductions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  integer :: a(3,4,5)\n" ++
+        "  integer :: ax(4,5)\n" ++
+        "  integer :: az(3,4)\n" ++
+        "  a = 2\n" ++
+        "  ax = sum(eid(a),1)\n" ++
+        "  az = sum(a,3)\n" ++
+        "  if (any(sum(transpose(sum(a,1)),1)+sum(az,1) /= sum(ax,2)+sum(sum(a,3),1))) stop 1\n" ++
+        "contains\n" ++
+        "  elemental integer function eid(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "    eid = x\n" ++
+        "  end function eid\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "elemental_sum_transpose.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "elemental_array_call_preheader") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "sum_scalar_array_preheader") != null);
+}
+
+test "emitModuleToWriter lowers elemental subroutine calls with section and array-expression actuals" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  integer :: b(3,2)\n" ++
+        "  integer :: ay(3,2)\n" ++
+        "  b = 2\n" ++
+        "  ay = 3\n" ++
+        "  call set(b(2:,1), sum(b(:2,:),2))\n" ++
+        "  if (any(b(2:,1) /= ay(1:2,1))) stop 1\n" ++
+        "contains\n" ++
+        "  elemental subroutine set(o, i)\n" ++
+        "    integer, intent(out) :: o\n" ++
+        "    integer, intent(in) :: i\n" ++
+        "    o = i\n" ++
+        "  end subroutine set\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "elemental_subroutine_sections.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "elemental_subroutine_preheader") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "section_array_assign_preheader") != null);
 }
 
 test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy ABI" {

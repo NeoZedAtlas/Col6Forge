@@ -80,6 +80,7 @@ const emitIntrinsicAll = arrays.emitIntrinsicAll;
 const emitIntrinsicSum = arrays.emitIntrinsicSum;
 const emitIntrinsicSize = arrays.emitIntrinsicSize;
 const emitIntrinsicAllocated = arrays.emitIntrinsicAllocated;
+const emitIntrinsicIsContiguous = arrays.emitIntrinsicIsContiguous;
 const emitIntrinsicInternalLiteralSubstring = arrays.emitIntrinsicInternalLiteralSubstring;
 const IntrinsicTag = enum {
     sin,
@@ -136,6 +137,7 @@ const IntrinsicTag = enum {
     epsilon,
     huge,
     size,
+    is_contiguous,
     len_,
     trim_,
     tan,
@@ -243,6 +245,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
     .{ "size", .size },
+    .{ "is_contiguous", .is_contiguous },
     .{ "len", .len_ },
     .{ "trim", .trim_ },
     .{ "tan", .tan },
@@ -381,6 +384,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
         .size => return emitIntrinsicSize(ctx, builder, args),
+        .is_contiguous => return emitIntrinsicIsContiguous(ctx, builder, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
         .trim_ => return emitIntrinsicTrim(ctx, builder, args),
         .tan => return emitTan(ctx, builder, args),

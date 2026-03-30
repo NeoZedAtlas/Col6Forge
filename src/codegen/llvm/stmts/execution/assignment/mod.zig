@@ -40,6 +40,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         character_mod.trackCharAssignment(ctx, assign.target, null);
         return;
     }
+    if (try whole_array.emitSectionArrayActualAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionSubstringWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;

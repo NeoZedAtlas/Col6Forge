@@ -29,7 +29,7 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
                 effective_item.char_len = null;
             }
         }
-        try applyDeclarator(self, effective_type, effective_item, .local, true, decl.allocatable, decl.pointer);
+        try applyDeclarator(self, effective_type, effective_item, .local, true, decl.allocatable, decl.pointer, decl.contiguous);
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
         if (decl.external) {
@@ -56,7 +56,7 @@ fn isoCBindingCharacterKindShorthandType(
 pub fn applyProcedureDecl(self: *context.Context, decl: ast.ProcedureDecl) !void {
     for (decl.items) |item| {
         const resolved = try resolveProcedureDeclarator(self, decl.interface, item.name);
-        try applyDeclarator(self, resolved.type_spec, item, .local, resolved.explicit_type, false, decl.pointer);
+        try applyDeclarator(self, resolved.type_spec, item, .local, resolved.explicit_type, false, decl.pointer, false);
 
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         var sym = &self.symbols.items[idx];
@@ -81,6 +81,7 @@ pub fn applyDeclarator(
     explicit_type: bool,
     allocatable: bool,
     pointer: bool,
+    contiguous: bool,
 ) !void {
     try validateConcreteAbstractTypeUse(self, type_spec);
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
@@ -113,6 +114,13 @@ pub fn applyDeclarator(
     }
     if (pointer) {
         sym.is_pointer = true;
+    }
+    if (contiguous) {
+        if (item.dims.len == 0) {
+            emitContiguousArrayRequirementDiagnostic(self, item.name);
+            return error.InvalidArgumentCount;
+        }
+        sym.contiguous = true;
     }
     if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
         return error.InvalidUnlimitedPolymorphicEntity;
@@ -219,6 +227,25 @@ fn declSourceToSecondarySpan(source: ast.DeclSource, label: []const u8) common_d
         .line_text = source.text,
         .label = label,
     };
+}
+
+fn emitContiguousArrayRequirementDiagnostic(
+    self: *context.Context,
+    target_name: []const u8,
+) void {
+    const current_decl = self.current_decl_source orelse return;
+    const line = if (current_decl.line == 0) 1 else current_decl.line;
+    const column = if (current_decl.column == 0) 1 else current_decl.column;
+    const message = std.fmt.allocPrint(self.arena, "'{s}' has the CONTIGUOUS attribute but is not an array", .{target_name}) catch "Entity has the CONTIGUOUS attribute but is not an array";
+    self.setDiagnosticDetailed(
+        line,
+        column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        current_decl.text,
+        &.{.{ .text = "CONTIGUOUS is only valid on array entities in the declaration model." }},
+        &.{.{ .text = "Add an array declarator, or drop CONTIGUOUS from the scalar declaration." }},
+    );
 }
 
 fn declarationMatchesAspect(decl: ast.Decl, target_name: []const u8, aspect: DeclarationAspect) bool {
@@ -358,6 +385,10 @@ fn validateKnownFunctionResultDeclaration(
     prefer_length_message: bool,
 ) !void {
     if (sym.storage == .dummy) return;
+    if (self.unit.kind == .function) {
+        const result_name = self.unit.result_name orelse self.unit.name;
+        if (std.ascii.eqlIgnoreCase(sym.name, result_name)) return;
+    }
     if (self.unit.kind == .function and self.unit.owner_name == null and self.unit.prelude_decl_count == 0) return;
     if (self.unit.kind != .function and !procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name)) return;
     const known_sig = symbols_mod.lookupKnownProcedureSig(self, sym.name) orelse return;

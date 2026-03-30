@@ -76,6 +76,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
+            try procedure_calls.rejectDefinitelyNoncontiguousPointerAssociation(self, assign.target, assign.value);
             try procedure_calls.checkProcedurePointerAssignmentCompatibility(self, assign.target, assign.value, .{
                 .dummyArgTypeCompatible = dummyArgTypeCompatible,
             });

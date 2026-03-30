@@ -256,7 +256,7 @@ pub fn exprRankForCallOrSubscript(
     const sym = self.symbols.items[idx];
     const kind: ResolvedRefKind = deps.refKindIndex(self, @intFromPtr(expr_node)) orelse
         (if (sym.dims.len > 0) .subscript else .call);
-    if (kind == .subscript) return 0;
+    if (kind == .subscript) return sectionResultRank(self, call.args, deps);
     if (resolvedProcedureSig(self, call.name, false, visibleSingleTargetGenericSig(self, call.name))) |sig| {
         if (sym.is_intrinsic or symbols_mod.isIntrinsicName(call.name)) {
             if (intrinsicResultRank(self, call.name, call.args, deps)) |rank| return rank;
@@ -286,7 +286,90 @@ fn intrinsicResultRank(
         if (args.len >= 2) return array_rank -| 1;
         return 0;
     }
+    if (std.mem.eql(u8, upper, "SHAPE") or
+        std.mem.eql(u8, upper, "LBOUND") or
+        std.mem.eql(u8, upper, "UBOUND"))
+    {
+        if (args.len >= 2) return 0;
+        return 1;
+    }
+    if (std.mem.eql(u8, upper, "RESHAPE")) {
+        if (args.len < 2) return null;
+        if (reshapeResultRank(self, args[1], deps)) |rank| return rank;
+        return 1;
+    }
     return null;
+}
+
+fn reshapeResultRank(
+    self: *context.Context,
+    shape_expr: *ast.Expr,
+    comptime deps: anytype,
+) ?usize {
+    return switch (shape_expr.*) {
+        .array_constructor => |ctor| ctor.items.len,
+        .call_or_subscript => |call| blk: {
+            if (std.ascii.eqlIgnoreCase(call.name, "shape") or
+                std.ascii.eqlIgnoreCase(call.name, "lbound") or
+                std.ascii.eqlIgnoreCase(call.name, "ubound"))
+            {
+                if (call.args.len == 0) break :blk 1;
+                break :blk deps.exprRank(self, call.args[0]);
+            }
+            break :blk null;
+        },
+        .identifier => |name| blk: {
+            const idx = symbols_mod.findSymbolIndex(self, name) orelse break :blk null;
+            if (self.symbols.items[idx].dims.len == 1) {
+                const extent = constantShapeVectorLength(self.symbols.items[idx].dims[0]) orelse break :blk null;
+                break :blk extent;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+fn constantShapeVectorLength(dim: *ast.Expr) ?usize {
+    return switch (dim.*) {
+        .dim_range => |range| blk: {
+            const lower = if (range.lower) |expr| constIntLiteralValue(expr) orelse break :blk null else 1;
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) break :blk null;
+            const upper = constIntLiteralValue(range.upper) orelse break :blk null;
+            const stride = if (range.stride) |expr| constIntLiteralValue(expr) orelse break :blk null else 1;
+            if (stride == 0) break :blk null;
+            if (stride > 0 and upper < lower) break :blk 0;
+            if (stride < 0 and upper > lower) break :blk 0;
+            const count = if (stride > 0)
+                @divTrunc(upper - lower, stride) + 1
+            else
+                @divTrunc(lower - upper, -stride) + 1;
+            if (count < 0) break :blk null;
+            break :blk @intCast(count);
+        },
+        .literal => |lit| blk: {
+            if (lit.kind != .integer) break :blk null;
+            const value = std.fmt.parseInt(i64, lit.text, 10) catch break :blk null;
+            if (value < 0) break :blk null;
+            break :blk @intCast(value);
+        },
+        else => null,
+    };
+}
+
+fn constIntLiteralValue(expr: *ast.Expr) ?i64 {
+    return switch (expr.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| blk: {
+            const inner = constIntLiteralValue(un.expr) orelse break :blk null;
+            break :blk switch (un.op) {
+                .plus => inner,
+                .minus => -inner,
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn elementalActualRank(
@@ -304,6 +387,7 @@ pub fn exprRankForComponent(
     comp: ast.ComponentExpr,
     comptime deps: anytype,
 ) usize {
+    const base_rank = deps.exprRank(self, comp.base);
     const base_spec = deps.exprTypeSpec(self, comp.base) catch return 0;
     if (base_spec.lowered_kind != .derived) return 0;
     const derived_name = base_spec.derived_type_name orelse return 0;
@@ -312,7 +396,8 @@ pub fn exprRankForComponent(
         const sig = procedureComponentSig(self, component) orelse return 0;
         return sig.result_rank;
     }
-    return if (comp.args.len == 0) component.dims.len else 0;
+    if (comp.args.len == 0) return base_rank + component.dims.len;
+    return base_rank + sectionResultRank(self, comp.args, deps);
 }
 
 pub fn exprTypeSpecForCallOrSubscript(
@@ -409,6 +494,31 @@ fn isStatementFunctionDefinitionTarget(
 fn hasDimRangeActual(args: []*ast.Expr) bool {
     for (args) |arg| if (arg.* == .dim_range) return true;
     return false;
+}
+
+fn sectionResultRank(
+    self: *context.Context,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) usize {
+    var rank: usize = 0;
+    var saw_section = false;
+    for (args) |arg| {
+        switch (arg.*) {
+            .dim_range => {
+                saw_section = true;
+                rank += 1;
+            },
+            else => {
+                const arg_rank = deps.exprRank(self, arg);
+                if (arg_rank != 0) {
+                    saw_section = true;
+                    rank += 1;
+                }
+            },
+        }
+    }
+    return if (saw_section) rank else 0;
 }
 
 fn canTreatTypedScalarReferenceAsFunction(sym: symbols.Symbol, args: []*ast.Expr) bool {

@@ -145,7 +145,11 @@ pub fn installSavedGlobals(
 
         var total_size: usize = 1;
         var alignment: usize = 1;
-        if (sym.isCharacter()) {
+        if (sym.is_pointer or sym.is_allocatable) {
+            const sa = sizeAlignForType(.ptr);
+            total_size = sa.size;
+            alignment = sa.alignment;
+        } else if (sym.isCharacter()) {
             const char_len = try common.requireConstantCharacterLen(sym);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = elem_count * char_len;
@@ -161,7 +165,54 @@ pub fn installSavedGlobals(
         if (total_size == 0) total_size = 1;
         try builder.commonGlobal(global_name, total_size, alignment);
         try ctx.locals.put(sym.name, .{ .name = base_name, .ty = .ptr, .is_ptr = true });
+        if (savedSymbolNeedsRuntimeArrayDescriptor(sym)) {
+            try installSavedDeferredArrayDescriptor(ctx, builder, sym, global_name);
+        }
     }
+}
+
+fn savedSymbolNeedsRuntimeArrayDescriptor(sym: ast.sema.Symbol) bool {
+    if (sym.dims.len == 0) return false;
+    if (sym.is_pointer or sym.is_allocatable) return true;
+    for (sym.dims) |dim| {
+        switch (dim.*) {
+            .dim_range => |range| if (range.assumed_shape) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn installSavedDeferredArrayDescriptor(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    global_name: []const u8,
+) EmitError!void {
+    if (sym.dims.len == 0) return;
+
+    var lower_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(lower_slots);
+    var extent_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(extent_slots);
+    var multiplier_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(multiplier_slots);
+
+    for (sym.dims, 0..) |_, idx| {
+        const lower_name = try std.fmt.allocPrint(ctx.allocator, "{s}__lower_{d}", .{ global_name, idx });
+        try builder.commonGlobal(lower_name, @sizeOf(i64), @alignOf(i64));
+        lower_slots[idx] = .{ .name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{lower_name}), .ty = .ptr, .is_ptr = true };
+
+        const extent_name = try std.fmt.allocPrint(ctx.allocator, "{s}__extent_{d}", .{ global_name, idx });
+        try builder.commonGlobal(extent_name, @sizeOf(i64), @alignOf(i64));
+        extent_slots[idx] = .{ .name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{extent_name}), .ty = .ptr, .is_ptr = true };
+
+        const multiplier_name = try std.fmt.allocPrint(ctx.allocator, "{s}__mult_{d}", .{ global_name, idx });
+        try builder.commonGlobal(multiplier_name, @sizeOf(i64), @alignOf(i64));
+        multiplier_slots[idx] = .{ .name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{multiplier_name}), .ty = .ptr, .is_ptr = true };
+    }
+
+    try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots, multiplier_slots);
 }
 
 fn emitParameterArrayInitializers(ctx: *Context, builder: anytype) EmitError!void {

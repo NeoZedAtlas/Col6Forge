@@ -169,7 +169,10 @@ pub fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
             });
         },
         .component => |comp| blk: {
-            break :blk calls.exprRankForComponent(self, comp, .{ .exprTypeSpec = exprTypeSpec });
+            break :blk calls.exprRankForComponent(self, comp, .{
+                .exprTypeSpec = exprTypeSpec,
+                .exprRank = exprRank,
+            });
         },
         .unary => |un| exprRank(self, un.expr),
         .binary => |bin| @max(exprRank(self, bin.left), exprRank(self, bin.right)),

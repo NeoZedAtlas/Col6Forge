@@ -6,6 +6,7 @@ const expr = @import("../../../codegen/expression/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
 const expr_dispatch = @import("../../../codegen/expression/dispatch/mod.zig");
 const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
+const call_shared = @import("../../../codegen/expression/call/shared.zig");
 const io_utils = @import("../../io/utils.zig");
 const ir = @import("../../../../ir.zig");
 const llvm_types = @import("../../../types.zig");
@@ -16,6 +17,7 @@ const character_mod = @import("character.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
+const ArrayActualPlan = call_shared.ArrayActualPlan;
 const resolveArrayActual = array_actuals.resolveArrayActual;
 const emitOwnedHeapActualFree = array_actuals.emitOwnedHeapActualFree;
 
@@ -39,26 +41,59 @@ pub fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, as
 
     var total_count = ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
     var has_range = false;
-    for (call.args) |arg| {
+    for (call.args, 0..) |arg, dim_idx| {
         if (arg.* != .dim_range) return false;
         const range = arg.dim_range;
         has_range = true;
         if (!rangeLowerIsOne(range)) return false;
         if (range.stride != null) return false;
-        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return false;
-        var upper = try expr.emitExpr(ctx, builder, range.upper);
-        upper = try expr.coerce(ctx, builder, upper, .i64);
+        const upper = if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size)
+            blk: {
+                if (!range.assumed_shape) return false;
+                var dim_extent = try expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx);
+                if (dim_extent.ty != .i64) dim_extent = try expr.coerce(ctx, builder, dim_extent, .i64);
+                break :blk dim_extent;
+            }
+        else blk: {
+            var upper_val = try expr.emitExpr(ctx, builder, range.upper);
+            if (upper_val.ty != .i64) upper_val = try expr.coerce(ctx, builder, upper_val, .i64);
+            break :blk upper_val;
+        };
         const extent_minus_one = try expr.emitSub(ctx, builder, upper, .{ .name = "1", .ty = .i64, .is_ptr = false });
         const extent = try expr.emitAdd(ctx, builder, extent_minus_one, .{ .name = "1", .ty = .i64, .is_ptr = false });
         total_count = try expr.emitMul(ctx, builder, total_count, extent);
     }
     if (!has_range) return false;
 
-    const base_ptr = ctx.locals.get(call.name) orelse return error.UnknownSymbol;
+    const base_ptr = try wholeArrayBasePtr(ctx, builder, call.name, sym);
     const elem_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
+    return true;
+}
+
+pub fn emitSectionArrayActualAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .call_or_subscript) return false;
+    const target = assign.target.call_or_subscript;
+    const target_kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(assign.target))) orelse .unknown;
+    if (target_kind == .call) return false;
+
+    const target_actual = (try resolveArrayActual(ctx, builder, assign.target)) orelse return false;
+    const source_actual = (try resolveArrayActual(ctx, builder, assign.value)) orelse return false;
+    try target_actual.validate();
+    try source_actual.validate();
+    if (target_actual.storage == .materialized_temp or target_actual.owned_heap_ptr != null) return false;
+    if (target_actual.elem_ty != source_actual.elem_ty) return false;
+    if (target_actual.extents.len == 0 or target_actual.extents.len != source_actual.extents.len) return false;
+
+    const target_sym = ctx.findSymbol(target.name) orelse return false;
+    if (target_sym.isCharacter() or target_sym.loweredKind() == .derived) return false;
+
+    try emitRequireActualArrayShape(ctx, builder, target_actual.extents, source_actual.extents);
+    const elem_count = try emitExtentProductI64(ctx, builder, source_actual.extents);
+    try emitSectionArrayActualAssignmentLoop(ctx, builder, target_actual, source_actual, elem_count);
+    try emitOwnedHeapActualFree(ctx, builder, source_actual.owned_heap_ptr);
     return true;
 }
 
@@ -96,6 +131,88 @@ pub fn emitContiguousSectionWholeArrayCopyAssignment(ctx: *Context, builder: any
     const count = try emitDynamicElemCount(ctx, builder, source_sym);
     try emitLinearCopyLoop(ctx, builder, dst_ptr, src_ptr, elem_ty, count);
     return true;
+}
+
+fn emitRequireActualArrayShape(
+    ctx: *Context,
+    builder: anytype,
+    lhs_extents: []const ValueRef,
+    rhs_extents: []const ValueRef,
+) EmitError!void {
+    if (lhs_extents.len != rhs_extents.len) return error.UnsupportedArrayActual;
+    if (lhs_extents.len == 0) return;
+
+    var all_equal = ValueRef{ .name = "true", .ty = .i1, .is_ptr = false };
+    for (lhs_extents, rhs_extents) |lhs_extent, rhs_extent| {
+        const cmp_name = try ctx.nextTemp();
+        try builder.compare(cmp_name, "icmp", "eq", .i64, lhs_extent, rhs_extent);
+        const cmp_val = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        if (std.mem.eql(u8, all_equal.name, "true")) {
+            all_equal = cmp_val;
+        } else {
+            const and_name = try ctx.nextTemp();
+            try builder.binary(and_name, "and", .i1, all_equal, cmp_val);
+            all_equal = .{ .name = and_name, .ty = .i1, .is_ptr = false };
+        }
+    }
+
+    const ok_label = try ctx.nextLabel("section_assign_shape_ok");
+    const fail_label = try ctx.nextLabel("section_assign_shape_fail");
+    try builder.brCond(all_equal, ok_label, fail_label);
+
+    try builder.label(fail_label);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+
+    try builder.label(ok_label);
+}
+
+fn emitSectionArrayActualAssignmentLoop(
+    ctx: *Context,
+    builder: anytype,
+    target_actual: ArrayActualPlan,
+    source_actual: ArrayActualPlan,
+    elem_count: ValueRef,
+) EmitError!void {
+    const loop_preheader = try ctx.nextLabel("section_array_assign_preheader");
+    const loop_body = try ctx.nextLabel("section_array_assign_body");
+    const loop_exit = try ctx.nextLabel("section_array_assign_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(character_mod.constI64(ctx, 0), idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const src_val = try array_actuals.emitArrayActualElement(ctx, builder, idx_val, source_actual);
+    const dst_ptr = try array_actuals.emitArrayActualElementPtr(
+        ctx,
+        builder,
+        target_actual.base_ptr,
+        target_actual.elem_ty,
+        target_actual.extents,
+        target_actual.multipliers,
+        target_actual.address_scale,
+        target_actual.contiguous,
+        idx_val,
+    );
+    try builder.store(src_val, dst_ptr);
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, character_mod.constI64(ctx, 1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
 }
 
 pub fn emitContiguousSectionSubstringWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {

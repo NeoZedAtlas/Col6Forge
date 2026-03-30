@@ -3,6 +3,7 @@ const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_call = @import("../../../codegen/expression/call/mod.zig");
+const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
 const utils = @import("../../../codegen/utils.zig");
 const character_mod = @import("character.zig");
@@ -25,8 +26,40 @@ pub fn emitAssignmentTargetPtr(ctx: *Context, builder: anytype, target: *ast.Exp
 
 pub fn emitPointerAssignment(ctx: *Context, builder: anytype, assign: ast.PointerAssignment) EmitError!void {
     const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+    if (assign.target.* == .identifier) {
+        const target_name = assign.target.identifier;
+        if (ctx.runtimeArrayDescriptor(target_name)) |desc| {
+            if (isNullPointerExpr(assign.value)) {
+                try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = false }, target_ptr);
+                for (0..desc.rank) |dim_idx| {
+                    try builder.store(character_mod.constI64(ctx, 1), desc.lower_slots[dim_idx]);
+                    try builder.store(character_mod.constI64(ctx, 0), desc.extent_slots[dim_idx]);
+                    try builder.store(character_mod.constI64(ctx, if (dim_idx == 0) 1 else 0), desc.multiplier_slots[dim_idx]);
+                }
+                return;
+            }
+            if (try array_actuals.resolveArrayActual(ctx, builder, assign.value)) |actual| {
+                try actual.validate();
+                if (actual.extents.len != desc.rank) return error.AssignmentTypeMismatch;
+                try builder.store(actual.base_ptr, target_ptr);
+                for (0..desc.rank) |dim_idx| {
+                    try builder.store(character_mod.constI64(ctx, 1), desc.lower_slots[dim_idx]);
+                    try builder.store(actual.extents[dim_idx], desc.extent_slots[dim_idx]);
+                    try builder.store(actual.multipliers[dim_idx], desc.multiplier_slots[dim_idx]);
+                }
+                return;
+            }
+        }
+    }
     const value = try emitPointerValue(ctx, builder, assign.value);
     try builder.store(value, target_ptr);
+}
+
+fn isNullPointerExpr(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .call_or_subscript => |call| std.ascii.eqlIgnoreCase(call.name, "null"),
+        else => false,
+    };
 }
 
 pub fn emitNullify(ctx: *Context, builder: anytype, stmt: ast.NullifyStmt) EmitError!void {
@@ -156,6 +189,10 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
             }
             const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
             if (kind == .subscript) {
+                if (hasDimRangeArgs(call.args)) {
+                    const actual = (try array_actuals.analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return error.AssignmentTypeMismatch;
+                    break :blk actual.base_ptr;
+                }
                 break :blk try expr.emitLValue(ctx, builder, expr_node);
             }
             const value = try expr.emitExpr(ctx, builder, expr_node);
@@ -164,6 +201,13 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
         },
         else => return error.AssignmentTypeMismatch,
     };
+}
+
+fn hasDimRangeArgs(args: []*ast.Expr) bool {
+    for (args) |arg| {
+        if (arg.* == .dim_range) return true;
+    }
+    return false;
 }
 
 pub fn extractStatementFunctionParams(ctx: *Context, args: []*ast.Expr) ![]const []const u8 {

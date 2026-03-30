@@ -263,6 +263,12 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             }
             // Non-subscript call expressions are not addressable.
         },
+        .component => {
+            if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| {
+                return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
+            }
+            return .{ .ptr = try dispatch.emitLValue(ctx, builder, expr) };
+        },
         .substring => {
             return .{ .ptr = try dispatch.emitLValue(ctx, builder, expr) };
         },

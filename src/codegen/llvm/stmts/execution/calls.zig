@@ -3,6 +3,8 @@ const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context/mod.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const expr_call = @import("../../codegen/expression/call/mod.zig");
+const array_actuals = @import("../../codegen/expression/call/array_actuals.zig");
+const call_shared = @import("../../codegen/expression/call/shared.zig");
 const expr_memory = @import("../../codegen/expression/memory.zig");
 const utils = @import("../../codegen/utils.zig");
 const cfg = @import("../cfg.zig");
@@ -65,6 +67,9 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
         return;
     }
     const args = try collectCallExprArgs(ctx.allocator, call);
+    if (ctx.lookupKnownProcedureSig(call.name)) |sig| {
+        if (sig.elemental and try emitElementalSubroutineCall(ctx, builder, call.name, args, sig)) return;
+    }
     if (ctx.findSymbol(call.name)) |sym| {
         if (sym.storage == .dummy and sym.is_external) {
             const fn_ptr = try ctx.getPointer(call.name);
@@ -74,6 +79,143 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
     }
     const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, .void, args);
     _ = try expr.emitCall(ctx, builder, fn_name, .void, args, true);
+}
+
+fn emitElementalSubroutineCall(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    args: []*ast.Expr,
+    sig: ast.sema.KnownProcedureSig,
+) EmitError!bool {
+    var basis: ?call_shared.ArrayActualPlan = null;
+    var resolved = std.array_list.Managed(?call_shared.ArrayActualPlan).init(ctx.allocator);
+    defer resolved.deinit();
+
+    for (args, 0..) |arg, idx| {
+        if (idx >= sig.args.len) return false;
+        const arg_sig = sig.args[idx];
+        if (arg_sig.requires_descriptor or arg_sig.rank != 0 or arg_sig.pointer or arg_sig.allocatable or arg_sig.is_procedure or arg_sig.type_spec.lowered_kind == .character or arg_sig.type_spec.lowered_kind == .derived or arg_sig.value_attr) {
+            return false;
+        }
+        const actual = try array_actuals.resolveArrayActual(ctx, builder, arg);
+        try resolved.append(actual);
+        if (actual) |array_actual| {
+            try array_actual.validate();
+            if (array_actual.extents.len == 0) return false;
+            if (basis) |base_actual| {
+                if (base_actual.extents.len != array_actual.extents.len) return false;
+                try emitRequireSameArrayShape(ctx, builder, base_actual.extents, array_actual.extents);
+            } else {
+                basis = array_actual;
+            }
+        }
+    }
+
+    const basis_actual = basis orelse return false;
+    const fn_name = try ensureTypedExternalDeclForCall(ctx, name, .void, args);
+    const elem_count = try emitExtentProductI64(ctx, builder, basis_actual.extents);
+    const loop_preheader = try ctx.nextLabel("elemental_subroutine_preheader");
+    const loop_body = try ctx.nextLabel("elemental_subroutine_body");
+    const loop_exit = try ctx.nextLabel("elemental_subroutine_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(.{ .name = "0", .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
+    for (args, 0..) |arg, idx| {
+        if (resolved.items[idx]) |actual| {
+            const ptr = try array_actuals.emitArrayActualElementPtr(
+                ctx,
+                builder,
+                actual.base_ptr,
+                actual.elem_ty,
+                actual.extents,
+                actual.multipliers,
+                actual.address_scale,
+                actual.contiguous,
+                idx_val,
+            );
+            try abi_args.append(ptr);
+        } else {
+            try abi_args.append(try expr_call.emitArgPointer(ctx, builder, arg));
+        }
+    }
+    try builder.callTyped(null, .void, fn_name, abi_args.items);
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, .{ .name = "1", .ty = .i64, .is_ptr = false });
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
+    for (resolved.items) |actual| {
+        if (actual) |array_actual| {
+            if (array_actual.owned_heap_ptr) |owned_heap_ptr| {
+                try array_actuals.emitOwnedHeapActualFree(ctx, builder, owned_heap_ptr);
+            }
+        }
+    }
+    return true;
+}
+
+fn emitRequireSameArrayShape(
+    ctx: *Context,
+    builder: anytype,
+    lhs_extents: []const ValueRef,
+    rhs_extents: []const ValueRef,
+) EmitError!void {
+    if (lhs_extents.len != rhs_extents.len) return error.UnsupportedArrayActual;
+    if (lhs_extents.len == 0) return;
+
+    var all_equal = ValueRef{ .name = "true", .ty = .i1, .is_ptr = false };
+    for (lhs_extents, rhs_extents) |lhs_extent, rhs_extent| {
+        const cmp_name = try ctx.nextTemp();
+        try builder.compare(cmp_name, "icmp", "eq", .i64, lhs_extent, rhs_extent);
+        const cmp_val = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        if (std.mem.eql(u8, all_equal.name, "true")) {
+            all_equal = cmp_val;
+        } else {
+            const and_name = try ctx.nextTemp();
+            try builder.binary(and_name, "and", .i1, all_equal, cmp_val);
+            all_equal = .{ .name = and_name, .ty = .i1, .is_ptr = false };
+        }
+    }
+
+    const ok_label = try ctx.nextLabel("elemental_call_shape_ok");
+    const fail_label = try ctx.nextLabel("elemental_call_shape_fail");
+    try builder.brCond(all_equal, ok_label, fail_label);
+
+    try builder.label(fail_label);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+
+    try builder.label(ok_label);
+}
+
+fn emitExtentProductI64(
+    ctx: *Context,
+    builder: anytype,
+    extents: []const ValueRef,
+) EmitError!ValueRef {
+    var total = ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
+    for (extents) |extent| {
+        total = try expr.emitMul(ctx, builder, total, extent);
+    }
+    return total;
 }
 
 fn buildProcedureComponentActuals(
