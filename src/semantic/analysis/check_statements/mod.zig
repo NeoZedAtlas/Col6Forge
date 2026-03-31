@@ -75,7 +75,14 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 return error.AssignmentTypeMismatch;
             }
             if (!expr_semantics.isPointerValuedExpr(self, assign.value) and !expr_semantics.isAddressableDataTargetExpr(self, assign.value)) {
-                self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
+                const source = self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "Pointer assignment target is neither TARGET nor POINTER",
+                    source.text,
+                );
                 return error.AssignmentTypeMismatch;
             }
             try procedure_calls.rejectDefinitelyNoncontiguousPointerAssociation(self, assign.target, assign.value);
@@ -357,7 +364,18 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 return error.AssignmentTypeMismatch;
             }
             try rejectCharacterLiteralAssignmentConversion(self, where.value, target_spec, value_spec);
-            if (!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec))
+            const defined_assignment_compatible = expr_semantics.isDefinedAssignmentCompatible(self, where.target, where.value, .{
+                .dummyArgTypeCompatible = dummyArgTypeCompatible,
+            });
+            if (defined_assignment_compatible) {
+                if (resolve_symbols.lookupKnownProcedureSig(self, "assignment(=)")) |sig| {
+                    if (!sig.elemental) {
+                        return emitExprConstraint(self, where.value, "Non-ELEMENTAL user-defined assignment in WHERE");
+                    }
+                }
+            }
+            if ((!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec)) and
+                !defined_assignment_compatible)
             {
                 self.setCurrentSource(self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;

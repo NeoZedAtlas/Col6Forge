@@ -183,11 +183,64 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
             }
             break :blk slot;
         },
+        .substring => |sub| blk: {
+            if (ctx.findSymbol(sub.name)) |sym| {
+                if (sym.dims.len > 0 and !sym.isCharacter()) {
+                    var call_args = sub.args;
+                    if (sub.start != null or sub.end != null) {
+                        if (sub.args.len != 0) return error.AssignmentTypeMismatch;
+                        const upper_expr = if (sub.end) |end_expr|
+                            end_expr
+                        else blk_upper: {
+                            const assumed = try ctx.allocator.create(ast.Expr);
+                            assumed.* = .{ .literal = .{
+                                .kind = .assumed_size,
+                                .text = "*",
+                            } };
+                            break :blk_upper assumed;
+                        };
+                        const range = try ctx.allocator.create(ast.Expr);
+                        range.* = .{ .dim_range = .{
+                            .lower = sub.start,
+                            .upper = upper_expr,
+                            .stride = null,
+                            .assumed_shape = sub.end == null,
+                        } };
+                        call_args = try ctx.allocator.alloc(*ast.Expr, 1);
+                        call_args[0] = range;
+                    }
+                    if (call_args.len != 0) {
+                        var as_call = ast.Expr{ .call_or_subscript = .{
+                            .name = sub.name,
+                            .args = call_args,
+                        } };
+                        if (ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node)))) |kind| {
+                            try ctx.ref_kinds.put(@as(usize, @intFromPtr(&as_call)), kind);
+                        }
+                        if (hasDimRangeArgs(call_args)) {
+                            const actual = (try array_actuals.analyzeAddressableArrayActual(ctx, builder, &as_call)) orelse return error.AssignmentTypeMismatch;
+                            break :blk actual.base_ptr;
+                        }
+                        break :blk try expr.emitLValue(ctx, builder, &as_call);
+                    }
+                }
+            }
+            break :blk try expr.emitLValue(ctx, builder, expr_node);
+        },
         .call_or_subscript => |call| blk: {
             if (std.ascii.eqlIgnoreCase(call.name, "null")) {
                 break :blk .{ .name = "null", .ty = .ptr, .is_ptr = false };
             }
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                }
+            }
             if (kind == .subscript) {
                 if (hasDimRangeArgs(call.args)) {
                     const actual = (try array_actuals.analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return error.AssignmentTypeMismatch;

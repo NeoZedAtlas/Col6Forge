@@ -24,12 +24,21 @@ pub fn emitIntrinsicSum(ctx: *Context, builder: anytype, args: []*Expr) EmitErro
         if (try array_actuals.resolveArrayActual(ctx, builder, args[0])) |actual| {
             return emitScalarArraySumReduction(ctx, builder, actual, null);
         }
-    } else if (args.len == 2 or args.len == 3) {
+    } else if (args.len == 2) {
+        const actual = (try array_actuals.resolveArrayActual(ctx, builder, args[0])) orelse return error.InvalidIntrinsicCall;
+        try actual.validate();
+        if (evalConstIntArg(ctx, args[1])) |dim_value| {
+            if (actual.extents.len != 1 or dim_value != 1) return error.InvalidIntrinsicCall;
+            return emitScalarArraySumReduction(ctx, builder, actual, null);
+        }
+        const mask = try analyzeScalarSumMask(ctx, builder, args[1], actual);
+        return emitScalarArraySumReduction(ctx, builder, actual, mask);
+    } else if (args.len == 3) {
         const actual = (try array_actuals.resolveArrayActual(ctx, builder, args[0])) orelse return error.InvalidIntrinsicCall;
         try actual.validate();
         const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.InvalidIntrinsicCall;
         if (actual.extents.len != 1 or dim_value != 1) return error.InvalidIntrinsicCall;
-        const mask = if (args.len == 3) try analyzeScalarSumMask(ctx, builder, args[2]) else null;
+        const mask = try analyzeScalarSumMask(ctx, builder, args[2], actual);
         return emitScalarArraySumReduction(ctx, builder, actual, mask);
     } else {
         return error.InvalidIntrinsicCall;
@@ -127,10 +136,15 @@ const ScalarSumMask = struct {
     array_actual: ?ArrayActualPlan = null,
 };
 
-fn analyzeScalarSumMask(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ScalarSumMask {
+fn analyzeScalarSumMask(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    source_actual: ArrayActualPlan,
+) EmitError!?ScalarSumMask {
     if (try array_actuals.resolveArrayActual(ctx, builder, expr)) |actual| {
         try actual.validate();
-        if (actual.extents.len != 1) return error.InvalidIntrinsicCall;
+        if (actual.extents.len != source_actual.extents.len) return error.InvalidIntrinsicCall;
         return .{ .array_actual = actual };
     }
     return .{ .scalar_value = try emitLogicalCast(ctx, builder, try dispatch.emitExpr(ctx, builder, expr)) };

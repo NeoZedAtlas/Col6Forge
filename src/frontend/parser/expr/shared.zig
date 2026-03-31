@@ -175,12 +175,22 @@ pub fn dotOpIs(lp: LineParser, name: []const u8) bool {
     const tok = lp.peek() orelse return false;
     if (tok.kind != .dot_op) return false;
     const text = lp.tokenText(tok);
-    if (text.len < 3) return false;
+    if (text.len < 3 or text[0] != '.') return false;
+
+    var i: usize = 1;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) : (i += 1) {}
+    const start = i;
+    while (i < text.len and std.ascii.isAlphabetic(text[i])) : (i += 1) {}
+    const end = i;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) : (i += 1) {}
+    // Dot-op core must end at the second dot; any trailing kind suffix is ignored.
+    if (start == end or i >= text.len or text[i] != '.') return false;
+
     var buffer: [16]u8 = undefined;
     var out: usize = 0;
-    var i: usize = 1;
-    while (i + 1 < text.len) : (i += 1) {
-        const ch = text[i];
+    var idx = start;
+    while (idx < end) : (idx += 1) {
+        const ch = text[idx];
         if (std.ascii.isWhitespace(ch)) continue;
         if (out >= buffer.len) return false;
         buffer[out] = ch;

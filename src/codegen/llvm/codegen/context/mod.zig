@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const input = @import("../../../input.zig");
 const ast = @import("../../../../ast/nodes.zig");
 const common_diag = @import("../../../../common/diagnostic.zig");
+const catalog = @import("../../../../common/error_catalog.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
 const diag = @import("../../../diagnostic.zig");
 const ir = @import("../../../ir.zig");
@@ -199,19 +200,22 @@ pub const Context = struct {
         const info = diag.codegenErrorInfo(err);
         const line = if (stmt.source_line == 0) 1 else stmt.source_line;
         const column = if (stmt.source_column == 0) 1 else stmt.source_column;
-        self.setDiagnostic(line, column, info.code, info.message, stmt.source_text);
+        const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
+        self.setDiagnostic(line, column, info.code, message, stmt.source_text);
     }
 
     pub fn setDiagnosticFromSource(self: *Context, source: input.SourceRef, err: anyerror) void {
         const info = diag.codegenErrorInfo(err);
         const line = if (source.line == 0) 1 else source.line;
         const column = if (source.column == 0) 1 else source.column;
-        self.setDiagnostic(line, column, info.code, info.message, source.text);
+        const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
+        self.setDiagnostic(line, column, info.code, message, source.text);
     }
 
     pub fn setDiagnosticAt(self: *Context, line: usize, column: usize, line_text: []const u8, err: anyerror) void {
         const info = diag.codegenErrorInfo(err);
-        self.setDiagnostic(line, column, info.code, info.message, line_text);
+        const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
+        self.setDiagnostic(line, column, info.code, message, line_text);
     }
 
     pub fn lookupKnownProcedureSig(self: *const Context, name: []const u8) ?input.sema.KnownProcedureSig {

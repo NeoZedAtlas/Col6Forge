@@ -596,6 +596,7 @@ pub fn isAddressableDataTargetExpr(self: *context.Context, expr: *ast.Expr) bool
         .identifier => true,
         .component => |comp| blk: {
             if (!comp.has_parens or resolvedKindFor(self, expr) == .subscript) break :blk true;
+            if (hasTripletSectionArg(comp.args)) break :blk true;
             const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
             if (base_spec.lowered_kind != .derived) break :blk false;
             const derived_name = base_spec.derived_type_name orelse break :blk false;
@@ -608,10 +609,23 @@ pub fn isAddressableDataTargetExpr(self: *context.Context, expr: *ast.Expr) bool
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
-            break :blk kind == .subscript;
+            if (kind == .subscript) break :blk true;
+            break :blk hasTripletSectionArg(call.args);
+        },
+        .substring => |sub| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, sub.name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            break :blk sym.kind == .variable and !sym.is_external;
         },
         else => false,
     };
+}
+
+fn hasTripletSectionArg(args: []const *ast.Expr) bool {
+    for (args) |arg| {
+        if (arg.* == .dim_range) return true;
+    }
+    return false;
 }
 
 pub fn isAssignmentCompatible(target: ast.TypeKind, value: ast.TypeKind) bool {

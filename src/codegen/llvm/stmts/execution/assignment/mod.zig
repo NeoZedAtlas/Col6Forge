@@ -14,6 +14,15 @@ const ValueRef = context.ValueRef;
 const EmitError = anyerror;
 
 pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!void {
+    const lowered_target = try lowerArraySectionSubstringExpr(ctx, assign.target);
+    const lowered_value = try lowerArraySectionSubstringExpr(ctx, assign.value);
+    if (lowered_target != null or lowered_value != null) {
+        return emitAssignment(ctx, builder, .{
+            .target = lowered_target orelse assign.target,
+            .value = lowered_value orelse assign.value,
+        });
+    }
+
     if (assign.target.* == .call_or_subscript) {
         const target = assign.target.call_or_subscript;
         const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(assign.target))) orelse .unknown;
@@ -41,6 +50,8 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         return;
     }
     if (try whole_array.emitSectionArrayActualAssignment(ctx, builder, assign)) return;
+    if (try whole_array.emitSectionScalarAssignment(ctx, builder, assign)) return;
+    if (try whole_array.emitProjectedSectionComponentScalarAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionSubstringWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
@@ -123,4 +134,62 @@ pub fn constI64(ctx: *Context, value: i64) ValueRef {
 
 pub fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
     return character_mod.charLenForExpr(ctx, expr_node);
+}
+
+fn lowerArraySectionSubstringExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?*ast.Expr {
+    if (expr_node.* == .component) {
+        const comp = expr_node.component;
+        const lowered_base = try lowerArraySectionSubstringExpr(ctx, comp.base);
+        if (lowered_base != null) {
+            const lowered = try ctx.allocator.create(ast.Expr);
+            lowered.* = .{ .component = .{
+                .base = lowered_base.?,
+                .name = comp.name,
+                .args = comp.args,
+                .has_parens = comp.has_parens,
+            } };
+            if (ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node)))) |kind| {
+                try ctx.ref_kinds.put(@as(usize, @intFromPtr(lowered)), kind);
+            }
+            return lowered;
+        }
+        return null;
+    }
+
+    if (expr_node.* != .substring) return null;
+    const sub = expr_node.substring;
+    if (!whole_array.isArraySectionSubstringTarget(ctx, sub)) return null;
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.dims.len != 1) return null;
+
+    const upper_expr = if (sub.end) |end_expr|
+        end_expr
+    else blk: {
+        const assumed = try ctx.allocator.create(ast.Expr);
+        assumed.* = .{ .literal = .{
+            .kind = .assumed_size,
+            .text = "*",
+        } };
+        break :blk assumed;
+    };
+
+    const range = try ctx.allocator.create(ast.Expr);
+    range.* = .{ .dim_range = .{
+        .lower = sub.start,
+        .upper = upper_expr,
+        .stride = null,
+        .assumed_shape = sub.end == null,
+    } };
+    const args = try ctx.allocator.alloc(*ast.Expr, 1);
+    args[0] = range;
+
+    const lowered = try ctx.allocator.create(ast.Expr);
+    lowered.* = .{ .call_or_subscript = .{
+        .name = sub.name,
+        .args = args,
+    } };
+    if (ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node)))) |kind| {
+        try ctx.ref_kinds.put(@as(usize, @intFromPtr(lowered)), kind);
+    }
+    return lowered;
 }

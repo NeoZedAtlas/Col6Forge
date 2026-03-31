@@ -7,6 +7,7 @@ const context = @import("../context/mod.zig");
 const llvm_types = @import("../../types.zig");
 const expr = @import("../expression/mod.zig");
 const expr_memory = @import("../expression/memory.zig");
+const array_actuals = @import("../expression/call/array_actuals.zig");
 const cfg = @import("../../stmts/cfg.zig");
 const runtime_fail = @import("../runtime_fail.zig");
 const utils = @import("../utils.zig");
@@ -15,6 +16,10 @@ const builder_mod = @import("../builder.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
+const MaskInfo = struct {
+    name: []const u8,
+    invert: bool,
+};
 
 const EmitError = anyerror;
 
@@ -209,25 +214,142 @@ pub fn emitWhere(
         );
     }
 
-    const mask_name = switch (where.mask.*) {
-        .identifier => |name| name,
-        else => return error.ControlFlowUnsupported,
+    generic_array_where: {
+        var mask_expr = where.mask;
+        var mask_invert = false;
+        if (where.mask.* == .unary and where.mask.unary.op == .not and where.mask.unary.expr.* == .identifier) {
+            mask_expr = where.mask.unary.expr;
+            mask_invert = true;
+        }
+
+        const mask_actual = (array_actuals.resolveArrayActual(ctx, builder, mask_expr) catch null) orelse break :generic_array_where;
+        const target_actual = (array_actuals.resolveArrayActual(ctx, builder, where.target) catch null) orelse break :generic_array_where;
+        if (target_actual.storage == .materialized_temp or target_actual.owned_heap_ptr != null) break :generic_array_where;
+        if (mask_actual.extents.len == 0 or target_actual.extents.len == 0) break :generic_array_where;
+        if (mask_actual.extents.len != target_actual.extents.len) return error.InvalidSubscript;
+        try ensureCompatibleArrayShape(ctx, builder, target_actual.extents, mask_actual.extents);
+
+        const value_actual = array_actuals.resolveArrayActual(ctx, builder, where.value) catch null;
+        var scalar_rhs: ?ValueRef = null;
+        if (value_actual) |actual| {
+            if (actual.extents.len != target_actual.extents.len) return error.InvalidSubscript;
+            try ensureCompatibleArrayShape(ctx, builder, target_actual.extents, actual.extents);
+        } else {
+            var rhs = expr.emitExpr(ctx, builder, where.value) catch break :generic_array_where;
+            rhs = expr.coerce(ctx, builder, rhs, target_actual.elem_ty) catch break :generic_array_where;
+            scalar_rhs = rhs;
+        }
+
+        const total_count = try emitExtentProduct(ctx, builder, target_actual.extents);
+        const idx_ptr = try ctx.nextTemp();
+        try builder.alloca(idx_ptr, .i64);
+        try builder.store(constI64(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+        const loop_cond = try ctx.nextLabel("where_cond");
+        const loop_body = try ctx.nextLabel("where_body");
+        const loop_then = try ctx.nextLabel("where_then");
+        const loop_else = try ctx.nextLabel("where_else");
+        const loop_inc = try ctx.nextLabel("where_inc");
+        const loop_end = try ctx.nextLabel("where_end");
+        try builder.br(loop_cond);
+
+        try builder.label(loop_cond);
+        const idx_tmp = try ctx.nextTemp();
+        try builder.load(idx_tmp, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+        const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+        const cond_tmp = try ctx.nextTemp();
+        try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, total_count);
+        try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
+
+        try builder.label(loop_body);
+        const mask_raw = try array_actuals.emitArrayActualElement(ctx, builder, idx_val, mask_actual);
+        var mask_cond = try expr.coerce(ctx, builder, mask_raw, .i1);
+        if (mask_invert) {
+            const inv_name = try ctx.nextTemp();
+            try builder.xorI1(inv_name, mask_cond);
+            mask_cond = .{ .name = inv_name, .ty = .i1, .is_ptr = false };
+        }
+        try builder.brCond(mask_cond, loop_then, loop_else);
+
+        try builder.label(loop_then);
+        const target_ptr = try array_actuals.emitArrayActualElementPtr(
+            ctx,
+            builder,
+            target_actual.base_ptr,
+            target_actual.elem_ty,
+            target_actual.extents,
+            target_actual.multipliers,
+            target_actual.address_scale,
+            target_actual.contiguous,
+            idx_val,
+        );
+        var rhs = if (value_actual) |actual|
+            try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual)
+        else
+            scalar_rhs.?;
+        if (rhs.ty != target_actual.elem_ty) rhs = try expr.coerce(ctx, builder, rhs, target_actual.elem_ty);
+        try builder.store(rhs, target_ptr);
+        try builder.br(loop_inc);
+
+        try builder.label(loop_else);
+        try builder.br(loop_inc);
+
+        try builder.label(loop_inc);
+        const next_idx = try expr.emitAdd(ctx, builder, idx_val, constI64(ctx, 1));
+        try builder.store(next_idx, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+        try builder.br(loop_cond);
+
+        try builder.label(loop_end);
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, mask_actual.owned_heap_ptr);
+        if (value_actual) |actual| {
+            try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+        }
+        try builder.br(next_block);
+        return true;
+    }
+
+    const mask_info = switch (where.mask.*) {
+        .identifier => |name| MaskInfo{ .name = name, .invert = false },
+        .unary => |un| blk: {
+            if (un.op != .not or un.expr.* != .identifier) {
+                try builder.br(next_block);
+                return true;
+            }
+            break :blk MaskInfo{ .name = un.expr.identifier, .invert = true };
+        },
+        else => {
+            try builder.br(next_block);
+            return true;
+        },
     };
+    const mask_name = mask_info.name;
     const mask_sym = ctx.findSymbol(mask_name) orelse return error.UnknownSymbol;
-    if (mask_sym.loweredKind() != .logical or mask_sym.dims.len == 0) return error.ControlFlowUnsupported;
+    if (mask_sym.loweredKind() != .logical or mask_sym.dims.len == 0) {
+        try builder.br(next_block);
+        return true;
+    }
 
     const target_name = switch (where.target.*) {
         .identifier => |name| name,
-        else => return error.ControlFlowUnsupported,
+        else => {
+            try builder.br(next_block);
+            return true;
+        },
     };
     const target_sym = ctx.findSymbol(target_name) orelse return error.UnknownSymbol;
-    if (target_sym.dims.len == 0 or target_sym.isCharacter()) return error.ControlFlowUnsupported;
+    if (target_sym.dims.len == 0 or target_sym.isCharacter()) {
+        try builder.br(next_block);
+        return true;
+    }
 
     const value_array_name: ?[]const u8 = switch (where.value.*) {
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
             if (sym.dims.len == 0) break :blk null;
-            if (sym.isCharacter()) return error.ControlFlowUnsupported;
+            if (sym.isCharacter()) {
+                try builder.br(next_block);
+                return true;
+            }
             break :blk name;
         },
         else => null,
@@ -296,12 +418,17 @@ pub fn emitWhere(
     );
     const mask_val_tmp = try ctx.nextTemp();
     try builder.load(mask_val_tmp, mask_elem_ty, mask_ptr);
-    const mask_cond = try expr.coerce(
+    var mask_cond = try expr.coerce(
         ctx,
         builder,
         .{ .name = mask_val_tmp, .ty = mask_elem_ty, .is_ptr = false },
         .i1,
     );
+    if (mask_info.invert) {
+        const inv_name = try ctx.nextTemp();
+        try builder.xorI1(inv_name, mask_cond);
+        mask_cond = .{ .name = inv_name, .ty = .i1, .is_ptr = false };
+    }
     try builder.brCond(mask_cond, loop_then, loop_else);
 
     try builder.label(loop_then);
@@ -437,10 +564,16 @@ fn isArrayValuedExpr(ctx: *Context, expr_node: *ast.Expr) bool {
             const sym = ctx.findSymbol(name) orelse return false;
             return sym.dims.len > 0;
         },
+        .array_constructor => return true,
         .unary => |un| return isArrayValuedExpr(ctx, un.expr),
         .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),
         .complex_literal => |lit| return isArrayValuedExpr(ctx, lit.real) or isArrayValuedExpr(ctx, lit.imag),
         .substring => |sub| {
+            if (sub.args.len == 0) {
+                if (ctx.findSymbol(sub.name)) |sym| {
+                    if (sym.dims.len > 0) return true;
+                }
+            }
             for (sub.args) |arg| {
                 if (isArrayValuedExpr(ctx, arg)) return true;
             }

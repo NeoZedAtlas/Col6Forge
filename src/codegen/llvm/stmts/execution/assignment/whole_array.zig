@@ -79,8 +79,14 @@ pub fn emitSectionArrayActualAssignment(ctx: *Context, builder: anytype, assign:
     const target_kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(assign.target))) orelse .unknown;
     if (target_kind == .call) return false;
 
-    const target_actual = (try resolveArrayActual(ctx, builder, assign.target)) orelse return false;
-    const source_actual = (try resolveArrayActual(ctx, builder, assign.value)) orelse return false;
+    const target_actual = (resolveArrayActual(ctx, builder, assign.target) catch |err| switch (err) {
+        error.UnsupportedArrayConstructor => null,
+        else => return err,
+    }) orelse return false;
+    const source_actual = (resolveArrayActual(ctx, builder, assign.value) catch |err| switch (err) {
+        error.UnsupportedArrayConstructor => null,
+        else => return err,
+    }) orelse return false;
     try target_actual.validate();
     try source_actual.validate();
     if (target_actual.storage == .materialized_temp or target_actual.owned_heap_ptr != null) return false;
@@ -88,12 +94,117 @@ pub fn emitSectionArrayActualAssignment(ctx: *Context, builder: anytype, assign:
     if (target_actual.extents.len == 0 or target_actual.extents.len != source_actual.extents.len) return false;
 
     const target_sym = ctx.findSymbol(target.name) orelse return false;
-    if (target_sym.isCharacter() or target_sym.loweredKind() == .derived) return false;
+    if (target_sym.isCharacter()) return false;
 
     try emitRequireActualArrayShape(ctx, builder, target_actual.extents, source_actual.extents);
     const elem_count = try emitExtentProductI64(ctx, builder, source_actual.extents);
     try emitSectionArrayActualAssignmentLoop(ctx, builder, target_actual, source_actual, elem_count);
     try emitOwnedHeapActualFree(ctx, builder, source_actual.owned_heap_ptr);
+    return true;
+}
+
+pub fn emitSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (!targetHasDimRange(assign.target)) return false;
+
+    const target_actual = (try resolveArrayActual(ctx, builder, assign.target)) orelse return false;
+    try target_actual.validate();
+    if (target_actual.storage != .direct or target_actual.owned_heap_ptr != null) return false;
+    if (target_actual.extents.len == 0 or target_actual.elem_ty == .ptr) return false;
+
+    if (assign.target.* == .call_or_subscript) {
+        const target = assign.target.call_or_subscript;
+        const target_sym = ctx.findSymbol(target.name) orelse return false;
+        if (target_sym.isCharacter() or target_sym.loweredKind() == .derived) return false;
+    }
+
+    if (resolveArrayActual(ctx, builder, assign.value) catch null) |source_actual| {
+        try source_actual.validate();
+        if (target_actual.elem_ty != source_actual.elem_ty) return false;
+        if (source_actual.extents.len == 0 or target_actual.extents.len != source_actual.extents.len) return false;
+        try emitRequireActualArrayShape(ctx, builder, target_actual.extents, source_actual.extents);
+        const elem_count = try emitExtentProductI64(ctx, builder, source_actual.extents);
+        try emitSectionArrayActualAssignmentLoop(ctx, builder, target_actual, source_actual, elem_count);
+        try emitOwnedHeapActualFree(ctx, builder, source_actual.owned_heap_ptr);
+        return true;
+    }
+
+    var scalar_value = expr.emitExpr(ctx, builder, assign.value) catch |err| switch (err) {
+        error.UnsupportedArrayConstructor => return false,
+        else => return err,
+    };
+    scalar_value = try expr.coerce(ctx, builder, scalar_value, target_actual.elem_ty);
+    const elem_count = try emitExtentProductI64(ctx, builder, target_actual.extents);
+    try emitSectionScalarAssignmentLoop(ctx, builder, target_actual, elem_count, scalar_value);
+    return true;
+}
+
+pub fn emitProjectedSectionComponentScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .component) return false;
+    const comp = assign.target.component;
+    if (comp.has_parens or comp.args.len != 0) return false;
+    if (!exprHasDimRange(comp.base)) return false;
+
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return false;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return false;
+    if (component.procedure or component.pointer or component.allocatable) return false;
+    if (component.dims.len != 0) return false;
+    if (component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived) return false;
+
+    const base_actual = (try resolveArrayActual(ctx, builder, comp.base)) orelse return false;
+    try base_actual.validate();
+    if (base_actual.storage != .direct or base_actual.owned_heap_ptr != null) return false;
+    if (base_actual.extents.len == 0) return false;
+
+    const elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
+    var scalar_value = try expr.emitExpr(ctx, builder, assign.value);
+    scalar_value = try expr.coerce(ctx, builder, scalar_value, elem_ty);
+
+    const elem_count = try emitExtentProductI64(ctx, builder, base_actual.extents);
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(character_mod.constI64(ctx, 0), idx_ptr);
+
+    const loop_head = try ctx.nextLabel("proj_comp_section_fill_head");
+    const loop_body = try ctx.nextLabel("proj_comp_section_fill_body");
+    const loop_exit = try ctx.nextLabel("proj_comp_section_fill_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const base_elem_ptr = try array_actuals.emitArrayActualElementPtr(
+        ctx,
+        builder,
+        base_actual.base_ptr,
+        base_actual.elem_ty,
+        base_actual.extents,
+        base_actual.multipliers,
+        base_actual.address_scale,
+        base_actual.contiguous,
+        idx_val,
+    );
+    const dst_ptr = if (component.offset == 0)
+        base_elem_ptr
+    else blk: {
+        const comp_ptr_name = try ctx.nextTemp();
+        try builder.gep(comp_ptr_name, .i8, base_elem_ptr, character_mod.constI64(ctx, @intCast(component.offset)));
+        break :blk ValueRef{ .name = comp_ptr_name, .ty = .ptr, .is_ptr = true };
+    };
+    try builder.store(scalar_value, dst_ptr);
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, character_mod.constI64(ctx, 1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
     return true;
 }
 
@@ -206,6 +317,52 @@ fn emitSectionArrayActualAssignmentLoop(
         idx_val,
     );
     try builder.store(src_val, dst_ptr);
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, character_mod.constI64(ctx, 1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
+}
+
+fn emitSectionScalarAssignmentLoop(
+    ctx: *Context,
+    builder: anytype,
+    target_actual: ArrayActualPlan,
+    elem_count: ValueRef,
+    scalar_value: ValueRef,
+) EmitError!void {
+    const loop_preheader = try ctx.nextLabel("section_scalar_assign_preheader");
+    const loop_body = try ctx.nextLabel("section_scalar_assign_body");
+    const loop_exit = try ctx.nextLabel("section_scalar_assign_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(character_mod.constI64(ctx, 0), idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const dst_ptr = try array_actuals.emitArrayActualElementPtr(
+        ctx,
+        builder,
+        target_actual.base_ptr,
+        target_actual.elem_ty,
+        target_actual.extents,
+        target_actual.multipliers,
+        target_actual.address_scale,
+        target_actual.contiguous,
+        idx_val,
+    );
+    try builder.store(scalar_value, dst_ptr);
 
     const next_name = try ctx.nextTemp();
     try builder.binary(next_name, "add", .i64, idx_val, character_mod.constI64(ctx, 1));
@@ -399,8 +556,36 @@ pub fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assi
 
     const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return false;
     const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return false;
-    if (component.pointer or component.allocatable) return false;
     if (component.dims.len != 1) return false;
+
+    if (component.pointer or component.allocatable) {
+        if (component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived) return false;
+        const elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
+        const base_ptr = try expr_memory.emitLoadedComponentDataPtr(ctx, builder, comp);
+        var extent = try expr_memory.emitComponentDimExtent(ctx, builder, comp, 0);
+        if (extent.ty != .i64) extent = try expr.coerce(ctx, builder, extent, .i64);
+        const expected = character_mod.constI64(ctx, @intCast(flat_items.len));
+        const cmp_name = try ctx.nextTemp();
+        try builder.compare(cmp_name, "icmp", "eq", .i64, extent, expected);
+        const ok_label = try ctx.nextLabel("ptr_ctor_assign_ok");
+        const fail_label = try ctx.nextLabel("ptr_ctor_assign_fail");
+        try builder.brCond(.{ .name = cmp_name, .ty = .i1, .is_ptr = false }, ok_label, fail_label);
+        try builder.label(fail_label);
+        const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+        try builder.callTyped(null, .void, trap_name, &.{});
+        try builder.emitUnreachable();
+        try builder.label(ok_label);
+
+        for (flat_items, 0..) |item, idx| {
+            const ptr_name = try ctx.nextTemp();
+            try builder.gep(ptr_name, elem_ty, base_ptr, character_mod.constI64(ctx, @intCast(idx)));
+            const value = try expr.emitExpr(ctx, builder, item);
+            const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+            try builder.store(coerced, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
+        }
+        return true;
+    }
+
     const elem_count = common.arrayElementCount(ctx.sem, component.dims) catch return false;
     if (flat_items.len != elem_count) return false;
 
@@ -976,6 +1161,34 @@ fn emitMemMove(
 fn rangeLowerIsOne(range: ast.DimRange) bool {
     const lower = range.lower orelse return true;
     return exprIsConstOne(lower);
+}
+
+fn targetHasDimRange(target: *ast.Expr) bool {
+    return exprHasDimRange(target);
+}
+
+fn exprHasDimRange(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (arg.* == .dim_range) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| blk: {
+            for (comp.args) |arg| {
+                if (arg.* == .dim_range) break :blk true;
+            }
+            break :blk exprHasDimRange(comp.base);
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (arg.* == .dim_range) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn exprIsConstOne(expr_node: *ast.Expr) bool {

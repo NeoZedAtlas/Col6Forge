@@ -257,7 +257,8 @@ fn lexLogicalLineImpl(
             while (m < text.len and std.ascii.isWhitespace(text[m])) : (m += 1) {}
             if (k > j and m < text.len and text[m] == '.') {
                 const start = i;
-                const end = m + 1;
+                // Accept logical literals with kind suffix such as .TRUE._I4.
+                const end = scanKindSuffix(text, m + 1);
                 try tokens.append(makeToken(line, .dot_op, start, end));
                 i = end;
                 continue;
@@ -567,6 +568,24 @@ test "lexLogicalLine keeps kind suffix as part of numeric literal" {
     }
     try testing.expectEqualStrings("1.0E-1_wp", lines[0].text[tokens[2].start..tokens[2].end]);
     try testing.expectEqualStrings("2_wp", lines[0].text[tokens[4].start..tokens[4].end]);
+}
+
+test "lexLogicalLine keeps kind suffix as part of logical literal dot-op" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      L = .TRUE._TF\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{ .identifier, .equals, .dot_op };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+    try testing.expectEqualStrings(".TRUE._TF", lines[0].text[tokens[2].start..tokens[2].end]);
 }
 
 test "lexLogicalLine tolerates semicolon and bracket delimiters" {

@@ -84,13 +84,15 @@ pub fn setCodegenDiagnostic(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diag
     if (appendCodegenDiagnostics(diag_bag, codegen_diag_bag, input_path, contents)) return;
     if (codegen_diag_bag.fallbackSource()) |fallback| {
         const info = codegen.diagnostic.codegenErrorInfo(err);
+        const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, info.code, info.message, err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, info.code, message, err);
         return;
     }
     const info = codegen.diagnostic.codegenErrorInfo(err);
-    setDefaultDiagnostic(diag_bag, input_path, contents, info.code, info.message, err);
+    const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
+    setDefaultDiagnostic(diag_bag, input_path, contents, info.code, message, err);
 }
 
 pub fn setDefaultDiagnostic(diag_bag: *diag.Bag, input_path: []const u8, contents: []const u8, code: []const u8, base_message: []const u8, err: anyerror) void {

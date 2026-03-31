@@ -14,6 +14,8 @@ const runtime_fail = @import("../../runtime_fail.zig");
 const procedure_pass = @import("../../../../../common/procedure_pass.zig");
 const flatten_core = @import("../../../stmts/execution/assignment/flatten/core.zig");
 const flatten_metadata = @import("../../../stmts/execution/assignment/flatten/metadata.zig");
+const flatten_mod = @import("../../../stmts/execution/assignment/flatten/mod.zig");
+const io_utils = @import("../../../stmts/io/utils.zig");
 const shared = @import("shared.zig");
 
 const Expr = shared.Expr;
@@ -298,13 +300,25 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
             });
         },
         .call_or_subscript => |call| blk: {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            const sym_opt = ctx.findSymbol(call.name);
+            if (kind == .unknown) {
+                if (sym_opt) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                } else if (ctx.lookupKnownProcedureSig(call.name) != null) {
+                    kind = .call;
+                }
+            }
             if (kind == .call) {
                 if (try analyzeElementalArrayFunctionActual(ctx, builder, call)) |actual| break :blk actual;
                 if (try analyzeKnownArrayFunctionActual(ctx, builder, call)) |actual| break :blk actual;
                 break :blk null;
             }
-            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            const sym = sym_opt orelse break :blk null;
             if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk null;
             if (try analyzeVectorSubscriptActual(ctx, builder, sym, call)) |actual| break :blk actual;
 
@@ -356,7 +370,55 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
             if (try analyzeAddressableDataComponentArrayActual(ctx, builder, comp, component)) |actual| break :blk actual;
             break :blk null;
         },
+        .substring => |sub| blk: {
+            const lowered_call = try lowerSubstringArraySectionToCall(ctx, sub) orelse break :blk null;
+            var call_expr = ast.Expr{ .call_or_subscript = lowered_call };
+            if (ctx.ref_kinds.get(@as(usize, @intFromPtr(expr)))) |kind| {
+                try ctx.ref_kinds.put(@as(usize, @intFromPtr(&call_expr)), kind);
+            }
+            break :blk try analyzeAddressableArrayActual(ctx, builder, &call_expr);
+        },
         else => null,
+    };
+}
+
+fn lowerSubstringArraySectionToCall(
+    ctx: *Context,
+    sub: ast.SubstringExpr,
+) !?ast.CallOrSubscript {
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.dims.len == 0) return null;
+
+    if (sub.start == null and sub.end == null and sub.args.len != 0) {
+        return .{
+            .name = sub.name,
+            .args = sub.args,
+        };
+    }
+    if (sub.args.len != 0 or sym.dims.len != 1) return null;
+
+    const upper_expr = if (sub.end) |end_expr|
+        end_expr
+    else blk_upper: {
+        const assumed = try ctx.allocator.create(Expr);
+        assumed.* = .{ .literal = .{
+            .kind = .assumed_size,
+            .text = "*",
+        } };
+        break :blk_upper assumed;
+    };
+    const range = try ctx.allocator.create(Expr);
+    range.* = .{ .dim_range = .{
+        .lower = sub.start,
+        .upper = upper_expr,
+        .stride = null,
+        .assumed_shape = sub.end == null,
+    } };
+    const args = try ctx.allocator.alloc(*Expr, 1);
+    args[0] = range;
+    return .{
+        .name = sub.name,
+        .args = args,
     };
 }
 
@@ -659,7 +721,7 @@ fn analyzeElementalArrayFunctionActual(
     const sig = ctx.lookupKnownProcedureSig(call.name) orelse return null;
     if (!sig.elemental or sig.result_rank != 0) return null;
     const result_spec = sig.result_type_spec orelse return null;
-    if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
+    if (result_spec.lowered_kind == .character) return null;
 
     var basis: ?ArrayActualPlan = null;
     var array_arg_count: usize = 0;
@@ -985,6 +1047,9 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         if (try analyzeStaticMaterializedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
             return try validatedArrayActual(actual);
         }
+        if (try analyzeRuntimeGeneratedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
+            return try validatedArrayActual(actual);
+        }
     }
     if (expr.* == .call_or_subscript and std.ascii.eqlIgnoreCase(expr.call_or_subscript.name, "merge")) {
         if (try analyzeIntrinsicMergeActual(ctx, builder, expr.call_or_subscript)) |actual| {
@@ -1035,6 +1100,102 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         return try validatedArrayActual(actual);
     }
     return null;
+}
+
+fn analyzeRuntimeGeneratedArrayConstructorActual(
+    ctx: *Context,
+    builder: anytype,
+    ctor: ast.ArrayConstructor,
+) !?ArrayActualPlan {
+    if (ctor.items.len != 1) return null;
+    if (ctor.items[0].* != .implied_do) return null;
+    const implied = ctor.items[0].implied_do;
+    if (implied.items.len != 1) return null;
+    if (!flatten_mod.isRuntimeWholeArrayImpliedDo(ctx, implied)) return null;
+
+    const item_expr = implied.items[0];
+    const elem_ty = try casting.exprType(ctx, item_expr);
+    if (elem_ty == .ptr or elem_ty == .void or elem_ty == .i8 or elem_ty == .v2f32) return null;
+
+    var loop_count = try io_utils.emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
+    if (loop_count.ty != .i64) loop_count = try casting.coerce(ctx, builder, loop_count, .i64);
+    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, loop_count);
+
+    const iter_sym = ctx.findSymbol(implied.var_name) orelse return null;
+    const iter_ptr = try ctx.getPointer(implied.var_name);
+    const iter_ty = ctx.typeFromKind(iter_sym.loweredKind());
+
+    var start_val = try dispatch.emitExpr(ctx, builder, implied.start);
+    if (start_val.ty != iter_ty) start_val = try casting.coerce(ctx, builder, start_val, iter_ty);
+    var step_val = if (implied.step) |step_expr|
+        try dispatch.emitExpr(ctx, builder, step_expr)
+    else
+        i64Const(ctx, 1);
+    if (step_val.ty != iter_ty) step_val = try casting.coerce(ctx, builder, step_val, iter_ty);
+
+    const iter_saved_ptr_name = try ctx.nextTemp();
+    try builder.alloca(iter_saved_ptr_name, iter_ty);
+    const iter_saved_ptr = ValueRef{ .name = iter_saved_ptr_name, .ty = .ptr, .is_ptr = true };
+    const iter_saved_name = try ctx.nextTemp();
+    try builder.load(iter_saved_name, iter_ty, iter_ptr);
+    try builder.store(.{ .name = iter_saved_name, .ty = iter_ty, .is_ptr = false }, iter_saved_ptr);
+
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(i64Const(ctx, 0), idx_ptr);
+    try builder.store(start_val, iter_ptr);
+
+    const loop_head = try ctx.nextLabel("ctor_runtime_head");
+    const loop_body = try ctx.nextLabel("ctor_runtime_body");
+    const loop_exit = try ctx.nextLabel("ctor_runtime_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, loop_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, elem_ty, dst_ptr, idx_val);
+    var value = try dispatch.emitExpr(ctx, builder, item_expr);
+    if (value.ty != elem_ty) value = try casting.coerce(ctx, builder, value, elem_ty);
+    try builder.store(value, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const cur_iter_name = try ctx.nextTemp();
+    try builder.load(cur_iter_name, iter_ty, iter_ptr);
+    const next_iter_name = try ctx.nextTemp();
+    try builder.binary(next_iter_name, "add", iter_ty, .{ .name = cur_iter_name, .ty = iter_ty, .is_ptr = false }, step_val);
+    try builder.store(.{ .name = next_iter_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+
+    const next_idx_name = try ctx.nextTemp();
+    try builder.binary(next_idx_name, "add", .i64, idx_val, i64Const(ctx, 1));
+    try builder.store(.{ .name = next_idx_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    const restore_name = try ctx.nextTemp();
+    try builder.load(restore_name, iter_ty, iter_saved_ptr);
+    try builder.store(.{ .name = restore_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+
+    const extents = try ctx.allocator.alloc(ValueRef, 1);
+    extents[0] = loop_count;
+    const multipliers = try ctx.allocator.alloc(ValueRef, 1);
+    multipliers[0] = i64Const(ctx, 1);
+    return .{
+        .base_ptr = dst_ptr,
+        .elem_ty = elem_ty,
+        .extents = extents,
+        .multipliers = multipliers,
+        .address_scale = i64Const(ctx, 1),
+        .storage = .materialized_temp,
+        .owned_heap_ptr = dst_ptr,
+        .contiguous = true,
+    };
 }
 
 fn analyzeIntrinsicMergeActual(
@@ -2357,7 +2518,8 @@ pub fn emitSectionBasePtr(ctx: *Context, builder: anytype, sym: ast.sema.Symbol,
 
 fn emitIndexI64(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     if (expr.* == .literal and expr.literal.kind == .integer) {
-        const parsed = std.fmt.parseInt(i64, expr.literal.text, 10) catch return error.UnsupportedLiteral;
+        const normalized = try utils.normalizeIntLiteral(ctx.allocator, expr.literal.text);
+        const parsed = std.fmt.parseInt(i64, normalized, 10) catch return error.UnsupportedLiteral;
         return i64Const(ctx, parsed);
     }
     const value = try dispatch.emitExpr(ctx, builder, expr);

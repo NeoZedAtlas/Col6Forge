@@ -1306,6 +1306,39 @@ test "emitModuleToWriter lowers SUM DIM with rank-4 array-compare mask" {
     try testing.expect(std.mem.indexOf(u8, output, "sum_dim_preheader") != null);
 }
 
+test "emitModuleToWriter lowers SUM with MASK keyword in two-argument form" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer :: n\n" ++
+        "  real(8) :: x(4), f\n" ++
+        "  logical :: m(4)\n" ++
+        "  n = 4\n" ++
+        "  x = 1d0\n" ++
+        "  m = (/ .true., .false., .true., .false. /)\n" ++
+        "  f = sum(x(1:n), mask=m)\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "sum_mask_two_arg.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "sum_scalar_array_preheader") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "select") != null);
+}
+
 test "character substring compare narrows runtime helper lengths to i32" {
     const testing = std.testing;
     const allocator = testing.allocator;

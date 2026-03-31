@@ -1417,6 +1417,50 @@ test "where assignment accepts double precision values for complex array targets
     try testing.expectEqual(@as(usize, 1), sem.units.len);
 }
 
+test "where statement rejects non-elemental defined assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  implicit none\n" ++
+        "  type t1\n" ++
+        "    integer :: i\n" ++
+        "  end type t1\n" ++
+        "  interface assignment(=)\n" ++
+        "    module procedure s1\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine s1(lhs, rhs)\n" ++
+        "    type(t1), intent(out) :: lhs(2)\n" ++
+        "    type(t1), intent(in) :: rhs(2)\n" ++
+        "    lhs%i = -rhs%i\n" ++
+        "  end subroutine s1\n" ++
+        "end module m1\n" ++
+        "\n" ++
+        "program p\n" ++
+        "  use m1\n" ++
+        "  implicit none\n" ++
+        "  type(t1) :: i(2), j(2)\n" ++
+        "  i(:)%i = 1\n" ++
+        "  where (i(:)%i > 0)\n" ++
+        "    j = i\n" ++
+        "  end where\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.AssignmentTypeMismatch, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.assignment_type_mismatch.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "Non-ELEMENTAL user-defined assignment in WHERE") != null);
+}
+
 test "non-abstract type rejects deferred binding" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -1,5 +1,7 @@
+const std = @import("std");
 const input = @import("../../../input.zig");
 const codegen_diag = @import("../../../diagnostic.zig");
+const catalog = @import("../../../../common/error_catalog.zig");
 
 pub fn unitFallbackSource(unit: input.ProgramUnit) ?input.SourceRef {
     if (unit.stmts.len > 0) {
@@ -29,11 +31,12 @@ pub fn noteFallbackForUnit(diag_bag: *codegen_diag.Bag, unit: input.ProgramUnit)
 
 pub fn setCodegenDiagForUnit(diag_bag: *codegen_diag.Bag, unit: input.ProgramUnit, err: anyerror) void {
     const info = codegen_diag.codegenErrorInfo(err);
+    const message = if (std.mem.eql(u8, info.code, catalog.codegen.generic.code)) @errorName(err) else info.message;
     if (unitFallbackSource(unit)) |source| {
         const line = if (source.line == 0) 1 else source.line;
         const column = if (source.column == 0) 1 else source.column;
-        diag_bag.set(line, column, info.code, info.message, source.text);
+        diag_bag.set(line, column, info.code, message, source.text);
         return;
     }
-    diag_bag.set(1, 1, info.code, info.message, "");
+    diag_bag.set(1, 1, info.code, message, "");
 }
