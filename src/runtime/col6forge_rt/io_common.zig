@@ -237,6 +237,98 @@ pub export fn col6forge_char_compare(
     return 0;
 }
 
+pub export fn col6forge_len_trim(
+    value: ?[*]const u8,
+    value_len: c_int,
+) callconv(.c) c_int {
+    const n: usize = @intCast(@max(value_len, 0));
+    if (value == null or n == 0) return 0;
+    var end = n;
+    while (end > 0 and value.?[end - 1] == ' ') : (end -= 1) {}
+    return @intCast(end);
+}
+
+pub export fn col6forge_index(
+    value: ?[*]const u8,
+    value_len: c_int,
+    pattern: ?[*]const u8,
+    pattern_len: c_int,
+    back: c_int,
+) callconv(.c) c_int {
+    const n: usize = @intCast(@max(value_len, 0));
+    const m: usize = @intCast(@max(pattern_len, 0));
+    if (pattern == null) return 0;
+    if (m == 0) return if (back != 0) @intCast(n + 1) else 1;
+    if (value == null or m > n) return 0;
+
+    if (back != 0) {
+        var idx = n - m + 1;
+        while (idx > 0) {
+            idx -= 1;
+            if (std.mem.eql(u8, value.?[idx .. idx + m], pattern.?[0..m])) return @intCast(idx + 1);
+        }
+        return 0;
+    }
+
+    var idx: usize = 0;
+    while (idx + m <= n) : (idx += 1) {
+        if (std.mem.eql(u8, value.?[idx .. idx + m], pattern.?[0..m])) return @intCast(idx + 1);
+    }
+    return 0;
+}
+
+pub export fn col6forge_scan(
+    value: ?[*]const u8,
+    value_len: c_int,
+    set: ?[*]const u8,
+    set_len: c_int,
+    back: c_int,
+) callconv(.c) c_int {
+    return charSetSearch(value, value_len, set, set_len, back, true);
+}
+
+pub export fn col6forge_verify(
+    value: ?[*]const u8,
+    value_len: c_int,
+    set: ?[*]const u8,
+    set_len: c_int,
+    back: c_int,
+) callconv(.c) c_int {
+    return charSetSearch(value, value_len, set, set_len, back, false);
+}
+
+fn charSetSearch(
+    value: ?[*]const u8,
+    value_len: c_int,
+    set: ?[*]const u8,
+    set_len: c_int,
+    back: c_int,
+    comptime want_member: bool,
+) c_int {
+    const n: usize = @intCast(@max(value_len, 0));
+    const m: usize = @intCast(@max(set_len, 0));
+    if (value == null or n == 0) return 0;
+    const hay = value.?[0..n];
+    const set_slice: []const u8 = if (set != null) set.?[0..m] else &.{};
+
+    if (back != 0) {
+        var idx = n;
+        while (idx > 0) {
+            idx -= 1;
+            const member = std.mem.indexOfScalar(u8, set_slice, hay[idx]) != null;
+            if (member == want_member) return @intCast(idx + 1);
+        }
+        return 0;
+    }
+
+    var idx: usize = 0;
+    while (idx < n) : (idx += 1) {
+        const member = std.mem.indexOfScalar(u8, set_slice, hay[idx]) != null;
+        if (member == want_member) return @intCast(idx + 1);
+    }
+    return 0;
+}
+
 pub export fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) callconv(.c) void {
     if (out == null or out_len == 0) return;
     const dst = out.?;

@@ -212,21 +212,27 @@ fn emitLogicalTruthValue(ctx: *Context, builder: anytype, value: ValueRef) EmitE
 }
 
 pub fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (value.ty != .ptr) return error.UnsupportedIntrinsicType;
     const tmp_byte = try ctx.nextTemp();
     try builder.load(tmp_byte, .i8, .{ .name = value.name, .ty = .ptr, .is_ptr = true });
     const tmp_int = try ctx.nextTemp();
-    const int_ty = ctx.defaultIntegerIRType();
+    const int_ty = if (args.len == 2)
+        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        ctx.defaultIntegerIRType();
     try builder.cast(tmp_int, "zext", .i8, .{ .name = tmp_byte, .ty = .i8, .is_ptr = false }, int_ty);
     return .{ .name = tmp_int, .ty = int_ty, .is_ptr = false };
 }
 
 pub fn emitIntrinsicAchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     value = try casting.coerceCheckedI32(ctx, builder, value);
+    if (args.len == 2) {
+        _ = integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType;
+    }
 
     const ch_tmp = try ctx.nextTemp();
     try builder.cast(ch_tmp, "trunc", .i32, value, .i8);

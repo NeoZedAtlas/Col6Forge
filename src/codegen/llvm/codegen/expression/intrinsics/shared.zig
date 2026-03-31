@@ -119,12 +119,16 @@ fn emitLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRe
 }
 
 pub fn emitIntrinsicLen(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     const value = try emitLenValue(ctx, builder, args[0]) orelse return error.UnsupportedIntrinsicType;
-    return if (value.ty == ctx.defaultIntegerIRType())
+    const result_ty = if (args.len == 2)
+        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        ctx.defaultIntegerIRType();
+    return if (value.ty == result_ty)
         value
     else
-        casting.coerce(ctx, builder, value, ctx.defaultIntegerIRType());
+        casting.coerce(ctx, builder, value, result_ty);
 }
 
 pub fn emitIntrinsicTrim(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -132,6 +136,61 @@ pub fn emitIntrinsicTrim(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (value.ty != .ptr) return error.UnsupportedIntrinsicType;
     return value;
+}
+
+pub const CharacterSearchKind = enum {
+    index,
+    scan,
+    verify,
+};
+
+pub fn emitIntrinsicLenTrim(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    const plan = (try dispatch.emitCharacterValuePlan(ctx, builder, args[0])) orelse return error.UnsupportedIntrinsicType;
+    const result_ty = if (args.len == 2)
+        (integerKindToIRType(evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else
+        ctx.defaultIntegerIRType();
+    const fn_name = try ctx.ensureDeclRaw("col6forge_len_trim", .i32, &[_]IRType{ .ptr, .i32 }, false);
+    const len_i32 = try coerceToI32(ctx, builder, plan.logical_len);
+    const tmp = try ctx.nextTemp();
+    try builder.callTyped(tmp, .i32, fn_name, &.{ plan.ptr, len_i32 });
+    const value = ValueRef{ .name = tmp, .ty = .i32, .is_ptr = false };
+    return if (value.ty == result_ty) value else casting.coerce(ctx, builder, value, result_ty);
+}
+
+pub fn emitIntrinsicIndex(
+    ctx: *Context,
+    builder: anytype,
+    args: []*Expr,
+    comptime kind: CharacterSearchKind,
+) EmitError!ValueRef {
+    if (args.len < 2 or args.len > 4) return error.InvalidIntrinsicCall;
+    const str_plan = (try dispatch.emitCharacterValuePlan(ctx, builder, args[0])) orelse return error.UnsupportedIntrinsicType;
+    const pattern_plan = (try dispatch.emitCharacterValuePlan(ctx, builder, args[1])) orelse return error.UnsupportedIntrinsicType;
+    var back_i1: ?ValueRef = null;
+    var result_ty = ctx.defaultIntegerIRType();
+    var idx: usize = 2;
+    while (idx < args.len) : (idx += 1) {
+        if (evalConstIntArg(ctx, args[idx])) |kind_value| {
+            result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
+            continue;
+        }
+        back_i1 = try emitLogicalLikeI1(ctx, builder, try dispatch.emitExpr(ctx, builder, args[idx]));
+    }
+    const back_i32 = if (back_i1) |value| try emitI1ToI32(ctx, builder, value) else try constI32(ctx, 0);
+    const helper_name = switch (kind) {
+        .index => "col6forge_index",
+        .scan => "col6forge_scan",
+        .verify => "col6forge_verify",
+    };
+    const fn_name = try ctx.ensureDeclRaw(helper_name, .i32, &[_]IRType{ .ptr, .i32, .ptr, .i32, .i32 }, false);
+    const str_len = try coerceToI32(ctx, builder, str_plan.logical_len);
+    const pattern_len = try coerceToI32(ctx, builder, pattern_plan.logical_len);
+    const tmp = try ctx.nextTemp();
+    try builder.callTyped(tmp, .i32, fn_name, &.{ str_plan.ptr, str_len, pattern_plan.ptr, pattern_len, back_i32 });
+    const value = ValueRef{ .name = tmp, .ty = .i32, .is_ptr = false };
+    return if (value.ty == result_ty) value else casting.coerce(ctx, builder, value, result_ty);
 }
 
 pub fn llvmIntrinsicName(allocator: std.mem.Allocator, base: []const u8, ty: IRType) EmitError![]const u8 {
@@ -177,6 +236,51 @@ pub fn emitIntrinsicUnaryFloat(ctx: *Context, builder: anytype, base: []const u8
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitIntrinsicUnaryFloatValue(ctx, builder, base, value);
+}
+
+fn evalConstIntArg(ctx: *Context, arg: *Expr) ?i64 {
+    switch (arg.*) {
+        .literal => |lit| {
+            if (lit.kind != .integer) return null;
+            return std.fmt.parseInt(i64, lit.text, 10) catch null;
+        },
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            const cv = sym.const_value orelse return null;
+            return if (cv == .integer) cv.integer else null;
+        },
+        else => return null,
+    }
+}
+
+fn integerKindToIRType(kind_value: i64) ?IRType {
+    if (kind_value <= 0) return null;
+    if (kind_value >= 8) return .i64;
+    return .i32;
+}
+
+fn emitLogicalLikeI1(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    return switch (value.ty) {
+        .i1 => value,
+        .i32, .i64 => blk: {
+            const cmp_name = try ctx.nextTemp();
+            try builder.compare(cmp_name, "icmp", "ne", value.ty, value, .{ .name = "0", .ty = value.ty, .is_ptr = false });
+            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        },
+        .f32, .f64 => blk: {
+            const cmp_name = try ctx.nextTemp();
+            try builder.compare(cmp_name, "fcmp", "une", value.ty, value, .{ .name = "0.0", .ty = value.ty, .is_ptr = false });
+            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        },
+        else => error.UnsupportedIntrinsicType,
+    };
+}
+
+fn emitI1ToI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    if (value.ty != .i1) return error.UnsupportedIntrinsicType;
+    const tmp = try ctx.nextTemp();
+    try builder.cast(tmp, "zext", .i1, value, .i32);
+    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
 }
 
 

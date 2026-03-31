@@ -286,6 +286,13 @@ fn intrinsicResultRank(
         if (args.len >= 2) return array_rank -| 1;
         return 0;
     }
+    if (std.mem.eql(u8, upper, "COUNT")) {
+        if (args.len == 0) return 0;
+        const array_rank = deps.exprRank(self, args[0]);
+        if (args.len >= 3 and constIntLiteralValue(args[2]) != null) return array_rank -| 1;
+        if (args.len >= 2 and constIntLiteralValue(args[1]) != null) return array_rank -| 1;
+        return 0;
+    }
     if (std.mem.eql(u8, upper, "SHAPE") or
         std.mem.eql(u8, upper, "LBOUND") or
         std.mem.eql(u8, upper, "UBOUND"))

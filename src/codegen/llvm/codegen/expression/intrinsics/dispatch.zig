@@ -78,10 +78,14 @@ const emitIntrinsicConjg = numeric.emitIntrinsicConjg;
 const emitIntrinsicAny = arrays.emitIntrinsicAny;
 const emitIntrinsicAll = arrays.emitIntrinsicAll;
 const emitIntrinsicSum = arrays.emitIntrinsicSum;
+const emitIntrinsicCount = arrays.emitIntrinsicCount;
+const emitIntrinsicLbound = arrays.emitIntrinsicLbound;
 const emitIntrinsicSize = arrays.emitIntrinsicSize;
+const emitIntrinsicUbound = arrays.emitIntrinsicUbound;
 const emitIntrinsicAllocated = arrays.emitIntrinsicAllocated;
 const emitIntrinsicIsContiguous = arrays.emitIntrinsicIsContiguous;
 const emitIntrinsicInternalLiteralSubstring = arrays.emitIntrinsicInternalLiteralSubstring;
+const emitIntrinsicIndex = shared.emitIntrinsicIndex;
 const IntrinsicTag = enum {
     sin,
     cos,
@@ -136,9 +140,13 @@ const IntrinsicTag = enum {
     dpmpar,
     epsilon,
     huge,
+    count,
+    index,
     size,
     is_contiguous,
     len_,
+    len_trim,
+    lbound,
     trim_,
     tan,
     dtan,
@@ -167,6 +175,7 @@ const IntrinsicTag = enum {
     datan,
     atan2,
     datan2,
+    scan,
     any,
     all,
     sum_,
@@ -177,6 +186,8 @@ const IntrinsicTag = enum {
     present,
     same_type_as,
     transfer,
+    ubound,
+    verify,
     c_loc,
     c_funloc,
     csin,
@@ -244,9 +255,13 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "dpmpar", .dpmpar },
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
+    .{ "count", .count },
+    .{ "index", .index },
     .{ "size", .size },
     .{ "is_contiguous", .is_contiguous },
     .{ "len", .len_ },
+    .{ "len_trim", .len_trim },
+    .{ "lbound", .lbound },
     .{ "trim", .trim_ },
     .{ "tan", .tan },
     .{ "dtan", .dtan },
@@ -275,6 +290,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "datan", .datan },
     .{ "atan2", .atan2 },
     .{ "datan2", .datan2 },
+    .{ "scan", .scan },
     .{ "any", .any },
     .{ "all", .all },
     .{ "sum", .sum_ },
@@ -285,6 +301,8 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "present", .present },
     .{ "same_type_as", .same_type_as },
     .{ "transfer", .transfer },
+    .{ "ubound", .ubound },
+    .{ "verify", .verify },
     .{ "c_loc", .c_loc },
     .{ "c_funloc", .c_funloc },
     .{ "csin", .csin },
@@ -383,9 +401,13 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .dpmpar => return emitIntrinsicDpmpar(ctx, args),
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
+        .count => return emitIntrinsicCount(ctx, builder, args),
+        .index => return emitIntrinsicIndex(ctx, builder, args, .index),
         .size => return emitIntrinsicSize(ctx, builder, args),
         .is_contiguous => return emitIntrinsicIsContiguous(ctx, builder, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
+        .len_trim => return shared.emitIntrinsicLenTrim(ctx, builder, args),
+        .lbound => return emitIntrinsicLbound(ctx, builder, args),
         .trim_ => return emitIntrinsicTrim(ctx, builder, args),
         .tan => return emitTan(ctx, builder, args),
         .dtan => return emitDoubleUnaryLibm(ctx, builder, "tan", args),
@@ -414,6 +436,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .datan => return emitDoubleUnaryLibm(ctx, builder, "atan", args),
         .atan2 => return emitAtan2(ctx, builder, args),
         .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
+        .scan => return emitIntrinsicIndex(ctx, builder, args, .scan),
         .any => return emitIntrinsicAny(ctx, builder, args),
         .all => return emitIntrinsicAll(ctx, builder, args),
         .sum_ => return emitIntrinsicSum(ctx, builder, args),
@@ -424,6 +447,8 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .present => return emitIntrinsicAllocated(args),
         .same_type_as => return emitDeclaredLogicalIntrinsicCall(ctx, builder, name, args),
         .transfer => return emitIntrinsicTransfer(ctx, builder, args),
+        .ubound => return emitIntrinsicUbound(ctx, builder, args),
+        .verify => return emitIntrinsicIndex(ctx, builder, args, .verify),
         .c_loc => return emitIntrinsicCLoc(ctx, builder, args),
         .c_funloc => return emitIntrinsicCFunloc(ctx, args),
         .csin => return emitComplexCsin(ctx, builder, args),

@@ -47,6 +47,81 @@ pub fn emitIntrinsicSum(ctx: *Context, builder: anytype, args: []*Expr) EmitErro
     return .{ .name = acc_name, .ty = acc_ty, .is_ptr = false };
 }
 
+pub fn emitIntrinsicCount(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len == 0 or args.len > 3) return error.InvalidIntrinsicCall;
+    const actual = (try array_actuals.resolveArrayActual(ctx, builder, args[0])) orelse return error.InvalidIntrinsicCall;
+    try actual.validate();
+    var requested_dim: ?usize = null;
+    var result_ty = ctx.defaultIntegerIRType();
+
+    if (args.len >= 2) {
+        const second = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
+        if (second >= 1 and second <= actual.extents.len) {
+            requested_dim = @intCast(second - 1);
+        } else {
+            result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+        }
+    }
+    if (args.len == 3) {
+        const third = evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType;
+        if (requested_dim == null) {
+            if (third < 1 or third > actual.extents.len) return error.InvalidIntrinsicCall;
+            requested_dim = @intCast(third - 1);
+        } else {
+            result_ty = integerKindToIRType(third) orelse return error.UnsupportedIntrinsicType;
+        }
+    }
+    if (requested_dim != null) return error.InvalidIntrinsicCall;
+
+    const count_ptr_name = try ctx.nextTemp();
+    try builder.alloca(count_ptr_name, result_ty);
+    const count_ptr = ValueRef{ .name = count_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(utils.zeroValue(result_ty), count_ptr);
+
+    var elem_count = try ctx.constI64(1);
+    for (actual.extents) |extent| {
+        elem_count = try binary.emitMul(ctx, builder, elem_count, extent);
+    }
+
+    const loop_preheader = try ctx.nextLabel("count_scalar_preheader");
+    const loop_body = try ctx.nextLabel("count_scalar_body");
+    const loop_exit = try ctx.nextLabel("count_scalar_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(try ctx.constI64(0), idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const mask_val = try emitLogicalCast(ctx, builder, try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual));
+    const current_name = try ctx.nextTemp();
+    try builder.load(current_name, result_ty, count_ptr);
+    const current = ValueRef{ .name = current_name, .ty = result_ty, .is_ptr = false };
+    const one = if (result_ty == .i64) ValueRef{ .name = "1", .ty = .i64, .is_ptr = false } else ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    const updated = try binary.emitAdd(ctx, builder, current, one);
+    const store_name = try ctx.nextTemp();
+    try builder.select(store_name, result_ty, mask_val, updated, current);
+    try builder.store(.{ .name = store_name, .ty = result_ty, .is_ptr = false }, count_ptr);
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, try ctx.constI64(1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
+    try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+    const out_name = try ctx.nextTemp();
+    try builder.load(out_name, result_ty, count_ptr);
+    return .{ .name = out_name, .ty = result_ty, .is_ptr = false };
+}
+
 const ScalarSumMask = struct {
     scalar_value: ?ValueRef = null,
     array_actual: ?ArrayActualPlan = null,
@@ -504,7 +579,12 @@ fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) Em
         .identifier => |name| wholeArraySymbolView(ctx, name),
         .call_or_subscript => |call| blk: {
             if (try wholeArraySectionView(ctx, builder, call)) |view| break :blk view;
-            if (std.ascii.eqlIgnoreCase(call.name, "sum") or std.ascii.eqlIgnoreCase(call.name, "merge")) {
+            if (std.ascii.eqlIgnoreCase(call.name, "sum") or
+                std.ascii.eqlIgnoreCase(call.name, "merge") or
+                std.ascii.eqlIgnoreCase(call.name, "count") or
+                std.ascii.eqlIgnoreCase(call.name, "lbound") or
+                std.ascii.eqlIgnoreCase(call.name, "ubound"))
+            {
                 if (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) |actual| {
                     const count = staticIntrinsicArrayResultCount(ctx, actual.extents) orelse staticWholeArrayExprCount(ctx, expr_node) orelse break :blk null;
                     break :blk WholeArrayView{
@@ -588,7 +668,9 @@ fn staticCallArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     if (staticSectionArrayCount(ctx, call)) |count| return count;
     if (staticVectorSubscriptArrayCount(ctx, call)) |count| return count;
     if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumArrayCount(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "count")) return staticCountArrayCount(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeArrayCount(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "lbound") or std.ascii.eqlIgnoreCase(call.name, "ubound")) return staticBoundsArrayCount(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeArrayCount(ctx, call);
     return null;
 }
@@ -617,6 +699,26 @@ fn staticSumArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     var count: usize = 1;
     for (source_shape, 0..) |extent, idx| {
         if (idx == reduce_idx) continue;
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
+}
+
+fn staticCountArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    const shape = staticCountShape(ctx, call) orelse return null;
+    defer ctx.allocator.free(shape);
+    var count: usize = 1;
+    for (shape) |extent| {
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
+}
+
+fn staticBoundsArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
+    const shape = staticBoundsShape(ctx, call) orelse return null;
+    defer ctx.allocator.free(shape);
+    var count: usize = 1;
+    for (shape) |extent| {
         count = std.math.mul(usize, count, extent) catch return null;
     }
     return count;
@@ -682,7 +784,9 @@ fn staticCallShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
     if (staticSectionShape(ctx, call)) |shape| return shape;
     if (staticVectorSubscriptShape(ctx, call)) |shape| return shape;
     if (std.ascii.eqlIgnoreCase(call.name, "sum")) return staticSumShape(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "count")) return staticCountShape(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "merge")) return staticMergeShape(ctx, call);
+    if (std.ascii.eqlIgnoreCase(call.name, "lbound") or std.ascii.eqlIgnoreCase(call.name, "ubound")) return staticBoundsShape(ctx, call);
     if (std.ascii.eqlIgnoreCase(call.name, "reshape")) return staticReshapeShape(ctx, call);
     return null;
 }
@@ -695,6 +799,50 @@ fn staticVectorSubscriptArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?us
         count = std.math.mul(usize, count, extent) catch return null;
     }
     return count;
+}
+
+fn staticCountShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (call.args.len < 2 or call.args.len > 3) return null;
+    const source_shape = staticExprShape(ctx, call.args[0]) orelse return null;
+    defer ctx.allocator.free(source_shape);
+    if (source_shape.len <= 1) return null;
+
+    const reduce_idx = blk: {
+        const second = staticConstIntExpr(ctx, call.args[1]) orelse return null;
+        if (second > 0) {
+            const idx: usize = @intCast(second - 1);
+            if (idx < source_shape.len) break :blk idx;
+        }
+        if (call.args.len >= 3) {
+            const third = staticConstIntExpr(ctx, call.args[2]) orelse break :blk null;
+            if (third <= 0) break :blk null;
+            const idx: usize = @intCast(third - 1);
+            if (idx < source_shape.len) break :blk idx;
+        }
+        break :blk null;
+    };
+    if (reduce_idx == null) return null;
+    const shape = ctx.allocator.alloc(usize, source_shape.len - 1) catch return null;
+    var out_idx: usize = 0;
+    for (source_shape, 0..) |extent, idx| {
+        if (idx == reduce_idx.?) continue;
+        shape[out_idx] = extent;
+        out_idx += 1;
+    }
+    return shape;
+}
+
+fn staticBoundsShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
+    if (call.args.len == 0 or call.args.len > 2) return null;
+    const subject_shape = staticExprShape(ctx, call.args[0]) orelse return null;
+    defer ctx.allocator.free(subject_shape);
+    if (call.args.len == 2) {
+        const second = staticConstIntExpr(ctx, call.args[1]) orelse return null;
+        if (second >= 1 and second <= subject_shape.len) return null;
+    }
+    const shape = ctx.allocator.alloc(usize, 1) catch return null;
+    shape[0] = subject_shape.len;
+    return shape;
 }
 
 fn staticVectorSubscriptShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
@@ -1765,6 +1913,14 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     return value;
 }
 
+pub fn emitIntrinsicLbound(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitIntrinsicBoundsScalar(ctx, builder, args, true);
+}
+
+pub fn emitIntrinsicUbound(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitIntrinsicBoundsScalar(ctx, builder, args, false);
+}
+
 fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
     const value = evaluator.evalConst(expr, .{
         .ctx = ctx,
@@ -1800,6 +1956,56 @@ fn integerKindToIRType(kind_value: i64) ?IRType {
     if (kind_value <= 0) return null;
     if (kind_value >= 8) return .i64;
     return .i32;
+}
+
+fn emitIntrinsicBoundsScalar(ctx: *Context, builder: anytype, args: []*Expr, comptime use_lower: bool) EmitError!ValueRef {
+    if (args.len < 1 or args.len > 3) return error.InvalidIntrinsicCall;
+    const subject = lookupArraySubjectForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+    const rank: usize = switch (subject) {
+        .symbol => |sym| sym.dims.len,
+        .component => |comp| blk: {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+            break :blk component.dims.len;
+        },
+    };
+    var requested_dim: ?usize = null;
+    var result_ty = ctx.defaultIntegerIRType();
+
+    if (args.len == 2) {
+        const second = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
+        if (second >= 1 and second <= rank) {
+            requested_dim = @intCast(second - 1);
+        } else {
+            result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+        }
+    } else if (args.len == 3) {
+        const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
+        if (dim_value < 1 or dim_value > rank) return error.InvalidIntrinsicCall;
+        requested_dim = @intCast(dim_value - 1);
+        const kind_value = evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType;
+        result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
+    }
+
+    const dim_index = requested_dim orelse return error.InvalidIntrinsicCall;
+    var value = switch (subject) {
+        .symbol => |sym| if (use_lower)
+            try memory.emitSymbolDimLower(ctx, builder, sym, dim_index)
+        else blk: {
+            const lower = try memory.emitSymbolDimLower(ctx, builder, sym, dim_index);
+            const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+            break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
+        },
+        .component => |comp| if (use_lower)
+            try memory.emitComponentDimLower(ctx, builder, comp, dim_index)
+        else blk: {
+            const lower = try memory.emitComponentDimLower(ctx, builder, comp, dim_index);
+            const extent = try emitComponentDimExtentValue(ctx, builder, comp, dim_index);
+            break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
+        },
+    };
+    if (value.ty != result_ty) value = try casting.coerce(ctx, builder, value, result_ty);
+    return value;
 }
 
 pub fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {
