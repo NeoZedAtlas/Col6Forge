@@ -1740,6 +1740,45 @@ test "runPipelineWithOptionsAndDiagnostics accepts repository c_ptr_tests_16 abs
     try testing.expect(diag_bag.take() == null);
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts repository widechar_10 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/widechar_10.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics rejects repository widechar_1 with fbackslash" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.AssignmentTypeMismatch,
+        runPipelineWithOptionsAndDiagnostics(
+            allocator,
+            "tests/gcc-tests/gfortran.dg/widechar_1.f90",
+            .llvm,
+            .{ .fbackslash = true },
+            &diag_bag,
+        ),
+    );
+    const got = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "representable") != null or std.mem.indexOf(u8, got.message, "converted") != null);
+}
+
 test "runPipelineWithOptionsAndDiagnostics rejects repository gomp c_ptr_tests_21 declare variant type mismatch" {
     const testing = std.testing;
     const allocator = testing.allocator;

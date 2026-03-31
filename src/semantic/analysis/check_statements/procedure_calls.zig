@@ -67,7 +67,8 @@ pub fn checkProcedureActualArgsForCall(
     comptime deps: anytype,
 ) CheckError!void {
     try checkImplicitExternalCallConsistencyForCall(self, callee_name, args);
-    const sig = resolvedProcedureSig(self, callee_name) orelse return;
+    const sig = try resolvedProcedureSigForCallActuals(self, callee_name, args, deps) orelse return;
+    if (resolve_symbols.isIntrinsicName(callee_name) and !(try callActualsCouldMatchProcedureSig(self, sig, args, deps))) return;
     if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) {
         try checkKnownImplicitProcedureScalarActualArgsForCall(self, sig, args, deps);
         return;
@@ -97,7 +98,8 @@ pub fn checkProcedureActualArgsForExprCall(
     comptime deps: anytype,
 ) CheckError!void {
     try checkImplicitExternalCallConsistencyForExpr(self, callee_name, args);
-    const sig = resolvedProcedureSig(self, callee_name) orelse return;
+    const sig = try resolvedProcedureSigForExprActuals(self, callee_name, args, deps) orelse return;
+    if (resolve_symbols.isIntrinsicName(callee_name) and !(try exprActualsCouldMatchProcedureSig(self, sig, args, deps))) return;
     if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) {
         try checkKnownImplicitProcedureScalarActualArgsForExprCall(self, sig, args, deps);
         return;
@@ -2567,9 +2569,129 @@ fn lookupProcedureDeclaratorSig(self: *context.Context, name: []const u8) ?conte
     return null;
 }
 
+fn resolvedProcedureSigForExprActuals(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) !?context.Context.ProcedureSig {
+    const visible_generic_sig = procedure_interfaces.matchedVisibleGenericSigForExprArgs(self, name, args) orelse
+        procedure_interfaces.visibleSingleTargetGenericSig(self, name);
+    if (try shouldFallbackVisibleGenericToIntrinsicForExprActuals(self, name, visible_generic_sig, args, deps)) {
+        return resolve_symbols.lookupKnownProcedureSig(self, name);
+    }
+    return visible_generic_sig orelse resolve_symbols.lookupKnownProcedureSig(self, name);
+}
+
+fn resolvedProcedureSigForCallActuals(
+    self: *context.Context,
+    name: []const u8,
+    args: []const ast.CallArg,
+    comptime deps: anytype,
+) !?context.Context.ProcedureSig {
+    const visible_generic_sig = procedure_interfaces.matchedVisibleGenericSigForCallArgs(self, name, args) orelse
+        procedure_interfaces.visibleSingleTargetGenericSig(self, name);
+    if (try shouldFallbackVisibleGenericToIntrinsicForCallActuals(self, name, visible_generic_sig, args, deps)) {
+        return resolve_symbols.lookupKnownProcedureSig(self, name);
+    }
+    return visible_generic_sig orelse resolve_symbols.lookupKnownProcedureSig(self, name);
+}
+
 fn resolvedProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
     return procedure_interfaces.visibleSingleTargetGenericSig(self, name) orelse
         resolve_symbols.lookupKnownProcedureSig(self, name);
+}
+
+fn shouldFallbackVisibleGenericToIntrinsicForExprActuals(
+    self: *context.Context,
+    name: []const u8,
+    visible_generic_sig: ?context.Context.ProcedureSig,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) !bool {
+    const sig = visible_generic_sig orelse return false;
+    if (!resolve_symbols.isIntrinsicName(name)) return false;
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) == null) return false;
+    return !(try exprActualsCouldMatchProcedureSig(self, sig, args, deps));
+}
+
+fn shouldFallbackVisibleGenericToIntrinsicForCallActuals(
+    self: *context.Context,
+    name: []const u8,
+    visible_generic_sig: ?context.Context.ProcedureSig,
+    args: []const ast.CallArg,
+    comptime deps: anytype,
+) !bool {
+    const sig = visible_generic_sig orelse return false;
+    if (!resolve_symbols.isIntrinsicName(name)) return false;
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) == null) return false;
+    return !(try callActualsCouldMatchProcedureSig(self, sig, args, deps));
+}
+
+fn exprActualsCouldMatchProcedureSig(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) !bool {
+    const min_count = minimumRequiredProcedureArgs(sig);
+    if (args.len < min_count or args.len > sig.arg_count) return false;
+    const count = @min(sig.args.len, args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        if (!(try exprActualCouldMatchFormal(self, sig, sig.args[idx], args[idx], deps))) return false;
+    }
+    return true;
+}
+
+fn callActualsCouldMatchProcedureSig(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []const ast.CallArg,
+    comptime deps: anytype,
+) !bool {
+    const got_expr = countCallExprArgs(args);
+    var got_alt_return: usize = 0;
+    for (args) |arg| {
+        if (arg == .alt_return) got_alt_return += 1;
+    }
+    if (got_alt_return != sig.alt_return_count) return false;
+    const min_count = minimumRequiredProcedureArgs(sig);
+    if (got_expr < min_count or got_expr > sig.arg_count) return false;
+    var formal_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (formal_idx >= sig.args.len) break;
+        if (!(try exprActualCouldMatchFormal(self, sig, sig.args[formal_idx], arg.expr.value, deps))) return false;
+        formal_idx += 1;
+    }
+    return true;
+}
+
+fn exprActualCouldMatchFormal(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) !bool {
+    if (formal.is_procedure) return true;
+    if (formal.pointer and isNullPointerIntrinsic(actual_expr)) return true;
+    try resolve_expr.resolveExpr(self, actual_expr);
+    const actual_rank = procedureActualExprRank(self, actual_expr);
+    const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) return false;
+    if (formal.rank == 0 and actual_rank > 0 and sig.elemental) return true;
+    if (formal.rank == actual_rank) return true;
+    if (formal.rank == 1 and !formal.requires_descriptor) {
+        if (try sequenceAssociationAvailableElements(self, actual_expr)) |available_elements| {
+            if (formalRequiredElementCount(formal)) |required_elements| {
+                return available_elements >= required_elements;
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 fn abstractPassedObjectTypeName(self: *context.Context, expr: *ast.Expr) ?[]const u8 {

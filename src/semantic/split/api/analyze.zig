@@ -106,6 +106,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             options.range_check,
             diag_bag,
         );
+        unit_analyzer.ctx.fbackslash = options.fbackslash;
         unit_analyzer.ctx.allow_argument_mismatch = options.allow_argument_mismatch;
         unit_analyzer.ctx.dialect = options.dialect;
         unit_analyzer.ctx.declare_variant_adjust_args = options.declare_variant_adjust_args;

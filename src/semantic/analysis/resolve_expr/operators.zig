@@ -6,6 +6,27 @@ const symbols_mod = @import("../resolve_symbols.zig");
 
 const ResolveError = anyerror;
 
+fn defaultCharacterKind(kind_value: ?i64) i64 {
+    return kind_value orelse 1;
+}
+
+fn emitCharacterKindMismatch(
+    self: *context.Context,
+    left_spec: symbols.TypeSpec,
+    op: ast.BinaryOp,
+    left_expr: *ast.Expr,
+    right_expr: *ast.Expr,
+) void {
+    const src = self.current_source orelse self.sourceForExpr(right_expr) orelse self.sourceForExpr(left_expr) orelse return;
+    const message = if (std.ascii.indexOfIgnoreCase(src.text, "case") != null)
+        std.fmt.allocPrint(self.arena, "must be of kind {d}", .{defaultCharacterKind(left_spec.kind_value)}) catch "must be of kind 1"
+    else switch (op) {
+        .concat => "Operands of string concatenation operator are of different kind",
+        else => "Operands of comparison operator are of different kind",
+    };
+    self.setDiagnostic(src.line, src.column, @import("../../../common/error_catalog.zig").semantic.invalid_arithmetic_operands.code, message, src.text);
+}
+
 pub fn validateBinaryOperandSpecs(
     self: *context.Context,
     op: ast.BinaryOp,
@@ -19,16 +40,31 @@ pub fn validateBinaryOperandSpecs(
     switch (op) {
         .eq, .ne, .lt, .le, .gt, .ge => {
             if (left_spec.lowered_kind == .character and right_spec.lowered_kind == .character and
-                left_spec.kind_value != right_spec.kind_value)
+                defaultCharacterKind(left_spec.kind_value) != defaultCharacterKind(right_spec.kind_value))
             {
+                emitCharacterKindMismatch(self, left_spec, op, left_expr, right_expr);
                 return error.InvalidArithmeticOperands;
             }
             return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
         },
         .and_, .or_, .eqv, .neqv => return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-        .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
+        .concat => {
+            if (left_spec.lowered_kind == .character and right_spec.lowered_kind == .character and
+                defaultCharacterKind(left_spec.kind_value) != defaultCharacterKind(right_spec.kind_value))
+            {
+                emitCharacterKindMismatch(self, left_spec, op, left_expr, right_expr);
+                return error.InvalidArithmeticOperands;
+            }
+            return concatResultSpec(left_spec, right_spec);
+        },
         else => return promoteNumericTypeSpec(self, left_expr, right_expr, deps),
     }
+}
+
+pub fn concatResultSpec(left_spec: symbols.TypeSpec, right_spec: symbols.TypeSpec) symbols.TypeSpec {
+    const result_kind = left_spec.kind_value orelse right_spec.kind_value;
+    return symbols.TypeSpec.fromResolvedKind(.character, .character, result_kind)
+        .withCharacterLength(.deferred, null);
 }
 
 pub fn resolveDefinedUnaryOperatorResult(

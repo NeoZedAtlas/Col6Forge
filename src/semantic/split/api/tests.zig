@@ -94,6 +94,99 @@ test "analyzeProgram installs single-target generic interface aliases with point
     try testing.expect(found_x);
 }
 
+test "analyzeProgram accepts pointer assignment from single-target generic function result" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module class_fld\n" ++
+        "  type fld\n" ++
+        "    integer :: size(2)\n" ++
+        "  end type fld\n" ++
+        "end module class_fld\n" ++
+        "module class_s_fld\n" ++
+        "  use class_fld\n" ++
+        "  type s_fld\n" ++
+        "    type(fld) :: base\n" ++
+        "    real(kind(1.d0)), pointer :: x(:) => null()\n" ++
+        "  end type s_fld\n" ++
+        "  interface x_\n" ++
+        "    module procedure get_s_fld_x\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  function get_s_fld_x(fld)\n" ++
+        "    real(kind(1.d0)), pointer :: get_s_fld_x(:)\n" ++
+        "    type(s_fld), intent(in) :: fld\n" ++
+        "    get_s_fld_x => fld%x\n" ++
+        "  end function get_s_fld_x\n" ++
+        "end module class_s_fld\n" ++
+        "subroutine solve_s_foo(phi)\n" ++
+        "  use class_s_fld\n" ++
+        "  type(s_fld), intent(inout) :: phi\n" ++
+        "  integer :: nsz\n" ++
+        "  real(kind(1.d0)), pointer :: x(:)\n" ++
+        "  x => x_(phi)\n" ++
+        "  nsz = size(x)\n" ++
+        "end subroutine solve_s_foo\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(diagnostic.take() == null);
+}
+
+test "analyzeProgram selects the unique visible generic specific after USE association" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module p_class\n" ++
+        "  implicit none\n" ++
+        "  private :: init_personnel\n" ++
+        "  interface new\n" ++
+        "    module procedure init_personnel\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine init_personnel(this)\n" ++
+        "    integer, intent(in) :: this\n" ++
+        "  end subroutine init_personnel\n" ++
+        "end module p_class\n" ++
+        "module s_class\n" ++
+        "  use p_class\n" ++
+        "  implicit none\n" ++
+        "  private :: init_student\n" ++
+        "  type student\n" ++
+        "    integer :: personnel = 1\n" ++
+        "  end type student\n" ++
+        "  interface new\n" ++
+        "    module procedure init_student\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine init_student(this)\n" ++
+        "    type(student), intent(in) :: this\n" ++
+        "    call new(this%personnel)\n" ++
+        "  end subroutine init_student\n" ++
+        "end module s_class\n" ++
+        "program p\n" ++
+        "  use s_class\n" ++
+        "  type(student) :: b\n" ++
+        "  call new(b)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(diagnostic.take() == null);
+}
+
 test "analyzeProgram installs single-target generic assignment aliases declared with procedure" {
     const testing = std.testing;
     const allocator = testing.allocator;

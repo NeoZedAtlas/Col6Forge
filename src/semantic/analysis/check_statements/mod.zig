@@ -6,6 +6,7 @@ const context = @import("../context.zig");
 const resolve_const = @import("../resolve_const.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
+const literal_utils = @import("../../evaluator/literals.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
 const procedure_interfaces = @import("procedure_interfaces.zig");
 const select_type_checks = @import("select_type.zig");
@@ -43,6 +44,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
+            try rejectCharacterLiteralAssignmentConversion(self, assign.value, target_spec, value_spec);
             if ((!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec)) and
                 !expr_semantics.isDefinedAssignmentCompatible(self, assign.target, assign.value, .{
                     .dummyArgTypeCompatible = dummyArgTypeCompatible,
@@ -351,6 +353,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
+            try rejectCharacterLiteralAssignmentConversion(self, where.value, target_spec, value_spec);
             if (!intrinsicAssignmentTypeCompatible(self, target_ty, value_ty, target_spec, value_spec))
             {
                 self.setCurrentSource(self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target));
@@ -427,6 +430,37 @@ fn intrinsicAssignmentTypeCompatible(
     }
 
     return true;
+}
+
+fn rejectCharacterLiteralAssignmentConversion(
+    self: *context.Context,
+    value: *ast.Expr,
+    target_spec: symbols.TypeSpec,
+    value_spec: symbols.TypeSpec,
+) CheckError!void {
+    if (!self.fbackslash) return;
+    if (target_spec.lowered_kind != .character or value_spec.lowered_kind != .character) return;
+
+    const target_kind = target_spec.kind_value orelse 1;
+    const value_kind = value_spec.kind_value orelse 1;
+    if (target_kind == value_kind) return;
+    if (value.* != .literal or value.literal.kind != .string) return;
+
+    const cp = literal_utils.firstBackslashEscapeExceedingCharacterKind(value.literal.text, target_kind) orelse return;
+    const source = self.sourceForExpr(value) orelse ast.SourceRef{};
+    const message = std.fmt.allocPrint(
+        self.arena,
+        "Unicode character U+{X} cannot be converted to character kind {d}",
+        .{ cp, target_kind },
+    ) catch "cannot be converted";
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
 }
 
 fn isLegacyDialectDoControlKind(kind: ast.TypeKind) bool {

@@ -6,6 +6,7 @@ const binary = @import("../binary.zig");
 const casting = @import("../casting.zig");
 const complex = @import("../complex.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const literal_utils = @import("../../../../../semantic/evaluator/literals.zig");
 const shared = @import("shared.zig");
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -398,12 +399,14 @@ fn emitBozIntLiteral(ctx: *Context, expr: *Expr, int_ty: IRType) ?ValueRef {
         else => return null,
     };
     if (lit.kind != .string) return null;
-    const decoded = utils.decodeStringLiteral(ctx.allocator, lit.text) catch return null;
-    if (decoded.len == 0) return null;
-    for (decoded) |ch| {
-        if (!std.ascii.isHex(ch)) return null;
-    }
-    const parsed = std.fmt.parseInt(i64, decoded, 16) catch return null;
+    const parsed: i64 = (literal_utils.parseBozInt(lit.text) catch return null) orelse blk: {
+        const decoded = utils.decodeStringLiteral(ctx.allocator, lit.text) catch return null;
+        if (decoded.len == 0) return null;
+        for (decoded) |ch| {
+            if (!std.ascii.isHex(ch)) return null;
+        }
+        break :blk std.fmt.parseInt(i64, decoded, 16) catch return null;
+    };
     return .{ .name = ctx.intLiteral(parsed) catch return null, .ty = int_ty, .is_ptr = false };
 }
 

@@ -11,6 +11,7 @@ pub const Dialect = semantic.Dialect;
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
     range_check: bool = false,
+    fbackslash: bool = false,
     allow_argument_mismatch: bool = false,
     dialect: Dialect = .default,
     pause_mode: PauseMode = .auto,

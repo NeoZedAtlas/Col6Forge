@@ -142,7 +142,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try cacheExprType(self, expr, ty);
         },
         .literal => |lit| {
-            const ty = literalTypeSpec(lit);
+            const ty = type_helpers.literalTypeSpecWithContext(self, lit);
             try cacheExprType(self, expr, ty);
         },
     }
@@ -235,7 +235,7 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
         },
         .dim_range => return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
         .literal => |lit| {
-            return literalTypeSpec(lit);
+            return type_helpers.literalTypeSpecWithContext(self, lit);
         },
         .complex_literal => |lit| {
             const real_spec = try exprTypeSpecCached(self, lit.real);
@@ -254,7 +254,11 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
         .binary => |bin| {
             switch (bin.op) {
                 .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-                .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
+                .concat => {
+                    const left_spec = try exprTypeSpecCached(self, bin.left);
+                    const right_spec = try exprTypeSpecCached(self, bin.right);
+                    return operators.concatResultSpec(left_spec, right_spec);
+                },
                 else => {},
             }
             return operators.promoteNumericTypeSpec(self, bin.left, bin.right, .{

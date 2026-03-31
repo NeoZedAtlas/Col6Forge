@@ -39,6 +39,7 @@ pub const KnownProcedureSig = struct {
 pub const AnalyzeOptions = struct {
     target_layout: context.Context.TargetLayout = .{},
     range_check: bool = false,
+    fbackslash: bool = false,
     allow_argument_mismatch: bool = false,
     dialect: Dialect = .default,
     declare_variant_adjust_args: []const context.Context.DeclareVariantAdjustArg = &.{},

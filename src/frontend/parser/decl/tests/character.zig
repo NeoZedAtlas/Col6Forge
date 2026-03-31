@@ -171,6 +171,39 @@ test "parseDecl handles character length in parentheses" {
     }
 }
 
+test "parseDecl handles CHARACTER(len, kind) positional selectors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(1,U) NEN\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expect(td.kind_selector != null);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            switch (td.kind_selector.?.*) {
+                .identifier => |name| try testing.expectEqualStrings("U", name),
+                else => return error.UnexpectedToken,
+            }
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("1", lit.text),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseDecl handles COMPLEX*16 declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

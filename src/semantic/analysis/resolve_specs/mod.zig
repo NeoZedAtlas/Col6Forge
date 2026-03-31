@@ -131,7 +131,14 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 var sym = &self.symbols.items[idx];
                 sym.kind = .parameter;
                 sym.storage = .local;
-                if (sym.dims.len != 0) continue;
+                if (sym.dims.len != 0) {
+                    if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
+                        if (inferCharacterParameterLength(self, assign.value)) |char_len| {
+                            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, char_len));
+                        }
+                    }
+                    continue;
+                }
                 const assigned_value = check_const.checkParameterAssign(self, assign) catch |err| {
                     if (err == error.ParameterNotConstant) {
                         setParameterNotConstantDiagnostic(self, assign.name);
@@ -153,7 +160,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
                     switch (const_val) {
                         .string => |bytes| {
-                            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, bytes.len));
+                            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, constStringLogicalLen(bytes)));
                         },
                         else => {
                             sym.applyTypeSpec(sym.type_spec.withCharacterLength(sym.effectiveCharLenKind(), null));
@@ -1719,7 +1726,14 @@ pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void 
         sym.kind = .parameter;
         sym.storage = .local;
 
-        if (sym.dims.len != 0) continue;
+        if (sym.dims.len != 0) {
+            if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
+                if (inferCharacterParameterLength(self, init_expr)) |char_len| {
+                    sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, char_len));
+                }
+            }
+            continue;
+        }
 
         const assign = ast.ParamAssign{
             .name = item.name,
@@ -1746,7 +1760,7 @@ pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void 
         if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
             switch (const_val) {
                 .string => |bytes| {
-                    sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, bytes.len));
+                    sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, constStringLogicalLen(bytes)));
                 },
                 else => {
                     sym.applyTypeSpec(sym.type_spec.withCharacterLength(sym.effectiveCharLenKind(), null));
@@ -1754,4 +1768,28 @@ pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void 
             }
         }
     }
+}
+
+fn inferCharacterParameterLength(self: *context.Context, expr: *ast.Expr) ?usize {
+    if (constants.evalConst(self, expr) catch null) |value| {
+        return switch (value) {
+            .string => |bytes| constStringLogicalLen(bytes),
+            else => null,
+        };
+    }
+    return switch (expr.*) {
+        .array_constructor => |ctor| blk: {
+            var max_len: usize = 0;
+            for (ctor.items) |item| {
+                const item_len = inferCharacterParameterLength(self, item) orelse continue;
+                max_len = @max(max_len, item_len);
+            }
+            break :blk if (max_len == 0) null else max_len;
+        },
+        else => null,
+    };
+}
+
+fn constStringLogicalLen(bytes: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(bytes) catch bytes.len;
 }

@@ -24,7 +24,7 @@ pub fn resolveCallOrSubscriptExpr(
     var sym = self.symbols.items[idx];
     var kind: ResolvedRefKind = .unknown;
     var resolved_spec = sym.type_spec;
-    const visible_generic_sig = visibleSingleTargetGenericSig(self, call.name);
+    const visible_generic_sig = try effectiveVisibleGenericSig(self, call.name, call.args, deps);
     if (structureConstructorTypeSpec(self, call.name, sym)) |ctor_spec| {
         const type_name = ctor_spec.derived_type_name orelse call.name;
         if (isAbstractDerivedType(self, type_name)) {
@@ -79,9 +79,17 @@ pub fn resolveCallOrSubscriptExpr(
         }
         if (sym.dims.len > 0) {
             kind = .subscript;
-        } else if (resolvedProcedureSig(self, call.name, sym.is_intrinsic, visible_generic_sig)) |sig|
-        {
-            if (sig.kind == .function) {
+        } else if (resolvedProcedureSig(self, call.name, sym.is_intrinsic, visible_generic_sig)) |sig| {
+            if (shouldPreferIntrinsicOverResolvedSig(self, call.name, sig, call.args, deps)) {
+                kind = .call;
+                sym.is_intrinsic = true;
+                resolved_spec = try intrinsicReturnType(self, call.name, sym.type_spec, call.args, deps);
+                if (!intrinsic_signature.resultDependsOnArgs(call.name)) {
+                    sym.applyTypeSpec(resolved_spec);
+                }
+                self.symbols.items[idx] = sym;
+            } else
+        if (sig.kind == .function) {
                 const was_variable = sym.kind == .variable;
                 const known_result_spec = sig.result_type_spec orelse symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name);
                 if (shouldCheckImplicitFunctionReferenceMismatch(self, call.name, sym, visible_generic_sig) and
@@ -559,6 +567,62 @@ fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?cont
         return singleTargetGenericInterfaceSig(self, decl.interface_block);
     }
     return null;
+}
+
+fn effectiveVisibleGenericSig(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) !?context.Context.ProcedureSig {
+    const sig = visibleSingleTargetGenericSig(self, name) orelse return null;
+    if (!symbols_mod.isIntrinsicName(name)) return sig;
+    if (symbols_mod.lookupKnownProcedureSig(self, name) == null) return sig;
+    if (try exprActualsCouldMatchProcedureSig(self, sig, args, deps)) return sig;
+    return null;
+}
+
+fn exprActualsCouldMatchProcedureSig(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) !bool {
+    const min_count = minimumRequiredProcedureArgs(sig);
+    if (args.len < min_count or args.len > sig.arg_count) return false;
+    const count = @min(sig.args.len, args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        if (!(try exprActualCouldMatchFormal(self, sig, sig.args[idx], args[idx], deps))) return false;
+    }
+    return true;
+}
+
+fn exprActualCouldMatchFormal(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) !bool {
+    if (formal.is_procedure) return true;
+    try deps.resolveExpr(self, actual_expr);
+    const actual_spec = try deps.exprTypeSpecCached(self, actual_expr);
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) return false;
+    _ = sig;
+    return true;
+}
+
+fn shouldPreferIntrinsicOverResolvedSig(
+    self: *context.Context,
+    name: []const u8,
+    sig: context.Context.ProcedureSig,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) bool {
+    if (!symbols_mod.isIntrinsicName(name)) return false;
+    if (sig.kind != .function) return false;
+    return !(exprActualsCouldMatchProcedureSig(self, sig, args, deps) catch false);
 }
 
 fn resolvedProcedureSig(

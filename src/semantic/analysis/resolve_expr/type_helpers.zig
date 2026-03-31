@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const symbols = @import("../../symbol/mod.zig");
 const evaluator = @import("../../evaluator.zig");
+const literal_utils = @import("../../evaluator/literals.zig");
 const context = @import("../context.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 const constants = @import("../resolve_const.zig");
@@ -95,9 +96,16 @@ pub fn literalTypeSpec(lit: ast.Literal) symbols.TypeSpec {
         .integer => symbols.TypeSpec.fromResolvedKind(.integer, .integer, integerLiteralKindValue(lit.text)),
         .real => realLiteralTypeSpec(lit.text),
         .logical => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-        .string, .hollerith => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, lit.text.len),
+        .string, .hollerith => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, literal_utils.literalByteLen(lit) orelse lit.text.len),
         .assumed_size => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
     };
+}
+
+pub fn literalTypeSpecWithContext(self: *context.Context, lit: ast.Literal) symbols.TypeSpec {
+    if (lit.kind != .string) return literalTypeSpec(lit);
+    const kind_value = characterLiteralKindValue(self, lit.text);
+    return symbols.TypeSpec.fromResolvedKind(.character, .character, kind_value)
+        .withCharacterLength(.constant, literal_utils.literalByteLen(lit) orelse lit.text.len);
 }
 
 pub fn realLiteralTypeKind(text: []const u8) ast.TypeKind {
@@ -138,4 +146,29 @@ fn isLogicalType(kind: ast.TypeKind) bool {
 
 fn isCharacterType(kind: ast.TypeKind) bool {
     return kind == .character;
+}
+
+fn characterLiteralKindValue(self: *context.Context, text: []const u8) ?i64 {
+    const prefix = literal_utils.characterLiteralKindPrefix(text) orelse return null;
+    var all_digits = prefix.len != 0;
+    for (prefix) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) return std.fmt.parseInt(i64, prefix, 10) catch null;
+    if (symbols_mod.findSymbolIndex(self, prefix)) |idx| {
+        return switch (self.symbols.items[idx].const_value orelse return null) {
+            .integer => |value| value,
+            else => null,
+        };
+    }
+    if (self.known_host_parameters.get(prefix)) |sym| {
+        return switch (sym.const_value orelse return null) {
+            .integer => |value| value,
+            else => null,
+        };
+    }
+    return null;
 }

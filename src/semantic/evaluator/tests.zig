@@ -349,6 +349,41 @@ test "const call dispatch handles INT CEILING LOG REAL chain" {
     }
 }
 
+test "const call dispatch handles INT with BOZ literal and CHAR kind result" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const boz = try a.create(ast.Expr);
+    boz.* = .{ .literal = .{ .kind = .string, .text = "z'5e74'" } };
+    const kind_four = try a.create(ast.Expr);
+    kind_four.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
+
+    const int_args = try a.alloc(*ast.Expr, 1);
+    int_args[0] = boz;
+    const int_call = try a.create(ast.Expr);
+    int_call.* = .{ .call_or_subscript = .{ .name = "int", .args = int_args } };
+
+    const char_args = try a.alloc(*ast.Expr, 2);
+    char_args[0] = int_call;
+    char_args[1] = kind_four;
+    const char_call = try a.create(ast.Expr);
+    char_call.* = .{ .call_or_subscript = .{ .name = "char", .args = char_args } };
+
+    const int_value = (try evalConst(int_call, null)) orelse return error.TestExpectedEqual;
+    switch (int_value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 0x5e74), v),
+        else => return error.TestExpectedEqual,
+    }
+
+    const char_value = (try evalConst(char_call, null)) orelse return error.TestExpectedEqual;
+    switch (char_value) {
+        .string => |bytes| try testing.expectEqualStrings("\xE5\xB9\xB4", bytes),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "const call dispatch handles STORAGE_SIZE and C_SIZEOF via expr measure callback" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -482,6 +517,15 @@ test "evalConst decodes doubled-quote string when allocator is provided" {
         .string => |bytes| try testing.expectEqualStrings("A'B", bytes),
         else => return error.TestExpectedEqual,
     }
+}
+
+test "literal helper finds first backslash escape exceeding character kind" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(?u32, 0x0100), literals.firstBackslashEscapeExceedingCharacterKind("'foo\\u0100'", 1));
+    try testing.expectEqual(@as(?u32, 0x0101), literals.firstBackslashEscapeExceedingCharacterKind("4_'foo\\u0101'", 1));
+    try testing.expectEqual(@as(?u32, null), literals.firstBackslashEscapeExceedingCharacterKind("'foo\\u00ff'", 1));
+    try testing.expectEqual(@as(?u32, null), literals.firstBackslashEscapeExceedingCharacterKind("4_'foo\\UFFFFFFFF'", 4));
 }
 
 test "const call dispatch folds SAME_TYPE_AS and EXTENDS_TYPE_OF when static types are sufficient" {

@@ -7,6 +7,7 @@ const constants = @import("../resolve_const.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_calls = @import("../resolve_expr/calls.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
+const literal_utils = @import("../../evaluator/literals.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
 const procedure_interfaces = @import("procedure_interfaces.zig");
 const procedure_calls = @import("procedure_calls.zig");
@@ -161,6 +162,32 @@ fn emitWidecharExprDiagnostic(self: *context.Context, expr_node: *ast.Expr, use_
     return emitExprConstraintDiagnostic(self, expr_node, message);
 }
 
+fn validateCharacterLiteralRepresentability(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    lit: ast.Literal,
+) CheckError!void {
+    if (!self.fbackslash or lit.kind != .string) return;
+    const spec = try resolve_expr.exprTypeSpec(self, expr_node);
+    if (spec.lowered_kind != .character) return;
+    const kind_value = spec.kind_value orelse 1;
+    const cp = literal_utils.firstBackslashEscapeExceedingCharacterKind(lit.text, kind_value) orelse return;
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    const message = std.fmt.allocPrint(
+        self.arena,
+        "Unicode character U+{X} is not representable in character kind {d}",
+        .{ cp, kind_value },
+    ) catch "is not representable";
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
+}
+
 fn intrinsicRequiresDoublePrecisionArgs(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "dabs") or
         std.ascii.eqlIgnoreCase(name, "dacos") or
@@ -207,7 +234,11 @@ fn isoCBindingHandleFamily(spec: symbols.TypeSpec) ?enum { c_ptr, c_funptr } {
 
 pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: anytype) CheckError!ast.TypeKind {
     switch (expr.*) {
-        .identifier, .literal => return try resolve_expr.exprType(self, expr),
+        .identifier => return try resolve_expr.exprType(self, expr),
+        .literal => |lit| {
+            try validateCharacterLiteralRepresentability(self, expr, lit);
+            return try resolve_expr.exprType(self, expr);
+        },
         .array_constructor => |ctor| {
             for (ctor.items) |item| _ = try checkExprType(self, item, deps);
             try checkArrayConstructorAbstractItems(self, expr, ctor.items);
@@ -543,7 +574,15 @@ pub fn isPointerValuedExpr(self: *context.Context, expr: *ast.Expr) bool {
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
-            break :blk kind == .call and sym.is_pointer;
+            if (kind != .call) break :blk false;
+            if (sym.is_pointer) break :blk true;
+            if (procedure_interfaces.visibleSingleTargetGenericSig(self, call.name)) |sig| {
+                break :blk sig.is_pointer;
+            }
+            if (resolve_symbols.lookupKnownProcedureSig(self, call.name)) |sig| {
+                break :blk sig.is_pointer;
+            }
+            break :blk false;
         },
         else => false,
     };

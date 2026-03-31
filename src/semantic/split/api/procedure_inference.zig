@@ -190,7 +190,17 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
             else => {},
         }
     }
-    if (info.declarator == null) info.declarator = dims_only;
+    if (dims_only) |dims_decl| {
+        if (info.declarator) |decl_item| {
+            if (decl_item.dims.len == 0 and dims_decl.dims.len != 0) {
+                var merged = decl_item;
+                merged.dims = dims_decl.dims;
+                info.declarator = merged;
+            }
+        } else {
+            info.declarator = dims_decl;
+        }
+    }
     return info;
 }
 

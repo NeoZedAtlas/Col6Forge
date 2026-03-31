@@ -86,6 +86,38 @@ test "inferProcedureArgSigs merges DIMENSION declarations for dummy arrays" {
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
 }
 
+test "inferProcedureArgSigs merges CLASS dummy declaration with separate DIMENSION statement" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: t\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  real function f(x)\n" ++
+        "    class(t) :: x\n" ++
+        "    dimension :: x(:)\n" ++
+        "    f = 1.0\n" ++
+        "  end\n" ++
+        "end\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
+    try testing.expectEqual(ast.TypeKind.derived, arg_sigs[0].type_spec.lowered_kind);
+    try testing.expect(arg_sigs[0].type_spec.polymorphic);
+}
+
 test "inferProcedureArgSigs captures OPTIONAL dummy metadata" {
     const testing = std.testing;
     const allocator = testing.allocator;

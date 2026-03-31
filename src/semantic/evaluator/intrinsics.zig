@@ -9,6 +9,7 @@ const ExprMeasureKind = evaluator.ExprMeasureKind;
 
 const ConstCallKind = enum {
     len,
+    achar,
     acos,
     sqrt,
     log10,
@@ -41,6 +42,8 @@ const ConstCallKind = enum {
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "LEN", .len },
+    .{ "ACHAR", .achar },
+    .{ "CHAR", .achar },
     .{ "ACOS", .acos },
     .{ "DACOS", .acos },
     .{ "SQRT", .sqrt },
@@ -88,6 +91,23 @@ pub fn evalConstCall(
             if (call.args.len != 1) return null;
             const len = (try literals.evalConstCharLen(call.args[0], resolver, eval_const_fn)) orelse return null;
             return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+        },
+        .achar => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const first = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const scalar = switch (first) {
+                .integer => |value| value,
+                else => return null,
+            };
+            if (call.args.len == 2) {
+                const kind_arg = (try eval_const_fn(call.args[1], resolver)) orelse return null;
+                if (kind_arg != .integer) return null;
+            }
+            if (scalar < 0 or scalar > std.math.maxInt(u21)) return null;
+            const res = resolver orelse return null;
+            var buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(@intCast(scalar), &buf) catch return null;
+            return .{ .string = try res.internString(buf[0..len]) };
         },
         .acos => {
             if (call.args.len != 1) return null;
@@ -265,6 +285,11 @@ pub fn evalConstCall(
         },
         .int => {
             if (call.args.len == 0 or call.args.len > 2) return null;
+            if (call.args[0].* == .literal and call.args[0].literal.kind == .string) {
+                if (try literals.parseBozInt(call.args[0].literal.text)) |boz| {
+                    return .{ .integer = boz };
+                }
+            }
             const arg = (try eval_const_fn(call.args[0], resolver)) orelse return null;
             return switch (arg) {
                 .integer => arg,
@@ -482,7 +507,8 @@ fn evalConstKind(expr: *const ast.Expr, resolver: anytype, eval_const_fn: anytyp
         .literal => |lit| switch (lit.kind) {
             .integer, .logical => literalKindValueOrDefault(lit.text, resolver, 4),
             .real => literalKindValueOrDefault(lit.text, resolver, if (literals.realLiteralHasDoublePrecisionHint(lit.text)) 8 else 4),
-            .string, .hollerith => 1,
+            .string => quotedStringKindValueOrDefault(lit.text, resolver, 1),
+            .hollerith => 1,
             else => null,
         },
         .identifier, .unary, .binary, .call_or_subscript, .complex_literal => blk: {
@@ -502,6 +528,11 @@ fn evalConstKind(expr: *const ast.Expr, resolver: anytype, eval_const_fn: anytyp
 fn literalKindValueOrDefault(text: []const u8, resolver: anytype, default_kind: i64) !?i64 {
     const suffix = literals.literalKindSuffix(text) orelse return default_kind;
     return (try evalKindSelectorValue(suffix, resolver)) orelse default_kind;
+}
+
+fn quotedStringKindValueOrDefault(text: []const u8, resolver: anytype, default_kind: i64) !?i64 {
+    const prefix = literals.characterLiteralKindPrefix(text) orelse return default_kind;
+    return (try evalKindSelectorValue(prefix, resolver)) orelse default_kind;
 }
 
 fn evalConstBitSize(expr: *const ast.Expr, resolver: anytype, eval_const_fn: anytype) !?i64 {

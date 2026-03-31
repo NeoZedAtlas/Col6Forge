@@ -27,6 +27,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "ASIN", Arity{ .min = 1, .max = 1 } },
     .{ "ATAN", Arity{ .min = 1, .max = 1 } },
     .{ "ATAN2", Arity{ .min = 2, .max = 2 } },
+    .{ "CHAR", Arity{ .min = 1, .max = 2 } },
     .{ "CABS", Arity{ .min = 1, .max = 1 } },
     .{ "C_ASSOCIATED", Arity{ .min = 1, .max = 2 } },
     .{ "CCOS", Arity{ .min = 1, .max = 1 } },

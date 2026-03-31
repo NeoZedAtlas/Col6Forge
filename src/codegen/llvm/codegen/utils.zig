@@ -253,17 +253,19 @@ pub fn formatFloatLiteral(allocator: std.mem.Allocator, text: []const u8, ty: IR
 }
 
 pub fn decodeStringLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    if (text.len < 2) return allocator.dupe(u8, text);
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) {
-        return allocator.dupe(u8, text);
+    const quote_start = quotedLiteralStart(text) orelse return allocator.dupe(u8, text);
+    const quoted = text[quote_start..];
+    if (quoted.len < 2) return allocator.dupe(u8, quoted);
+    const quote = quoted[0];
+    if ((quote != '\'' and quote != '"') or quoted[quoted.len - 1] != quote) {
+        return allocator.dupe(u8, quoted);
     }
     var buffer = std.array_list.Managed(u8).init(allocator);
     var i: usize = 1;
-    const end = text.len - 1;
+    const end = quoted.len - 1;
     while (i < end) {
-        const ch = text[i];
-        if (ch == quote and i + 1 < end and text[i + 1] == quote) {
+        const ch = quoted[i];
+        if (ch == quote and i + 1 < end and quoted[i + 1] == quote) {
             try buffer.append(quote);
             i += 2;
             continue;
@@ -275,14 +277,16 @@ pub fn decodeStringLiteral(allocator: std.mem.Allocator, text: []const u8) ![]co
 }
 
 pub fn decodedStringLen(text: []const u8) usize {
-    if (text.len < 2) return text.len;
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return text.len;
+    const quote_start = quotedLiteralStart(text) orelse return text.len;
+    const quoted = text[quote_start..];
+    if (quoted.len < 2) return quoted.len;
+    const quote = quoted[0];
+    if ((quote != '\'' and quote != '"') or quoted[quoted.len - 1] != quote) return quoted.len;
     var len: usize = 0;
     var i: usize = 1;
-    const end = text.len - 1;
+    const end = quoted.len - 1;
     while (i < end) {
-        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
+        if (quoted[i] == quote and i + 1 < end and quoted[i + 1] == quote) {
             len += 1;
             i += 2;
             continue;
@@ -305,6 +309,16 @@ fn kindUnderscoreIndex(text: []const u8) ?usize {
         if (text[i] != '_') continue;
         if (!std.ascii.isAlphanumeric(text[i + 1])) continue;
         return i;
+    }
+    return null;
+}
+
+fn quotedLiteralStart(text: []const u8) ?usize {
+    if (text.len == 0) return null;
+    if (text[0] == '\'' or text[0] == '"') return 0;
+    var i: usize = 1;
+    while (i < text.len) : (i += 1) {
+        if ((text[i] == '\'' or text[i] == '"') and text[i - 1] == '_') return i;
     }
     return null;
 }

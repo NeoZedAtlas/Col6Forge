@@ -84,6 +84,50 @@ pub fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?
     return null;
 }
 
+pub fn matchedVisibleGenericSigForExprArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) ?context.Context.ProcedureSig {
+    var matched: ?context.Context.ProcedureSig = null;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+
+        var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return matched;
+        for (specifics.items) |specific| {
+            if (!exprArgsMatchGenericSig(self, specific.sig, args)) continue;
+            if (matched != null) return null;
+            matched = specific.sig;
+        }
+    }
+    return matched;
+}
+
+pub fn matchedVisibleGenericSigForCallArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []const ast.CallArg,
+) ?context.Context.ProcedureSig {
+    var matched: ?context.Context.ProcedureSig = null;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+
+        var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return matched;
+        for (specifics.items) |specific| {
+            if (!callArgsMatchGenericSig(self, specific.sig, args)) continue;
+            if (matched != null) return null;
+            matched = specific.sig;
+        }
+    }
+    return matched;
+}
+
 pub fn findAmbiguousVisibleGenericSpecificSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
     var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
     appendAmbiguousVisibleGenericSpecificSources(self, &sources, name) catch return null;
@@ -345,6 +389,73 @@ fn genericRequiredArgCount(sig: context.Context.ProcedureSig) usize {
         if (!arg.optional) count += 1;
     }
     return count;
+}
+
+fn exprArgsMatchGenericSig(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []*ast.Expr,
+) bool {
+    const min_count = genericRequiredArgCount(sig);
+    if (args.len < min_count or args.len > sig.arg_count) return false;
+    const count = @min(sig.args.len, args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        if (!exprArgMatchesGenericFormal(self, sig, sig.args[idx], args[idx])) return false;
+    }
+    return true;
+}
+
+fn callArgsMatchGenericSig(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []const ast.CallArg,
+) bool {
+    var expr_count: usize = 0;
+    for (args) |arg| {
+        if (arg == .expr) expr_count += 1;
+    }
+    const min_count = genericRequiredArgCount(sig);
+    if (expr_count < min_count or expr_count > sig.arg_count) return false;
+    var formal_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (formal_idx >= sig.args.len) break;
+        if (!exprArgMatchesGenericFormal(self, sig, sig.args[formal_idx], arg.expr.value)) return false;
+        formal_idx += 1;
+    }
+    return true;
+}
+
+fn exprArgMatchesGenericFormal(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+) bool {
+    if (formal.is_procedure) return true;
+    const actual_spec = resolve_expr.exprTypeSpec(self, actual_expr) catch return false;
+    const actual_rank = resolve_expr.exprRank(self, actual_expr);
+    if (!genericActualTypeCompatible(self, formal.type_spec, actual_spec)) return false;
+    if (formal.rank == 0 and actual_rank > 0 and sig.elemental) return true;
+    return formal.rank == actual_rank;
+}
+
+fn genericActualTypeCompatible(
+    self: *context.Context,
+    expected: symbols.TypeSpec,
+    actual: symbols.TypeSpec,
+) bool {
+    if (expected.polymorphic and expected.derived_type_name == null) return true;
+    if (expected.lowered_kind != actual.lowered_kind) return false;
+    if (expected.lowered_kind != .derived) return true;
+
+    const expected_name = expected.derived_type_name orelse return false;
+    const actual_name = actual.derived_type_name orelse return false;
+    return if (expected.polymorphic)
+        resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
+    else
+        resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
 }
 
 fn procedureSigRequiresExplicitInterface(sig: context.Context.ProcedureSig) bool {

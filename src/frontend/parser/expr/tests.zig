@@ -394,7 +394,7 @@ test "parseExpr handles kind-prefixed string literal" {
     switch (node.*) {
         .literal => |lit| {
             try testing.expectEqual(ast.LiteralKind.string, lit.kind);
-            try testing.expectEqualStrings("\"123\"", lit.text);
+            try testing.expectEqualStrings("CK_\"123\"", lit.text);
         },
         else => return error.UnexpectedToken,
     }
@@ -418,7 +418,31 @@ test "parseExpr handles numeric kind-prefixed string literal" {
     switch (node.*) {
         .literal => |lit| {
             try testing.expectEqual(ast.LiteralKind.string, lit.kind);
-            try testing.expectEqualStrings("\"ab\"", lit.text);
+            try testing.expectEqualStrings("4_\"ab\"", lit.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr preserves BOZ literal prefix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      z'5e74'\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .literal => |lit| {
+            try testing.expectEqual(ast.LiteralKind.string, lit.kind);
+            try testing.expectEqualStrings("z'5e74'", lit.text);
         },
         else => return error.UnexpectedToken,
     }

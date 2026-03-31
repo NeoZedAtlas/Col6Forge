@@ -86,6 +86,7 @@ pub fn emitLlvmModule(
         .{
             .target_layout = options.semantic_target_layout,
             .range_check = options.range_check,
+            .fbackslash = options.fbackslash,
             .allow_argument_mismatch = options.allow_argument_mismatch,
             .dialect = options.dialect,
             .declare_variant_adjust_args = declare_variant_adjust_args,
@@ -219,6 +220,7 @@ pub fn emitLlvmModuleToWriter(
         .{
             .target_layout = options.semantic_target_layout,
             .range_check = options.range_check,
+            .fbackslash = options.fbackslash,
             .allow_argument_mismatch = options.allow_argument_mismatch,
             .dialect = options.dialect,
             .declare_variant_adjust_args = declare_variant_adjust_args,

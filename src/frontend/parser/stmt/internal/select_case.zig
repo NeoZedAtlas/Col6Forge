@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
+const catalog = @import("../../../../common/error_catalog.zig");
 const logical_line = @import("../../../logical_line.zig");
 const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
@@ -35,6 +36,22 @@ pub const IsEndSelectLineFn = *const fn (LineParser) bool;
 const CaseClause = struct {
     condition: *Expr,
     stmts: []Stmt,
+};
+
+const CaseSelectorRange = struct {
+    lower: ?*Expr = null,
+    upper: ?*Expr = null,
+};
+
+const ParsedCaseHeader = struct {
+    condition: ?*Expr = null,
+    ranges: []const CaseSelectorRange = &.{},
+};
+
+const CharacterCaseRange = struct {
+    kind_value: i64,
+    lower: ?[]const u8 = null,
+    upper: ?[]const u8 = null,
 };
 
 fn prependLabeledContinue(
@@ -121,6 +138,7 @@ pub fn parseSelectCaseStatement(
     index.* += 1;
 
     var clauses = std.array_list.Managed(CaseClause).init(arena);
+    var seen_character_ranges = std.array_list.Managed(CharacterCaseRange).init(arena);
     var default_stmts: ?[]Stmt = null;
     var saw_end_select = false;
 
@@ -139,11 +157,13 @@ pub fn parseSelectCaseStatement(
         }
         if (!isCaseLine(case_lp)) return error.UnexpectedToken;
 
-        const case_cond = try parseCaseHeader(arena, &case_lp, selector_for_clauses);
+        const case_header = try parseCaseHeader(arena, &case_lp, selector_for_clauses);
+        diagnoseCharacterCaseOverlap(arena, diag_bag, line, case_header.ranges, seen_character_ranges.items);
+        try appendCharacterCaseRanges(arena, &seen_character_ranges, case_header.ranges);
         index.* += 1;
         const parsed_block_stmts = try parseSelectCaseBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
         const block_stmts = try prependLabeledContinue(arena, line, parsed_block_stmts);
-        if (case_cond) |condition| {
+        if (case_header.condition) |condition| {
             try clauses.append(.{ .condition = condition, .stmts = block_stmts });
         } else {
             if (default_stmts != null) return error.UnexpectedToken;
@@ -198,48 +218,69 @@ pub fn parseSelectCaseStatement(
     };
 }
 
-pub fn parseCaseHeader(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!?*Expr {
-    if (lp.consumeKeyword("CASEDEFAULT")) return null;
+pub fn parseCaseHeader(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!ParsedCaseHeader {
+    if (lp.consumeKeyword("CASEDEFAULT")) return .{};
     if (!lp.consumeKeyword("CASE")) return error.UnexpectedToken;
-    if (lp.consumeKeyword("DEFAULT")) return null;
+    if (lp.consumeKeyword("DEFAULT")) return .{};
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-    const condition = try parseCaseSelectorListCondition(arena, lp, selector);
+    const parsed = try parseCaseSelectorListCondition(arena, lp, selector);
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    return condition;
+    return parsed;
 }
 
-pub fn parseCaseSelectorListCondition(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!*Expr {
+pub fn parseCaseSelectorListCondition(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!ParsedCaseHeader {
     var condition: ?*Expr = null;
+    var ranges = std.array_list.Managed(CaseSelectorRange).init(arena);
     while (!lp.peekIs(.r_paren)) {
         const item = try parseCaseSelectorCondition(arena, lp, selector);
         condition = if (condition) |existing|
-            try makeBinaryExpr(arena, .or_, existing, item)
+            try makeBinaryExpr(arena, .or_, existing, item.condition)
         else
-            item;
+            item.condition;
+        try ranges.append(item.range);
         if (!lp.consume(.comma)) break;
     }
-    return condition orelse error.UnexpectedToken;
+    return .{
+        .condition = condition orelse return error.UnexpectedToken,
+        .ranges = try ranges.toOwnedSlice(),
+    };
 }
 
-pub fn parseCaseSelectorCondition(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!*Expr {
+pub fn parseCaseSelectorCondition(
+    arena: std.mem.Allocator,
+    lp: *LineParser,
+    selector: *Expr,
+) anyerror!struct { condition: *Expr, range: CaseSelectorRange } {
     if (lp.consume(.colon)) {
         const high = try expr.parseExpr(lp, arena, 0);
-        return makeBinaryExpr(arena, .le, selector, high);
+        return .{
+            .condition = try makeBinaryExpr(arena, .le, selector, high),
+            .range = .{ .upper = high },
+        };
     }
 
     const first = try expr.parseExpr(lp, arena, 0);
     if (!lp.consume(.colon)) {
-        return makeBinaryExpr(arena, .eq, selector, first);
+        return .{
+            .condition = try makeBinaryExpr(arena, .eq, selector, first),
+            .range = .{ .lower = first, .upper = first },
+        };
     }
 
     if (lp.peekIs(.comma) or lp.peekIs(.r_paren)) {
-        return makeBinaryExpr(arena, .ge, selector, first);
+        return .{
+            .condition = try makeBinaryExpr(arena, .ge, selector, first),
+            .range = .{ .lower = first },
+        };
     }
 
     const high = try expr.parseExpr(lp, arena, 0);
     const ge = try makeBinaryExpr(arena, .ge, selector, first);
     const le = try makeBinaryExpr(arena, .le, selector, high);
-    return makeBinaryExpr(arena, .and_, ge, le);
+    return .{
+        .condition = try makeBinaryExpr(arena, .and_, ge, le),
+        .range = .{ .lower = first, .upper = high },
+    };
 }
 
 fn makeBinaryExpr(arena: std.mem.Allocator, op: ast.BinaryOp, left: *Expr, right: *Expr) std.mem.Allocator.Error!*Expr {
@@ -275,4 +316,124 @@ fn parseSelectCaseBlock(
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();
+}
+
+fn appendCharacterCaseRanges(
+    arena: std.mem.Allocator,
+    seen: *std.array_list.Managed(CharacterCaseRange),
+    ranges: []const CaseSelectorRange,
+) !void {
+    for (ranges) |range| {
+        const converted = characterCaseRangeFromSelector(range) orelse continue;
+        const own_lower = if (converted.lower) |lower| try arena.dupe(u8, lower) else null;
+        const own_upper = if (converted.upper) |upper| try arena.dupe(u8, upper) else null;
+        try seen.append(.{
+            .kind_value = converted.kind_value,
+            .lower = own_lower,
+            .upper = own_upper,
+        });
+    }
+}
+
+fn diagnoseCharacterCaseOverlap(
+    arena: std.mem.Allocator,
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    ranges: []const CaseSelectorRange,
+    seen: []const CharacterCaseRange,
+) void {
+    _ = arena;
+    for (ranges) |range| {
+        const current = characterCaseRangeFromSelector(range) orelse continue;
+        for (seen) |prior| {
+            if (prior.kind_value != current.kind_value) continue;
+            if (!characterCaseRangesOverlap(prior, current)) continue;
+            diag_bag.set(
+                line.span.start_line,
+                defaultSourceColumn(line),
+                catalog.parser.unexpected_token.code,
+                "CASE label overlaps with CASE label",
+                line.text,
+            );
+            return;
+        }
+    }
+}
+
+fn characterCaseRangeFromSelector(range: CaseSelectorRange) ?CharacterCaseRange {
+    const lower = if (range.lower) |expr_node| characterCaseBound(expr_node) else null;
+    const upper = if (range.upper) |expr_node| characterCaseBound(expr_node) else null;
+    const exemplar = lower orelse upper orelse return null;
+    if (lower != null and lower.?.kind_value != exemplar.kind_value) return null;
+    if (upper != null and upper.?.kind_value != exemplar.kind_value) return null;
+    return .{
+        .kind_value = exemplar.kind_value,
+        .lower = if (lower) |bound| bound.bytes else null,
+        .upper = if (upper) |bound| bound.bytes else null,
+    };
+}
+
+fn characterCaseBound(expr_node: *Expr) ?struct { kind_value: i64, bytes: []const u8 } {
+    return switch (expr_node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .string => .{
+                .kind_value = quotedLiteralKindValue(lit.text),
+                .bytes = decodeQuotedLiteralBytes(lit.text) orelse return null,
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn characterCaseRangesOverlap(prior: CharacterCaseRange, current: CharacterCaseRange) bool {
+    if (prior.upper) |prior_upper| {
+        if (current.lower) |current_lower| {
+            if (std.mem.order(u8, prior_upper, current_lower) == .lt) return false;
+        }
+    }
+    if (current.upper) |current_upper| {
+        if (prior.lower) |prior_lower| {
+            if (std.mem.order(u8, current_upper, prior_lower) == .lt) return false;
+        }
+    }
+    return true;
+}
+
+fn quotedLiteralKindValue(text: []const u8) i64 {
+    const prefix = quotedLiteralKindPrefix(text) orelse return 1;
+    var all_digits = prefix.len != 0;
+    for (prefix) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (!all_digits) return 1;
+    return std.fmt.parseInt(i64, prefix, 10) catch 1;
+}
+
+fn quotedLiteralKindPrefix(text: []const u8) ?[]const u8 {
+    const quote_start = quotedLiteralStart(text) orelse return null;
+    if (quote_start == 0 or text[quote_start - 1] != '_') return null;
+    return text[0 .. quote_start - 1];
+}
+
+fn decodeQuotedLiteralBytes(text: []const u8) ?[]const u8 {
+    const quote_start = quotedLiteralStart(text) orelse return null;
+    const quoted = text[quote_start..];
+    if (quoted.len < 2) return null;
+    const quote = quoted[0];
+    if ((quote != '\'' and quote != '"') or quoted[quoted.len - 1] != quote) return null;
+    return quoted[1 .. quoted.len - 1];
+}
+
+fn quotedLiteralStart(text: []const u8) ?usize {
+    if (text.len == 0) return null;
+    if (text[0] == '\'' or text[0] == '"') return 0;
+    var i: usize = 1;
+    while (i < text.len) : (i += 1) {
+        if ((text[i] == '\'' or text[i] == '"') and text[i - 1] == '_') return i;
+    }
+    return null;
 }

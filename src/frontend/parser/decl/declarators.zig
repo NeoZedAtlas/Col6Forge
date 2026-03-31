@@ -282,6 +282,8 @@ pub fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedC
                 parsed.expr = try makeAssumedCharLenExpr(arena);
             } else if (parsed.expr == null and !parsed.deferred) {
                 parsed.expr = try expr.parseExpr(lp, arena, 0);
+            } else if (parsed.kind_selector == null) {
+                parsed.kind_selector = try expr.parseExpr(lp, arena, 0);
             } else {
                 _ = try expr.parseExpr(lp, arena, 0);
             }

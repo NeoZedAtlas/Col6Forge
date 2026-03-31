@@ -105,11 +105,17 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
     switch (tok.kind) {
         .identifier => {
             if (arrays.adjacentKindPrefixedString(lp.*)) |string_tok| {
+                const prefix_tok = tok;
                 _ = lp.next();
                 _ = lp.next();
+                const prefix_text = lp.tokenText(prefix_tok);
+                const literal_text = if (std.mem.endsWith(u8, prefix_text, "_") or isBozPrefix(prefix_text))
+                    lp.line.text[prefix_tok.start..string_tok.end]
+                else
+                    lp.tokenText(string_tok);
                 const lit_node = try shared.makeExprNode(
                     arena,
-                    .{ .literal = .{ .kind = .string, .text = lp.tokenText(string_tok) } },
+                    .{ .literal = .{ .kind = .string, .text = literal_text } },
                     start_source,
                 );
                 return suffixes.parseLiteralSubstringSuffix(
@@ -229,11 +235,17 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         .integer => {
             if (arrays.adjacentKindPrefixedString(lp.*)) |string_tok| {
+                const prefix_tok = tok;
                 _ = lp.next();
                 _ = lp.next();
+                const prefix_text = lp.tokenText(prefix_tok);
+                const literal_text = if (std.mem.endsWith(u8, prefix_text, "_"))
+                    lp.line.text[prefix_tok.start..string_tok.end]
+                else
+                    lp.tokenText(string_tok);
                 const lit_node = try shared.makeExprNode(
                     arena,
-                    .{ .literal = .{ .kind = .string, .text = lp.tokenText(string_tok) } },
+                    .{ .literal = .{ .kind = .string, .text = literal_text } },
                     start_source,
                 );
                 return suffixes.parseLiteralSubstringSuffix(
@@ -364,4 +376,12 @@ fn parseCallArgExpr(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Par
         parseDimExprDepth,
         parseExprDepth,
     );
+}
+
+fn isBozPrefix(text: []const u8) bool {
+    if (text.len != 1) return false;
+    return switch (std.ascii.toLower(text[0])) {
+        'b', 'o', 'z' => true,
+        else => false,
+    };
 }
