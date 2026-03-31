@@ -90,6 +90,26 @@ pub fn resolveDefinedBinaryOperatorResult(
     return lookupDefinedOperatorResult(self, op_name, &actuals, deps);
 }
 
+pub fn binaryIntrinsicApplicable(
+    op: ast.BinaryOp,
+    left_spec: symbols.TypeSpec,
+    right_spec: symbols.TypeSpec,
+    comptime deps: anytype,
+) bool {
+    deps.validateBinaryOperands(op, left_spec.lowered_kind, right_spec.lowered_kind) catch return false;
+    switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge, .concat => {
+            if (left_spec.lowered_kind == .character and right_spec.lowered_kind == .character and
+                defaultCharacterKind(left_spec.kind_value) != defaultCharacterKind(right_spec.kind_value))
+            {
+                return false;
+            }
+        },
+        else => {},
+    }
+    return true;
+}
+
 pub fn promoteNumericTypeSpec(
     self: *context.Context,
     left: *ast.Expr,
@@ -114,10 +134,89 @@ fn lookupDefinedOperatorResult(
     actuals: []const *ast.Expr,
     comptime deps: anytype,
 ) ResolveError!?symbols.TypeSpec {
-    const sig = symbols_mod.lookupKnownProcedureSig(self, op_name) orelse return null;
-    if (sig.kind != .function) return null;
-    if (!procedureSigMatchesActuals(self, sig, actuals, deps)) return null;
+    const sig = try lookupDefinedOperatorSig(self, op_name, actuals, deps) orelse return null;
+    if (sig.result_type_spec) |spec| return spec;
     return symbols_mod.lookupKnownFunctionResolvedSpec(self, op_name) orelse null;
+}
+
+fn lookupDefinedOperatorSig(
+    self: *context.Context,
+    op_name: []const u8,
+    actuals: []const *ast.Expr,
+    comptime deps: anytype,
+) ResolveError!?context.Context.ProcedureSig {
+    if (symbols_mod.lookupKnownProcedureSig(self, op_name)) |sig| {
+        if (sig.kind == .function and procedureSigMatchesActuals(self, sig, actuals, deps)) return sig;
+    }
+
+    var matched: ?context.Context.ProcedureSig = null;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, op_name)) continue;
+
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            const sig = lookupSpecificSig(self, proc_header.name, proc_header.source) orelse continue;
+            if (sig.kind != .function) continue;
+            if (!procedureSigMatchesActuals(self, sig, actuals, deps)) continue;
+            if (matched != null) return null;
+            matched = sig;
+        }
+        for (decl.interface_block.specific_procedures, 0..) |proc_name, idx| {
+            if (idx >= decl.interface_block.specific_procedure_sources.len) continue;
+            const sig = lookupSpecificSig(self, proc_name, decl.interface_block.specific_procedure_sources[idx]) orelse continue;
+            if (sig.kind != .function) continue;
+            if (!procedureSigMatchesActuals(self, sig, actuals, deps)) continue;
+            if (matched != null) return null;
+            matched = sig;
+        }
+        for (decl.interface_block.module_procedures, 0..) |proc_name, idx| {
+            if (idx >= decl.interface_block.module_procedure_sources.len) continue;
+            const sig = lookupSpecificSig(self, proc_name, decl.interface_block.module_procedure_sources[idx]) orelse continue;
+            if (sig.kind != .function) continue;
+            if (!procedureSigMatchesActuals(self, sig, actuals, deps)) continue;
+            if (matched != null) return null;
+            matched = sig;
+        }
+        for (decl.interface_block.procedures, 0..) |proc_name, idx| {
+            var has_header = false;
+            for (decl.interface_block.procedure_headers) |proc_header| {
+                if (std.ascii.eqlIgnoreCase(proc_header.name, proc_name)) {
+                    has_header = true;
+                    break;
+                }
+            }
+            if (has_header) continue;
+            if (idx >= decl.interface_block.procedure_sources.len) continue;
+            const sig = lookupSpecificSig(self, proc_name, decl.interface_block.procedure_sources[idx]) orelse continue;
+            if (sig.kind != .function) continue;
+            if (!procedureSigMatchesActuals(self, sig, actuals, deps)) continue;
+            if (matched != null) return null;
+            matched = sig;
+        }
+    }
+    return matched;
+}
+
+fn lookupSpecificSig(
+    self: *context.Context,
+    proc_name: []const u8,
+    source: ast.DeclSource,
+) ?context.Context.ProcedureSig {
+    if (symbols_mod.lookupKnownProcedureSig(self, proc_name)) |sig| return sig;
+    if (source.owner_name) |owner_name| {
+        const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, proc_name }) catch return null;
+        if (symbols_mod.lookupKnownProcedureSig(self, qualified)) |sig| return sig;
+    }
+    const suffix = std.fmt.allocPrint(self.arena, "::{s}", .{proc_name}) catch return null;
+    var matched: ?context.Context.ProcedureSig = null;
+    var it = self.known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        if (!std.ascii.endsWithIgnoreCase(entry.key_ptr.*, suffix)) continue;
+        if (matched != null) return null;
+        matched = entry.value_ptr.*;
+    }
+    return matched;
 }
 
 fn procedureSigMatchesActuals(

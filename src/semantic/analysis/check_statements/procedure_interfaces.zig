@@ -24,20 +24,23 @@ pub fn appendGenericInterfaceSigs(
     interface_block: ast.InterfaceBlock,
 ) !void {
     for (interface_block.procedure_headers) |proc_header| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_header.name) orelse continue;
+        const sig = lookupGenericSpecificSig(self, proc_header.name, proc_header.source) orelse continue;
         try out.append(sig);
     }
-    for (interface_block.specific_procedures) |proc_name| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+    for (interface_block.specific_procedures, 0..) |proc_name, idx| {
+        if (idx >= interface_block.specific_procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.specific_procedure_sources[idx]) orelse continue;
         try out.append(sig);
     }
-    for (interface_block.module_procedures) |proc_name| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+    for (interface_block.module_procedures, 0..) |proc_name, idx| {
+        if (idx >= interface_block.module_procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.module_procedure_sources[idx]) orelse continue;
         try out.append(sig);
     }
-    for (interface_block.procedures) |proc_name| {
+    for (interface_block.procedures, 0..) |proc_name, idx| {
         if (interfaceBlockHasProcedureHeader(interface_block, proc_name)) continue;
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+        if (idx >= interface_block.procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.procedure_sources[idx]) orelse continue;
         try out.append(sig);
     }
 }
@@ -53,23 +56,23 @@ pub fn appendGenericInterfaceSpecifics(
     interface_block: ast.InterfaceBlock,
 ) !void {
     for (interface_block.procedure_headers) |proc_header| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_header.name) orelse continue;
+        const sig = lookupGenericSpecificSig(self, proc_header.name, proc_header.source) orelse continue;
         try out.append(.{ .source = proc_header.source, .sig = sig });
     }
     for (interface_block.specific_procedures, 0..) |proc_name, idx| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
         if (idx >= interface_block.specific_procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.specific_procedure_sources[idx]) orelse continue;
         try out.append(.{ .source = interface_block.specific_procedure_sources[idx], .sig = sig });
     }
     for (interface_block.module_procedures, 0..) |proc_name, idx| {
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
         if (idx >= interface_block.module_procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.module_procedure_sources[idx]) orelse continue;
         try out.append(.{ .source = interface_block.module_procedure_sources[idx], .sig = sig });
     }
     for (interface_block.procedures, 0..) |proc_name, idx| {
         if (interfaceBlockHasProcedureHeader(interface_block, proc_name)) continue;
-        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
         if (idx >= interface_block.procedure_sources.len) continue;
+        const sig = lookupGenericSpecificSig(self, proc_name, interface_block.procedure_sources[idx]) orelse continue;
         try out.append(.{ .source = interface_block.procedure_sources[idx], .sig = sig });
     }
 }
@@ -89,21 +92,51 @@ pub fn matchedVisibleGenericSigForExprArgs(
     name: []const u8,
     args: []*ast.Expr,
 ) ?context.Context.ProcedureSig {
-    var matched: ?context.Context.ProcedureSig = null;
-    for (self.unit.decls) |decl| {
+    var saw_local_interface = false;
+    var local_match: ?context.Context.ProcedureSig = null;
+    var local_match_count: usize = 0;
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        if (decl_idx < self.unit.prelude_decl_count) continue;
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        saw_local_interface = true;
+
+        var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
+        for (specifics.items) |specific| {
+            if (!exprArgsMatchGenericSig(self, specific.sig, args)) continue;
+            local_match_count += 1;
+            if (local_match_count == 1) local_match = specific.sig;
+        }
+    }
+    if (saw_local_interface) {
+        if (local_match_count == 1) return local_match;
+        return null;
+    }
+
+    var decl_idx: usize = self.unit.decls.len;
+    while (decl_idx > 0) {
+        decl_idx -= 1;
+        if (decl_idx >= self.unit.prelude_decl_count) continue;
+        const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
 
+        var matched: ?context.Context.ProcedureSig = null;
+        var match_count: usize = 0;
         var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
-        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return matched;
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
         for (specifics.items) |specific| {
             if (!exprArgsMatchGenericSig(self, specific.sig, args)) continue;
-            if (matched != null) return null;
-            matched = specific.sig;
+            match_count += 1;
+            if (match_count == 1) matched = specific.sig;
         }
+        if (match_count == 1) return matched;
+        if (match_count > 1) return null;
     }
-    return matched;
+    return null;
 }
 
 pub fn matchedVisibleGenericSigForCallArgs(
@@ -111,21 +144,51 @@ pub fn matchedVisibleGenericSigForCallArgs(
     name: []const u8,
     args: []const ast.CallArg,
 ) ?context.Context.ProcedureSig {
-    var matched: ?context.Context.ProcedureSig = null;
-    for (self.unit.decls) |decl| {
+    var saw_local_interface = false;
+    var local_match: ?context.Context.ProcedureSig = null;
+    var local_match_count: usize = 0;
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        if (decl_idx < self.unit.prelude_decl_count) continue;
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        saw_local_interface = true;
+
+        var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
+        for (specifics.items) |specific| {
+            if (!callArgsMatchGenericSig(self, specific.sig, args)) continue;
+            local_match_count += 1;
+            if (local_match_count == 1) local_match = specific.sig;
+        }
+    }
+    if (saw_local_interface) {
+        if (local_match_count == 1) return local_match;
+        return null;
+    }
+
+    var decl_idx: usize = self.unit.decls.len;
+    while (decl_idx > 0) {
+        decl_idx -= 1;
+        if (decl_idx >= self.unit.prelude_decl_count) continue;
+        const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
 
+        var matched: ?context.Context.ProcedureSig = null;
+        var match_count: usize = 0;
         var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
-        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return matched;
+        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
         for (specifics.items) |specific| {
             if (!callArgsMatchGenericSig(self, specific.sig, args)) continue;
-            if (matched != null) return null;
-            matched = specific.sig;
+            match_count += 1;
+            if (match_count == 1) matched = specific.sig;
         }
+        if (match_count == 1) return matched;
+        if (match_count > 1) return null;
     }
-    return matched;
+    return null;
 }
 
 pub fn findAmbiguousVisibleGenericSpecificSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
@@ -298,6 +361,31 @@ pub fn interfaceBlockHasProcedureHeader(interface_block: ast.InterfaceBlock, nam
         if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
     }
     return false;
+}
+
+fn lookupGenericSpecificSig(
+    self: *context.Context,
+    proc_name: []const u8,
+    source: ast.DeclSource,
+) ?context.Context.ProcedureSig {
+    if (resolve_symbols.lookupKnownProcedureSig(self, proc_name)) |sig| return sig;
+    if (source.owner_name) |owner_name| {
+        const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, proc_name }) catch return null;
+        if (resolve_symbols.lookupKnownProcedureSig(self, qualified)) |sig| return sig;
+    }
+    return lookupQualifiedProcedureSigBySuffix(self, proc_name);
+}
+
+fn lookupQualifiedProcedureSigBySuffix(self: *context.Context, proc_name: []const u8) ?context.Context.ProcedureSig {
+    const suffix = std.fmt.allocPrint(self.arena, "::{s}", .{proc_name}) catch return null;
+    var matched: ?context.Context.ProcedureSig = null;
+    var it = self.known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        if (!std.ascii.endsWithIgnoreCase(entry.key_ptr.*, suffix)) continue;
+        if (matched != null) return null;
+        matched = entry.value_ptr.*;
+    }
+    return matched;
 }
 
 fn findInterfaceProcedureDeclSource(

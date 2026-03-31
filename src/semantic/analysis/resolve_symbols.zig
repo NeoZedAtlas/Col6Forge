@@ -476,6 +476,24 @@ pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?contex
     return resolved;
 }
 
+pub fn lookupKnownFunctionTypeSpecInOwner(
+    self: *context.Context,
+    owner_name: []const u8,
+    name: []const u8,
+) ?TypeSpec {
+    const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;
+    return getLowercaseMapValue(TypeSpec, self.known_function_type_specs, qualified);
+}
+
+pub fn lookupKnownProcedureSigInOwner(
+    self: *context.Context,
+    owner_name: []const u8,
+    name: []const u8,
+) ?context.Context.ProcedureSig {
+    const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;
+    return getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, qualified);
+}
+
 fn lookupQualifiedKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {
     const owner_name = lexicalProcedureLookupOwner(self) orelse return null;
     const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;

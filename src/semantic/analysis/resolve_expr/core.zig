@@ -126,15 +126,22 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try resolveExpr(self, bin.right);
             const left_spec = try exprTypeSpecCached(self, bin.left);
             const right_spec = try exprTypeSpecCached(self, bin.right);
+            const defined_result = try operators.resolveDefinedBinaryOperatorResult(self, bin.op, bin.left, bin.right, .{
+                .exprTypeSpecCached = exprTypeSpecCached,
+                .dummyArgTypeCompatible = dummyArgTypeCompatible,
+            });
+            if (defined_result != null and !operators.binaryIntrinsicApplicable(bin.op, left_spec, right_spec, .{
+                .validateBinaryOperands = validateBinaryOperands,
+            })) {
+                try cacheExprType(self, expr, defined_result.?);
+                return;
+            }
             const ty = operators.validateBinaryOperandSpecs(self, bin.op, left_spec, right_spec, bin.left, bin.right, .{
                 .validateBinaryOperands = validateBinaryOperands,
                 .promoteNumericType = promoteNumericType,
                 .exprTypeSpecCached = exprTypeSpecCached,
             }) catch |err| blk: {
-                if (try operators.resolveDefinedBinaryOperatorResult(self, bin.op, bin.left, bin.right, .{
-                    .exprTypeSpecCached = exprTypeSpecCached,
-                    .dummyArgTypeCompatible = dummyArgTypeCompatible,
-                })) |result_spec| {
+                if (defined_result) |result_spec| {
                     break :blk result_spec;
                 }
                 return err;

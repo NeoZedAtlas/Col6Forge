@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const case_insensitive = @import("../../common/case_insensitive.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const expressions = @import("resolve_expr.zig");
@@ -316,7 +317,12 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
         if (use_stmt.has_only) return;
     }
 
-    if (use_stmt.only_items.len == 0) return;
+    if (use_stmt.has_only and use_stmt.only_items.len == 0) return;
+
+    if (!use_stmt.has_only and use_stmt.only_items.len == 0) {
+        try bindKnownModuleUseImports(self, use_stmt.module_name);
+        return;
+    }
 
     const may_have_builtin_consts = isIsoFortranEnvModule(use_stmt.module_name);
     for (use_stmt.only_items) |item| {
@@ -327,7 +333,7 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
                 continue;
             }
         }
-        try bindKnownUseImport(self, item.local_name, item.remote_name);
+        try bindKnownUseImportFromModule(self, use_stmt.module_name, item.local_name, item.remote_name);
     }
 }
 
@@ -598,6 +604,88 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
         sym.applyTypeSpec(type_spec);
         sym.type_explicit = true;
         return;
+    }
+}
+
+fn bindKnownUseImportFromModule(
+    self: *context.Context,
+    module_name: []const u8,
+    local_name: []const u8,
+    remote_name: []const u8,
+) ResolveError!void {
+    if (symbols_mod.lookupKnownProcedureSigInOwner(self, module_name, remote_name)) |sig| {
+        const idx = try symbols_mod.ensureSymbol(self, local_name);
+        const sym = &self.symbols.items[idx];
+        sym.name = local_name;
+        sym.is_external = true;
+        sym.is_pointer = sig.is_pointer;
+        sym.kind = switch (sig.kind) {
+            .module => sym.kind,
+            .function => .function,
+            .subroutine => .subroutine,
+            else => sym.kind,
+        };
+        if (sig.kind == .function) {
+            if (sig.result_type_spec) |type_spec| {
+                sym.applyTypeSpec(type_spec);
+                sym.type_explicit = true;
+            } else if (symbols_mod.lookupKnownFunctionTypeSpecInOwner(self, module_name, remote_name)) |type_spec| {
+                sym.applyTypeSpec(type_spec);
+                sym.type_explicit = true;
+            }
+        }
+        return;
+    }
+
+    if (symbols_mod.lookupKnownFunctionTypeSpecInOwner(self, module_name, remote_name)) |type_spec| {
+        const idx = try symbols_mod.ensureSymbol(self, local_name);
+        const sym = &self.symbols.items[idx];
+        sym.name = local_name;
+        sym.is_external = true;
+        sym.kind = .function;
+        sym.applyTypeSpec(type_spec);
+        sym.type_explicit = true;
+        return;
+    }
+
+    try bindKnownUseImport(self, local_name, remote_name);
+}
+
+fn bindKnownModuleUseImports(self: *context.Context, module_name: []const u8) ResolveError!void {
+    var seen = std.StringHashMap(void).init(self.arena);
+    for (self.unit.decls, 0..) |decl_node, idx| {
+        const decl_source = if (idx < self.unit.decl_sources.len) self.unit.decl_sources[idx] else ast.DeclSource{};
+        const owner_name = decl_source.owner_name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(owner_name, module_name)) continue;
+        const exported_name = declExportedName(decl_node) orelse continue;
+        const lowered = try case_insensitive.lowerDup(self.arena, exported_name);
+        if (seen.contains(lowered)) continue;
+        try seen.put(lowered, {});
+        try bindKnownUseImportFromModule(self, module_name, exported_name, exported_name);
+    }
+
+    var proc_it = self.known_procedure_sigs.iterator();
+    while (proc_it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[0..sep], module_name)) continue;
+        const remote_name = key[sep + 2 ..];
+        const lowered = try case_insensitive.lowerDup(self.arena, remote_name);
+        if (seen.contains(lowered)) continue;
+        try seen.put(lowered, {});
+        try bindKnownUseImportFromModule(self, module_name, remote_name, remote_name);
+    }
+
+    var fn_it = self.known_function_type_specs.iterator();
+    while (fn_it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[0..sep], module_name)) continue;
+        const remote_name = key[sep + 2 ..];
+        const lowered = try case_insensitive.lowerDup(self.arena, remote_name);
+        if (seen.contains(lowered)) continue;
+        try seen.put(lowered, {});
+        try bindKnownUseImportFromModule(self, module_name, remote_name, remote_name);
     }
 }
 

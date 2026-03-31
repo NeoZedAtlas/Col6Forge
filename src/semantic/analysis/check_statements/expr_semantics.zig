@@ -399,7 +399,9 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
             return try resolve_expr.exprType(self, expr);
         },
         .call_or_subscript => |call| {
-            if (procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name)) {
+            if (procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name) and
+                procedure_interfaces.matchedVisibleGenericSigForExprArgs(self, call.name, call.args) == null)
+            {
                 return procedure_calls.emitAmbiguousVisibleGenericDiagnostic(self, call.name, error.DuplicateDeclaration);
             }
             if (procedure_calls.preludeSpecificInterfaceProcedureCount(self, call.name) > 1) {
@@ -453,6 +455,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                     return try resolve_expr.exprType(self, expr);
                 }
                 if (resolve_symbols.lookupKnownProcedureSig(self, call.name) == null and
+                    procedure_interfaces.matchedVisibleGenericSigForExprArgs(self, call.name, call.args) == null and
                     procedure_interfaces.visibleSingleTargetGenericSig(self, call.name) == null and
                     resolve_symbols.lookupKnownFunctionResolvedSpec(self, call.name) == null and
                     procedure_calls.hasVisibleGenericInterface(self, call.name))

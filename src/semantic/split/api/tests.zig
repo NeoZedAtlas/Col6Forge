@@ -417,6 +417,37 @@ test "analyzeProgram keeps non-renamed derived types visible for USE rename with
     try testing.expect(found_y);
 }
 
+test "analyzeProgram resolves module function result type through USE without ONLY" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m_use_fn\n" ++
+        "contains\n" ++
+        "  integer pure function bar(i, j)\n" ++
+        "    integer, intent(in) :: i, j\n" ++
+        "    bar = 3 - i + abs(i) + j\n" ++
+        "  end function bar\n" ++
+        "end module m_use_fn\n" ++
+        "program p\n" ++
+        "  use m_use_fn\n" ++
+        "  implicit none\n" ++
+        "  real :: a(10)\n" ++
+        "  integer :: i\n" ++
+        "  read (*,*) a, i\n" ++
+        "  a(bar(i,i+2):2) = a(bar(i,i+2):2)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 2), sem.units.len);
+}
+
 test "analyzeProgram accepts inherited generic type-bound calls dispatched through overriding specifics" {
     const testing = std.testing;
     const allocator = testing.allocator;

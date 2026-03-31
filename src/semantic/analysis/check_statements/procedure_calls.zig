@@ -1129,19 +1129,28 @@ pub fn isCurrentUnitAmbiguousResultRef(self: *context.Context, expr: *ast.Expr) 
 }
 
 pub fn hasAmbiguousVisibleGenericInterface(self: *context.Context, name: []const u8) bool {
-    var sigs = std.array_list.Managed(context.Context.ProcedureSig).init(self.arena);
-    for (self.unit.decls) |decl| {
-        if (decl != .interface_block) continue;
-        const interface_name = decl.interface_block.name orelse continue;
-        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
-        procedure_interfaces.appendGenericInterfaceSigs(self, &sigs, decl.interface_block) catch return false;
-    }
-    var i: usize = 0;
-    while (i < sigs.items.len) : (i += 1) {
-        var j: usize = i + 1;
-        while (j < sigs.items.len) : (j += 1) {
-            if (procedure_interfaces.genericProcedureSigAmbiguous(sigs.items[i], sigs.items[j])) return true;
+    var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
+    procedure_interfaces.appendAmbiguousVisibleGenericSpecificSources(self, &sources, name) catch return false;
+    if (sources.items.len == 0) return false;
+
+    var has_direct_use_source = false;
+    var has_non_direct_use_source = false;
+    for (sources.items) |source| {
+        if (sourceFromDirectUseModule(self, source)) {
+            has_direct_use_source = true;
+        } else {
+            has_non_direct_use_source = true;
         }
+        if (has_direct_use_source and has_non_direct_use_source) return false;
+    }
+    return true;
+}
+
+fn sourceFromDirectUseModule(self: *context.Context, source: ast.DeclSource) bool {
+    const owner_name = source.owner_name orelse return false;
+    for (self.unit.stmts) |stmt_node| {
+        if (stmt_node.node != .use_stmt) continue;
+        if (std.ascii.eqlIgnoreCase(stmt_node.node.use_stmt.module_name, owner_name)) return true;
     }
     return false;
 }

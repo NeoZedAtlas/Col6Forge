@@ -171,7 +171,10 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                     .dummyArgTypeCompatible = dummyArgTypeCompatible,
                 });
             }
-            if (!procedure_interfaces.callHasDerivedActuals(self, call.args) and procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name)) {
+            if (!procedure_interfaces.callHasDerivedActuals(self, call.args) and
+                procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name) and
+                procedure_interfaces.matchedVisibleGenericSigForCallArgs(self, call.name, call.args) == null)
+            {
                 return procedure_calls.emitAmbiguousVisibleGenericDiagnostic(self, call.name, error.DuplicateDeclaration);
             }
             if (std.ascii.eqlIgnoreCase(call.name, self.unit.name) and procedure_calls.currentUnitConflictsWithPreludeProcedure(self, call.name)) {
