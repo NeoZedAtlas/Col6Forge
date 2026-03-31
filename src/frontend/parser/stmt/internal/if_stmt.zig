@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
+const catalog = @import("../../../../common/error_catalog.zig");
 const logical_line = @import("../../../logical_line.zig");
 const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
@@ -260,4 +261,149 @@ pub fn parseWhereAsIfSingle(arena: std.mem.Allocator, lp: *LineParser) anyerror!
             .value = value,
         },
     };
+}
+
+pub fn parseWhereStatement(
+    arena: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    index: *usize,
+    label: ?[]const u8,
+    lp: *LineParser,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    parse_statement_fn: ParseStatementFn,
+) anyerror!Stmt {
+    if (!lp.consumeKeyword("WHERE")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const mask = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    if (lp.peek() != null) {
+        const single = try parseWhereTailAsStmtNode(arena, lp, mask);
+        index.* += 1;
+        return .{
+            .label = label,
+            .node = single,
+        };
+    }
+
+    const header_line = lines[index.*];
+    index.* += 1;
+
+    var block_stmts = std.array_list.Managed(Stmt).init(arena);
+    var in_elsewhere = false;
+    var end_seen = false;
+    var saw_unmasked_elsewhere = false;
+    var else_mask: ?*Expr = null;
+
+    while (index.* < lines.len) {
+        const line = lines[index.*];
+        const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
+        defer arena.free(tokens);
+        var body_lp = LineParser.init(line, tokens);
+
+        if (isEndWhereLine(body_lp)) {
+            end_seen = true;
+            index.* += 1;
+            break;
+        }
+        if (body_lp.isKeywordSplit("ELSEWHERE")) {
+            _ = body_lp.consumeKeyword("ELSEWHERE");
+            var masked_else: ?*Expr = null;
+            if (body_lp.consume(.l_paren)) {
+                masked_else = try expr.parseExpr(&body_lp, arena, 0);
+                _ = body_lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            }
+            if (body_lp.peek() != null) return error.UnexpectedToken;
+            if (masked_else != null and saw_unmasked_elsewhere) {
+                diag_bag.set(
+                    line.span.start_line,
+                    defaultSourceColumn(line),
+                    catalog.parser.unexpected_token.code,
+                    "follows previous unmasked ELSEWHERE",
+                    line.text,
+                );
+                return error.UnexpectedToken;
+            }
+            in_elsewhere = true;
+            if (masked_else) |masked| {
+                else_mask = masked;
+            } else {
+                saw_unmasked_elsewhere = true;
+                else_mask = null;
+            }
+            index.* += 1;
+            continue;
+        }
+
+        var parsed = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
+        const active_mask = if (!in_elsewhere)
+            mask
+        else blk: {
+            if (else_mask == null) else_mask = mask;
+            break :blk else_mask.?;
+        };
+        parsed = try rewriteWhereBodyStmt(parsed, active_mask);
+        try block_stmts.append(parsed);
+    }
+
+    if (!end_seen) return error.UnexpectedEOF;
+    if (block_stmts.items.len == 0) {
+        return .{
+            .label = label,
+            .node = .{ .cont = {} },
+            .source_line = header_line.span.start_line,
+            .source_column = defaultSourceColumn(header_line),
+            .source_text = header_line.text,
+        };
+    }
+
+    var tail = block_stmts.items.len;
+    while (tail > 1) {
+        tail -= 1;
+        try do_ctx.pushPending(block_stmts.items[tail]);
+    }
+
+    var first = block_stmts.items[0];
+    if (first.label == null) first.label = label;
+    return first;
+}
+
+fn parseWhereTailAsStmtNode(arena: std.mem.Allocator, lp: *LineParser, mask: *Expr) anyerror!StmtNode {
+    const target = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+    const value = try expr.parseExpr(lp, arena, 0);
+    return .{
+        .where_stmt = .{
+            .mask = mask,
+            .target = target,
+            .value = value,
+        },
+    };
+}
+
+fn rewriteWhereBodyStmt(stmt_node: Stmt, mask: *Expr) anyerror!Stmt {
+    return switch (stmt_node.node) {
+        .assignment => |assign| .{
+            .label = stmt_node.label,
+            .node = .{ .where_stmt = .{
+                .mask = mask,
+                .target = assign.target,
+                .value = assign.value,
+            } },
+            .source_line = stmt_node.source_line,
+            .source_column = stmt_node.source_column,
+            .source_text = stmt_node.source_text,
+        },
+        .where_stmt => stmt_node,
+        else => error.UnexpectedToken,
+    };
+}
+
+fn isEndWhereLine(lp: LineParser) bool {
+    return helpers.isEndKeywordLine(lp, "ENDWHERE", "WHERE");
 }

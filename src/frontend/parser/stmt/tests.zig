@@ -1794,6 +1794,61 @@ test "parseStatement parses WHERE as where_stmt" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
+test "parseStatement parses WHERE block with ENDWHERE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      WHERE (L1)\n" ++
+        "        A = B\n" ++
+        "      ENDWHERE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .where_stmt);
+    try testing.expectEqual(@as(usize, 3), idx);
+}
+
+test "parseStatement lowers WHERE ELSEWHERE to pending where_stmt" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      WHERE (L1)\n" ++
+        "        A = B\n" ++
+        "      ELSEWHERE\n" ++
+        "        A = C\n" ++
+        "      END WHERE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const first_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(first_stmt.node == .where_stmt);
+    try testing.expectEqual(@as(usize, 5), idx);
+
+    const second_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(second_stmt.node == .where_stmt);
+    try testing.expect(second_stmt.node.where_stmt.mask.* == .unary);
+    try testing.expectEqual(ast.UnaryOp.not, second_stmt.node.where_stmt.mask.unary.op);
+}
+
 test "parseStatement preserves PAUSE string payload" {
     const testing = std.testing;
     const allocator = testing.allocator;

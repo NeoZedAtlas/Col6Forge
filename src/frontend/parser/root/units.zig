@@ -543,10 +543,12 @@ pub fn parseProgramUnitBody(
                 self.index += 1;
                 break;
             }
-            if (stmt_lp.isKeywordSplit("END") and
+            const explicit_program_unit_end = root_predicates.isProgramUnitEndTokens(line, tokens);
+            if (explicit_program_unit_end or
+                (stmt_lp.isKeywordSplit("END") and
                 !root_control.isEndDoLine(stmt_lp) and
                 !root_control.isEndIfLine(stmt_lp) and
-                !root_control.isEndBlockLine(stmt_lp))
+                !root_control.isEndBlockLine(stmt_lp)))
             {
                 if (implicit_program_recovery and recovered_stmt_error) {
                     self.diag_bag.set(

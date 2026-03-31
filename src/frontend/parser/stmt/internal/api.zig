@@ -169,12 +169,28 @@ pub fn parseStatementWithDiagnostics(
         index.* += 1;
         return makeStmtWithSource(line, label, stmt_node);
     }
+    if (lp.isKeywordSplit("FORALL")) {
+        var stmt = parseForallStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
+            return err;
+        };
+        setStmtSourceIfMissing(&stmt, line);
+        return stmt;
+    }
     if (lp.isKeywordSplit("IF")) {
         if (tryParseAmbiguousAssignment(arena, line, lp, .top_level)) |stmt_node| {
             index.* += 1;
             return makeStmtWithSource(line, label, stmt_node);
         }
         var stmt = if_stmt.parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics, actionCallbacks()) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
+            return err;
+        };
+        setStmtSourceIfMissing(&stmt, line);
+        return stmt;
+    }
+    if (lp.isKeywordSplit("WHERE")) {
+        var stmt = if_stmt.parseWhereStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
             if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
             return err;
         };
@@ -311,4 +327,81 @@ fn shouldTreatSplitDoAsAssignment(lp: LineParser) bool {
     _ = do_lp.next();
     _ = do_lp.next();
     return helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp);
+}
+
+fn parseForallStatement(
+    arena: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    index: *usize,
+    label: ?[]const u8,
+    lp: *LineParser,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    parse_statement_fn: if_stmt.ParseStatementFn,
+) anyerror!Stmt {
+    if (!lp.consumeKeyword("FORALL")) return error.UnexpectedToken;
+    if (!lp.consume(.l_paren)) return error.UnexpectedToken;
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            else => {},
+        }
+    }
+
+    // Block FORALL: FORALL (...) <newline> ... END FORALL
+    if (lp.peek() == null) {
+        const header_line = lines[index.*];
+        index.* += 1;
+        var block_stmts = std.array_list.Managed(Stmt).init(arena);
+        var end_seen = false;
+        while (index.* < lines.len) {
+            const body_line = lines[index.*];
+            const body_tokens = try lexLine(arena, body_line, diag_bag, lex_diag_bag);
+            defer arena.free(body_tokens);
+            const body_lp = LineParser.init(body_line, body_tokens);
+            if (isEndForallLine(body_lp)) {
+                end_seen = true;
+                index.* += 1;
+                break;
+            }
+            const parsed = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
+            try block_stmts.append(parsed);
+        }
+        if (!end_seen) return error.UnexpectedEOF;
+        if (block_stmts.items.len == 0) {
+            return .{
+                .label = label,
+                .node = .{ .cont = {} },
+                .source_line = header_line.span.start_line,
+                .source_column = defaultSourceColumn(header_line),
+                .source_text = header_line.text,
+            };
+        }
+        var tail = block_stmts.items.len;
+        while (tail > 1) {
+            tail -= 1;
+            try do_ctx.pushPending(block_stmts.items[tail]);
+        }
+        var first = block_stmts.items[0];
+        if (first.label == null) first.label = label;
+        return first;
+    }
+
+    // Single-line FORALL is parsed as one action statement body.
+    const body = action_stmt.parseActionStmtNode(arena, lines[index.*], lp, do_ctx, .top_level, actionCallbacks()) catch return error.UnexpectedToken;
+    if (lp.peek() != null) return error.UnexpectedToken;
+    index.* += 1;
+    return makeStmtWithSource(lines[index.* - 1], label, body);
+}
+
+fn isEndForallLine(lp: LineParser) bool {
+    return helpers.isEndKeywordLine(lp, "ENDFORALL", "FORALL");
 }

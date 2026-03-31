@@ -6,9 +6,7 @@ const context = @import("../token_stream.zig");
 const LineParser = context.LineParser;
 
 pub fn isEndSelectTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("SELECT");
+    return matchesEndKeyword(line, tokens, "SELECT");
 }
 
 pub fn isDerivedTypeStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
@@ -20,9 +18,7 @@ pub fn isDerivedTypeStartTokens(line: logical_line.LogicalLine, tokens: []lexer.
 }
 
 pub fn isDerivedTypeEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("TYPE");
+    return matchesEndKeyword(line, tokens, "TYPE");
 }
 
 pub fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
@@ -82,15 +78,11 @@ pub fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine)
 }
 
 pub fn isModuleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("MODULE");
+    return matchesEndKeyword(line, tokens, "MODULE");
 }
 
 pub fn isSubmoduleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("SUBMODULE");
+    return matchesEndKeyword(line, tokens, "SUBMODULE");
 }
 
 pub fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
@@ -112,12 +104,25 @@ pub fn isProgramUnitEndLine(arena: std.mem.Allocator, line: logical_line.Logical
 }
 
 pub fn isProgramUnitEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    return matchesEndKeyword(line, tokens, "PROGRAM") or
+        matchesEndKeyword(line, tokens, "SUBROUTINE") or
+        matchesEndKeyword(line, tokens, "FUNCTION") or
+        matchesEndKeyword(line, tokens, "BLOCKDATA");
+}
+
+fn matchesEndKeyword(line: logical_line.LogicalLine, tokens: []lexer.Token, suffix: []const u8) bool {
     var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.isKeywordSplit("PROGRAM") or
-        lp.isKeywordSplit("SUBROUTINE") or
-        lp.isKeywordSplit("FUNCTION") or
-        lp.isKeywordSplit("BLOCKDATA");
+    if (lp.consumeKeyword("END")) {
+        if (lp.consumeKeyword(suffix)) return true;
+    }
+
+    // Accept fused spellings such as ENDTYPE / ENDMODULE / ENDSUBROUTINE.
+    var fused: [64]u8 = undefined;
+    if (3 + suffix.len > fused.len) return false;
+    std.mem.copyForwards(u8, fused[0..3], "END");
+    std.mem.copyForwards(u8, fused[3 .. 3 + suffix.len], suffix);
+    lp = LineParser.init(line, tokens);
+    return lp.consumeKeyword(fused[0 .. 3 + suffix.len]);
 }
 
 pub fn isInterfaceStartLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
