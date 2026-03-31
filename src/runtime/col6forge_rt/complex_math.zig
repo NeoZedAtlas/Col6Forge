@@ -139,6 +139,32 @@ fn complexLog(comptime T: type, z: Complex(T)) Complex(T) {
     };
 }
 
+fn complexTan(comptime T: type, z: Complex(T)) Complex(T) {
+    return complexMul(T, complexSin(T, z), complexInv(T, complexCos(T, z)));
+}
+
+fn complexSinh(comptime T: type, z: Complex(T)) Complex(T) Complex(T) {
+    const a = z.r;
+    const b = z.i;
+    return .{
+        .r = std.math.sinh(a) * std.math.cos(b),
+        .i = std.math.cosh(a) * std.math.sin(b),
+    };
+}
+
+fn complexCosh(comptime T: type, z: Complex(T)) Complex(T) {
+    const a = z.r;
+    const b = z.i;
+    return .{
+        .r = std.math.cosh(a) * std.math.cos(b),
+        .i = std.math.sinh(a) * std.math.sin(b),
+    };
+}
+
+fn complexTanh(comptime T: type, z: Complex(T)) Complex(T) {
+    return complexMul(T, complexSinh(T, z), complexInv(T, complexCosh(T, z)));
+}
+
 // Stable principal square root that avoids catastrophic cancellation.
 fn complexSqrt(comptime T: type, z: Complex(T)) Complex(T) {
     const zero = @as(T, 0.0);
@@ -230,6 +256,14 @@ fn ComplexApi(
         const log_ptr_name = exportedName(symbol_prefix, "log_ptr");
         const sqrt_name = exportedName(symbol_prefix, "sqrt");
         const sqrt_ptr_name = exportedName(symbol_prefix, "sqrt_ptr");
+        const tan_name = exportedName(symbol_prefix, "tan");
+        const tan_ptr_name = exportedName(symbol_prefix, "tan_ptr");
+        const sinh_name = exportedName(symbol_prefix, "sinh");
+        const sinh_ptr_name = exportedName(symbol_prefix, "sinh_ptr");
+        const cosh_name = exportedName(symbol_prefix, "cosh");
+        const cosh_ptr_name = exportedName(symbol_prefix, "cosh_ptr");
+        const tanh_name = exportedName(symbol_prefix, "tanh");
+        const tanh_ptr_name = exportedName(symbol_prefix, "tanh_ptr");
         const powi_name = exportedName(symbol_prefix, "powi");
 
         pub fn sin(z: CType) callconv(.c) CType {
@@ -272,6 +306,38 @@ fn ComplexApi(
             unaryPtrController(T, CType, out, input, fromC, toC, complexSqrt) catch pointerContractFail(sqrt_ptr_name);
         }
 
+        pub fn tan(z: CType) callconv(.c) CType {
+            return toC(complexTan(T, fromC(z)));
+        }
+
+        pub fn tan_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexTan) catch pointerContractFail(tan_ptr_name);
+        }
+
+        pub fn sinh(z: CType) callconv(.c) CType {
+            return toC(complexSinh(T, fromC(z)));
+        }
+
+        pub fn sinh_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexSinh) catch pointerContractFail(sinh_ptr_name);
+        }
+
+        pub fn cosh(z: CType) callconv(.c) CType {
+            return toC(complexCosh(T, fromC(z)));
+        }
+
+        pub fn cosh_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexCosh) catch pointerContractFail(cosh_ptr_name);
+        }
+
+        pub fn tanh(z: CType) callconv(.c) CType {
+            return toC(complexTanh(T, fromC(z)));
+        }
+
+        pub fn tanh_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexTanh) catch pointerContractFail(tanh_ptr_name);
+        }
+
         pub fn powi(z: CType, n: c_int) callconv(.c) CType {
             return toC(complexPowi(T, fromC(z), n));
         }
@@ -287,6 +353,14 @@ fn ComplexApi(
             @export(&Self.log_ptr, .{ .name = log_ptr_name, .linkage = .strong });
             @export(&Self.sqrt, .{ .name = sqrt_name, .linkage = .strong });
             @export(&Self.sqrt_ptr, .{ .name = sqrt_ptr_name, .linkage = .strong });
+            @export(&Self.tan, .{ .name = tan_name, .linkage = .strong });
+            @export(&Self.tan_ptr, .{ .name = tan_ptr_name, .linkage = .strong });
+            @export(&Self.sinh, .{ .name = sinh_name, .linkage = .strong });
+            @export(&Self.sinh_ptr, .{ .name = sinh_ptr_name, .linkage = .strong });
+            @export(&Self.cosh, .{ .name = cosh_name, .linkage = .strong });
+            @export(&Self.cosh_ptr, .{ .name = cosh_ptr_name, .linkage = .strong });
+            @export(&Self.tanh, .{ .name = tanh_name, .linkage = .strong });
+            @export(&Self.tanh_ptr, .{ .name = tanh_ptr_name, .linkage = .strong });
             @export(&Self.powi, .{ .name = powi_name, .linkage = .strong });
         }
     };

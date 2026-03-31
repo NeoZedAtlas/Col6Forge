@@ -302,6 +302,8 @@ pub fn emitLog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRe
 
 pub fn emitTan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ctan_ptr", "col6forge_ztan_ptr", args);
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLibmUnaryFloatValue(ctx, builder, "tanf", "tan", value);
 }
@@ -320,12 +322,16 @@ pub fn emitAcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueR
 
 pub fn emitSinh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_csinh_ptr", "col6forge_zsinh_ptr", args);
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", value);
 }
 
 pub fn emitCosh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ccosh_ptr", "col6forge_zcosh_ptr", args);
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", value);
 }
@@ -344,6 +350,8 @@ pub fn emitAlog10(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Valu
 
 pub fn emitTanh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ctanh_ptr", "col6forge_ztanh_ptr", args);
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLibmUnaryFloatValue(ctx, builder, "tanhf", "tanh", value);
 }

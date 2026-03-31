@@ -93,11 +93,19 @@ pub fn emitIntrinsicDconjg(ctx: *Context, builder: anytype, args: []*Expr) EmitE
 }
 
 pub fn emitIntrinsicCmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 3) return error.InvalidIntrinsicCall;
     var real = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(real.ty)) {
-        if (args.len != 1) return error.UnsupportedIntrinsicType;
-        const target = if (real.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
+        if (args.len == 2) return error.UnsupportedIntrinsicType;
+        const target = if (args.len == 3)
+            (switch (evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType) {
+                8 => IRType.complex_f64,
+                else => IRType.complex_f32,
+            })
+        else if (real.ty == .complex_f64)
+            IRType.complex_f64
+        else
+            IRType.complex_f32;
         return complex.coerceToComplex(ctx, builder, real, target);
     }
 
@@ -107,7 +115,12 @@ pub fn emitIntrinsicCmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitEr
         if (complex.isComplexType(imag.?.ty)) return error.UnsupportedIntrinsicType;
     }
 
-    const elem_ty: IRType = if (real.ty == .f64 or (imag != null and imag.?.ty == .f64)) .f64 else .f32;
+    const elem_ty: IRType = if (args.len == 3)
+        (realKindToIRType(evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType) orelse return error.UnsupportedIntrinsicType)
+    else if (real.ty == .f64 or (imag != null and imag.?.ty == .f64))
+        .f64
+    else
+        .f32;
     const target_ty: IRType = if (elem_ty == .f64) .complex_f64 else .complex_f32;
 
     real = try casting.coerce(ctx, builder, real, elem_ty);

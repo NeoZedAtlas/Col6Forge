@@ -4190,6 +4190,24 @@ test "emitModuleToWriter lowers INT and REAL intrinsics with KIND actual" {
     try std.testing.expect(std.mem.indexOf(u8, buf.items, "sitofp") != null);
 }
 
+test "emitModuleToWriter lowers CMPLX intrinsic with KIND actual" {
+    const source =
+        \\program p
+        \\  complex(kind=8) :: z
+        \\  z = cmplx(1.0, 2.0, kind=8)
+        \\end program p
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    defer buf.deinit();
+
+    try emitModuleToWriter(source, arena.allocator(), buf.writer());
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "{ double, double }") != null);
+}
+
 test "emitModuleToWriter lowers scalar assignment through real pointer target" {
     const testing = std.testing;
     const allocator = testing.allocator;
