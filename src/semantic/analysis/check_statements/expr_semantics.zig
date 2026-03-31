@@ -46,6 +46,7 @@ pub fn checkSpecialExprCallConstraints(
     name: []const u8,
     args: []*ast.Expr,
 ) CheckError!void {
+    try checkLegacyWidecharExprCallConstraints(self, name, args);
     if (intrinsicRequiresDoublePrecisionArgs(name)) {
         for (args) |arg| {
             const spec = try resolve_expr.exprTypeSpec(self, arg);
@@ -95,6 +96,69 @@ pub fn checkSpecialExprCallConstraints(
         ) catch "Argument C_PTR_2 to C_ASSOCIATED shall have the same type as C_PTR_1.";
         return emitExprConstraintDiagnostic(self, args[1], message);
     }
+}
+
+fn checkLegacyWidecharExprCallConstraints(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    const conversion_style =
+        std.ascii.eqlIgnoreCase(name, "getcwd") or
+        std.ascii.eqlIgnoreCase(name, "system");
+    const char_positions: ?[]const usize = blk: {
+        if (std.ascii.eqlIgnoreCase(name, "access")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "chdir")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "chmod")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "fget")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "fgetc")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "fput")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "fputc")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "getcwd")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "hostnm")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "link")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "lstat")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "stat")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "rename")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "symlnk")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "system")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "unlink")) break :blk &.{0};
+        break :blk null;
+    };
+    if (char_positions) |positions| {
+        for (positions) |pos| {
+            if (pos >= args.len) continue;
+            if (!exprIsScalarCharacterKindOne(self, args[pos])) {
+                return emitWidecharExprDiagnostic(self, args[pos], conversion_style);
+            }
+        }
+    }
+}
+
+fn exprIsScalarCharacterKindOne(self: *context.Context, expr_node: *ast.Expr) bool {
+    if (resolve_expr.exprRank(self, expr_node) != 0) return false;
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
+    if (spec.lowered_kind != .character) return false;
+    return spec.kind_value == null or spec.kind_value.? == 1;
+}
+
+fn typeStringForCharacterActual(self: *context.Context, expr_node: *ast.Expr) []const u8 {
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return "CHARACTER(*)";
+    if (spec.lowered_kind != .character) return "CHARACTER(*)";
+    const len_text = if (spec.char_len) |len|
+        std.fmt.allocPrint(self.arena, "{d}", .{len}) catch "*"
+    else
+        "*";
+    const kind_value = spec.kind_value orelse 1;
+    return std.fmt.allocPrint(self.arena, "CHARACTER({s},{d})", .{ len_text, kind_value }) catch "CHARACTER(*)";
+}
+
+fn emitWidecharExprDiagnostic(self: *context.Context, expr_node: *ast.Expr, use_conversion_text: bool) CheckError {
+    const message = if (use_conversion_text)
+        std.fmt.allocPrint(self.arena, "'{s}' to 'CHARACTER(*)'", .{typeStringForCharacterActual(self, expr_node)}) catch "character kind mismatch"
+    else
+        "must be of kind 1";
+    return emitExprConstraintDiagnostic(self, expr_node, message);
 }
 
 fn intrinsicRequiresDoublePrecisionArgs(name: []const u8) bool {

@@ -859,6 +859,214 @@ test "intrinsic call with keyword actuals does not require explicit interface" {
     try testing.expect(diag.take() == null);
 }
 
+test "move_alloc intrinsic call diagnoses duplicate stat keyword instead of explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer, allocatable :: i, o\n" ++
+        "  integer :: st, s2\n" ++
+        "  call move_alloc(i, o, stat=st, stat=s2)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_intrinsic_keyword_argument.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "Keyword 'stat'") != null);
+}
+
+test "move_alloc intrinsic call rejects INTENT(IN) allocatable from-argument" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s(from, to)\n" ++
+        "  integer, allocatable, intent(in) :: from\n" ++
+        "  integer, allocatable :: to\n" ++
+        "  call move_alloc(from, to)\n" ++
+        "end subroutine s\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var diag_bag = diag.Bag.init(testing.allocator);
+    defer diag_bag.deinit();
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_function_type_specs.deinit();
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_procedure_sigs.deinit();
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host_parameters.deinit();
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived_types.deinit();
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interface_sources.deinit();
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract_interfaces.deinit();
+
+    var analyzer = UnitAnalyzer.initWithDiagnostics(
+        testing.allocator,
+        @constCast(&program.units[0]),
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        true,
+        &diag_bag,
+    );
+    try testing.expectError(error.InvalidArgumentCount, analyzer.analyze());
+    try testing.expect(diag_bag.items.len != 0);
+    try testing.expect(std.mem.indexOf(u8, diag_bag.items[0].message, "INTENT(IN)") != null);
+}
+
+test "move_alloc intrinsic call rejects aliasing between from and to" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: linked_list\n" ++
+        "    type(linked_list), allocatable :: link\n" ++
+        "    integer :: value\n" ++
+        "  end type linked_list\n" ++
+        "  type(linked_list) :: test\n" ++
+        "  allocate(test%link)\n" ++
+        "  allocate(test%link%link)\n" ++
+        "  call move_alloc(test%link, test%link%link)\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var diag_bag = diag.Bag.init(testing.allocator);
+    defer diag_bag.deinit();
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_function_type_specs.deinit();
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_procedure_sigs.deinit();
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host_parameters.deinit();
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived_types.deinit();
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interface_sources.deinit();
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract_interfaces.deinit();
+
+    var analyzer = UnitAnalyzer.initWithDiagnostics(
+        testing.allocator,
+        @constCast(&program.units[0]),
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        true,
+        &diag_bag,
+    );
+    try testing.expectError(error.InvalidArgumentCount, analyzer.analyze());
+    try testing.expect(diag_bag.items.len != 0);
+    try testing.expect(std.mem.indexOf(u8, diag_bag.items[0].message, "aliasing restrictions") != null);
+}
+
+test "date_and_time intrinsic call diagnoses wide character actual instead of explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  character(kind=4,len=20) :: s4\n" ++
+        "  call date_and_time(date=s4)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "must be of kind 1") != null);
+}
+
 test "c_f_pointer rejects shape actual for scalar fptr" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -210,6 +210,65 @@ test "const call dispatch trims and rejects unsupported SELECTED_CHAR_KIND names
     }
 }
 
+test "const call dispatch handles ACOS EPSILON and CMPLX with kind" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const real_zero = try a.create(ast.Expr);
+    real_zero.* = .{ .literal = .{ .kind = .real, .text = "0.0_4" } };
+    const real_one = try a.create(ast.Expr);
+    real_one.* = .{ .literal = .{ .kind = .real, .text = "1.0_4" } };
+    const kind_four = try a.create(ast.Expr);
+    kind_four.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
+
+    const acos_args = try a.alloc(*ast.Expr, 1);
+    acos_args[0] = real_zero;
+    const acos_call = try a.create(ast.Expr);
+    acos_call.* = .{ .call_or_subscript = .{ .name = "acos", .args = acos_args } };
+
+    const epsilon_args = try a.alloc(*ast.Expr, 1);
+    epsilon_args[0] = real_zero;
+    const epsilon_call = try a.create(ast.Expr);
+    epsilon_call.* = .{ .call_or_subscript = .{ .name = "epsilon", .args = epsilon_args } };
+
+    const cmplx_args = try a.alloc(*ast.Expr, 3);
+    cmplx_args[0] = real_one;
+    cmplx_args[1] = real_zero;
+    cmplx_args[2] = kind_four;
+    const cmplx_call = try a.create(ast.Expr);
+    cmplx_call.* = .{ .call_or_subscript = .{ .name = "cmplx", .args = cmplx_args } };
+
+    const acos_value = (try evalConst(acos_call, null)) orelse return error.TestExpectedEqual;
+    switch (acos_value) {
+        .real => |v| {
+            try testing.expectApproxEqAbs(@as(f64, std.math.pi / 2.0), v.value, 1e-6);
+            try testing.expect(!v.is_double);
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    const epsilon_value = (try evalConst(epsilon_call, null)) orelse return error.TestExpectedEqual;
+    switch (epsilon_value) {
+        .real => |v| {
+            try testing.expectApproxEqAbs(@as(f64, std.math.floatEps(f32)), v.value, 1e-12);
+            try testing.expect(!v.is_double);
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    const cmplx_value = (try evalConst(cmplx_call, null)) orelse return error.TestExpectedEqual;
+    switch (cmplx_value) {
+        .complex => |v| {
+            try testing.expectApproxEqAbs(@as(f64, 1.0), v.real, 1e-12);
+            try testing.expectApproxEqAbs(@as(f64, 0.0), v.imag, 1e-12);
+            try testing.expect(!v.is_double);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "const call dispatch handles BIT_SIZE with named kind suffix" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

@@ -9,6 +9,7 @@ const ExprMeasureKind = evaluator.ExprMeasureKind;
 
 const ConstCallKind = enum {
     len,
+    acos,
     sqrt,
     log10,
     atan,
@@ -29,6 +30,7 @@ const ConstCallKind = enum {
     storage_size,
     sizeof,
     c_sizeof,
+    cmplx,
     real,
     log,
     ceiling,
@@ -39,6 +41,8 @@ const ConstCallKind = enum {
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "LEN", .len },
+    .{ "ACOS", .acos },
+    .{ "DACOS", .acos },
     .{ "SQRT", .sqrt },
     .{ "LOG10", .log10 },
     .{ "ATAN", .atan },
@@ -61,6 +65,8 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "STORAGE_SIZE", .storage_size },
     .{ "SIZEOF", .sizeof },
     .{ "C_SIZEOF", .c_sizeof },
+    .{ "CMPLX", .cmplx },
+    .{ "DCMPLX", .cmplx },
     .{ "REAL", .real },
     .{ "LOG", .log },
     .{ "DLOG", .log },
@@ -82,6 +88,15 @@ pub fn evalConstCall(
             if (call.args.len != 1) return null;
             const len = (try literals.evalConstCharLen(call.args[0], resolver, eval_const_fn)) orelse return null;
             return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+        },
+        .acos => {
+            if (call.args.len != 1) return null;
+            const arg = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const is_double = constValuePrefersDouble(arg);
+            return .{ .real = .{
+                .value = std.math.acos(to_real_fn(arg)),
+                .is_double = is_double,
+            } };
         },
         .sqrt => {
             if (call.args.len != 1) return null;
@@ -115,8 +130,12 @@ pub fn evalConstCall(
         },
         .epsilon => {
             if (call.args.len != 1) return null;
-            _ = (try eval_const_fn(call.args[0], resolver)) orelse return null;
-            return .{ .real = .{ .value = std.math.floatEps(f64), .is_double = true } };
+            const arg = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const is_double = constValuePrefersDouble(arg);
+            return .{ .real = .{
+                .value = if (is_double) std.math.floatEps(f64) else @as(f64, std.math.floatEps(f32)),
+                .is_double = is_double,
+            } };
         },
         .tiny => {
             if (call.args.len != 1) return null;
@@ -205,6 +224,26 @@ pub fn evalConstCall(
         .storage_size => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .storage_size_bits),
         .sizeof => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .sizeof_bytes),
         .c_sizeof => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .c_sizeof_bytes),
+        .cmplx => {
+            if (call.args.len == 0 or call.args.len > 3) return null;
+            const first = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            var result = constValueToComplex(first) orelse return null;
+            if (call.args.len >= 2) {
+                const second = (try eval_const_fn(call.args[1], resolver)) orelse return null;
+                const second_complex = constValueToComplex(second) orelse return null;
+                if (result.imag != 0.0 or second_complex.imag != 0.0) return null;
+                result.imag = second_complex.real;
+            }
+            if (call.args.len == 3) {
+                const kind_arg = (try eval_const_fn(call.args[2], resolver)) orelse return null;
+                result.is_double = switch (kind_arg) {
+                    .integer => |v| v >= 8,
+                    else => return null,
+                };
+            }
+            if (std.ascii.eqlIgnoreCase(call.name, "dcmplx")) result.is_double = true;
+            return .{ .complex = result };
+        },
         .real => {
             if (call.args.len == 0 or call.args.len > 2) return null;
             const arg = (try eval_const_fn(call.args[0], resolver)) orelse return null;
@@ -257,6 +296,23 @@ pub fn evalConstCall(
             return .{ .logical = evalConstExtendsTypeOf(call.args[0], lhs, call.args[1], rhs, res) orelse return null };
         },
     }
+}
+
+fn constValuePrefersDouble(value: ConstValue) bool {
+    return switch (value) {
+        .real => |v| v.is_double,
+        .complex => |v| v.is_double,
+        else => false,
+    };
+}
+
+fn constValueToComplex(value: ConstValue) ?symbols.ComplexConst {
+    return switch (value) {
+        .integer => |v| .{ .real = @floatFromInt(v), .imag = 0.0, .is_double = false },
+        .real => |v| .{ .real = v.value, .imag = 0.0, .is_double = v.is_double },
+        .complex => |v| v,
+        else => null,
+    };
 }
 
 fn constCallKind(name: []const u8) ?ConstCallKind {

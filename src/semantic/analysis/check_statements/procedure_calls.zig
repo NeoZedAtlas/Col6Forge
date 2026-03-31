@@ -618,12 +618,301 @@ pub fn checkIntrinsicCallConstraintsForCallArgs(
     name: []const u8,
     args: []const ast.CallArg,
 ) CheckError!void {
+    if (std.ascii.eqlIgnoreCase(name, "move_alloc")) {
+        try checkMoveAllocCallConstraints(self, args);
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "date_and_time")) {
+        try checkDateAndTimeCallConstraints(self, args);
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "get_command")) {
+        try checkGetCommandCallConstraints(self, args);
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "get_command_argument")) {
+        try checkGetCommandArgumentCallConstraints(self, args);
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "get_environment_variable")) {
+        try checkGetEnvironmentVariableCallConstraints(self, args);
+        return;
+    }
+    try checkLegacyWidecharCallConstraints(self, name, args);
     if (std.ascii.eqlIgnoreCase(name, "c_f_pointer")) {
         try checkCFPointerCallConstraints(self, args);
         return;
     }
     if (std.ascii.eqlIgnoreCase(name, "c_f_procpointer")) {
         try checkCFProcPointerCallConstraints(self, args);
+    }
+}
+
+const IntrinsicCallActual = struct {
+    keyword: ?[]const u8 = null,
+    value: *ast.Expr,
+};
+
+fn duplicateKeywordActual(args: []const ast.CallArg, keyword_name: []const u8) ?IntrinsicCallActual {
+    var seen = false;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        const actual = arg.expr;
+        const keyword = actual.keyword orelse continue;
+        if (!std.ascii.eqlIgnoreCase(keyword, keyword_name)) continue;
+        if (seen) return .{ .keyword = keyword, .value = actual.value };
+        seen = true;
+    }
+    return null;
+}
+
+fn nthOrKeywordActual(args: []const ast.CallArg, position: usize, keyword_name: ?[]const u8) ?IntrinsicCallActual {
+    if (keyword_name) |keyword| {
+        for (args) |arg| {
+            if (arg != .expr) continue;
+            const actual = arg.expr;
+            if (actual.keyword) |kw| {
+                if (std.ascii.eqlIgnoreCase(kw, keyword)) return .{ .keyword = kw, .value = actual.value };
+            }
+        }
+    }
+    var positional_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        const actual = arg.expr;
+        if (actual.keyword != null) continue;
+        if (positional_idx == position) return .{ .keyword = null, .value = actual.value };
+        positional_idx += 1;
+    }
+    return null;
+}
+
+fn emitDuplicateIntrinsicKeywordDiagnostic(
+    self: *context.Context,
+    actual: IntrinsicCallActual,
+    keyword_name: []const u8,
+) CheckError {
+    return emitIntrinsicArgDiagnostic(
+        self,
+        actual.value,
+        std.fmt.allocPrint(self.arena, "Keyword '{s}' at (1) has already appeared in the current argument list", .{keyword_name}) catch "duplicate keyword in intrinsic call",
+    );
+}
+
+fn exprIsScalarIntegerVariableAtLeastKind(self: *context.Context, expr_node: *ast.Expr, min_kind: i64) bool {
+    if (!exprIsVariableDefinitionActual(self, expr_node)) return false;
+    if (resolve_expr.exprRank(self, expr_node) != 0) return false;
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
+    if (spec.lowered_kind != .integer) return false;
+    return spec.kind_value == null or spec.kind_value.? >= min_kind;
+}
+
+fn exprIsScalarCharacterVariableKindOne(self: *context.Context, expr_node: *ast.Expr) bool {
+    if (!exprIsVariableDefinitionActual(self, expr_node)) return false;
+    if (resolve_expr.exprRank(self, expr_node) != 0) return false;
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
+    if (spec.lowered_kind != .character) return false;
+    return spec.kind_value == null or spec.kind_value.? == 1;
+}
+
+fn exprIsScalarCharacterKindOne(self: *context.Context, expr_node: *ast.Expr) bool {
+    if (resolve_expr.exprRank(self, expr_node) != 0) return false;
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
+    if (spec.lowered_kind != .character) return false;
+    return spec.kind_value == null or spec.kind_value.? == 1;
+}
+
+fn typeStringForCharacterActual(self: *context.Context, expr_node: *ast.Expr) []const u8 {
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return "CHARACTER(*)";
+    if (spec.lowered_kind != .character) return "CHARACTER(*)";
+    const len_text = if (spec.char_len) |len|
+        std.fmt.allocPrint(self.arena, "{d}", .{len}) catch "*"
+    else
+        "*";
+    const kind_value = spec.kind_value orelse 1;
+    return std.fmt.allocPrint(self.arena, "CHARACTER({s},{d})", .{ len_text, kind_value }) catch "CHARACTER(*)";
+}
+
+fn emitCharacterKindOneIntrinsicDiagnostic(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    use_conversion_text: bool,
+) CheckError {
+    const message = if (use_conversion_text)
+        std.fmt.allocPrint(self.arena, "'{s}' to 'CHARACTER(*)'", .{typeStringForCharacterActual(self, expr_node)}) catch "character kind mismatch"
+    else
+        "must be of kind 1";
+    return emitIntrinsicArgDiagnostic(self, expr_node, message);
+}
+
+fn checkMoveAllocCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    if (duplicateKeywordActual(args, "stat")) |dup| return emitDuplicateIntrinsicKeywordDiagnostic(self, dup, "stat");
+    if (duplicateKeywordActual(args, "errmsg")) |dup| return emitDuplicateIntrinsicKeywordDiagnostic(self, dup, "errmsg");
+
+    const from_actual = nthOrKeywordActual(args, 0, "from");
+    const to_actual = nthOrKeywordActual(args, 1, "to");
+
+    if (from_actual) |actual| {
+        if (moveAllocViolatesIntentIn(self, actual.value)) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "cannot be INTENT(IN)");
+        }
+    }
+    if (to_actual) |actual| {
+        if (moveAllocViolatesIntentIn(self, actual.value)) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "cannot be INTENT(IN)");
+        }
+    }
+    if (from_actual != null and to_actual != null) {
+        if (moveAllocDesignatorsConflict(from_actual.?.value, to_actual.?.value)) {
+            return emitIntrinsicArgDiagnostic(self, to_actual.?.value, "violates aliasing restrictions");
+        }
+        const from_spec = resolve_expr.exprTypeSpec(self, from_actual.?.value) catch null;
+        const to_spec = resolve_expr.exprTypeSpec(self, to_actual.?.value) catch null;
+        if (from_spec != null and to_spec != null and from_spec.?.polymorphic and !to_spec.?.polymorphic) {
+            return emitIntrinsicArgDiagnostic(self, to_actual.?.value, "must be polymorphic if FROM is polymorphic");
+        }
+    }
+
+    if (nthOrKeywordActual(args, 2, "stat")) |actual| {
+        if (!exprIsScalarIntegerVariableAtLeastKind(self, actual.value, 2)) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "STAT= argument at (1) must be a scalar INTEGER variable of at least kind 2");
+        }
+    }
+    if (nthOrKeywordActual(args, 3, "errmsg")) |actual| {
+        if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "ERRMSG= argument at (1) must be a scalar CHARACTER variable of at least kind 1");
+        }
+    }
+}
+
+fn moveAllocViolatesIntentIn(self: *context.Context, expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const sig = resolve_symbols.lookupKnownProcedureSig(self, self.unit.name) orelse break :blk false;
+            for (sig.args) |arg| {
+                if (!std.ascii.eqlIgnoreCase(arg.name, name)) continue;
+                break :blk arg.intent == .in and !arg.pointer;
+            }
+            break :blk false;
+        },
+        .component => |comp| blk: {
+            if (exprHasPointerAttribute(self, comp.base)) break :blk false;
+            break :blk moveAllocViolatesIntentIn(self, comp.base);
+        },
+        else => false,
+    };
+}
+
+fn moveAllocDesignatorsConflict(a: *ast.Expr, b: *ast.Expr) bool {
+    return sameMoveAllocDesignator(a, b) or moveAllocAncestorOf(a, b) or moveAllocAncestorOf(b, a);
+}
+
+fn sameMoveAllocDesignator(a: *ast.Expr, b: *ast.Expr) bool {
+    return switch (a.*) {
+        .identifier => switch (b.*) {
+            .identifier => std.ascii.eqlIgnoreCase(a.identifier, b.identifier),
+            else => false,
+        },
+        .component => |a_comp| switch (b.*) {
+            .component => |b_comp| !a_comp.has_parens and !b_comp.has_parens and std.ascii.eqlIgnoreCase(a_comp.name, b_comp.name) and sameMoveAllocDesignator(a_comp.base, b_comp.base),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn moveAllocAncestorOf(ancestor: *ast.Expr, expr_node: *ast.Expr) bool {
+    var current = moveAllocParentDesignator(expr_node);
+    while (current) |parent| : (current = moveAllocParentDesignator(parent)) {
+        if (sameMoveAllocDesignator(ancestor, parent)) return true;
+    }
+    return false;
+}
+
+fn moveAllocParentDesignator(expr_node: *ast.Expr) ?*ast.Expr {
+    return switch (expr_node.*) {
+        .component => |comp| comp.base,
+        else => null,
+    };
+}
+
+fn checkDateAndTimeCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    const date = nthOrKeywordActual(args, 0, "date");
+    const time = nthOrKeywordActual(args, 1, "time");
+    const zone = nthOrKeywordActual(args, 2, "zone");
+    for ([_]?IntrinsicCallActual{ date, time, zone }) |actual_opt| {
+        const actual = actual_opt orelse continue;
+        if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+            return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, false);
+        }
+    }
+}
+
+fn checkGetCommandCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    if (nthOrKeywordActual(args, 0, "command")) |actual| {
+        if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+            return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, true);
+        }
+    }
+}
+
+fn checkGetCommandArgumentCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    if (nthOrKeywordActual(args, 1, "value")) |actual| {
+        if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+            return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, true);
+        }
+    }
+}
+
+fn checkGetEnvironmentVariableCallConstraints(self: *context.Context, args: []const ast.CallArg) CheckError!void {
+    if (nthOrKeywordActual(args, 0, "name")) |actual| {
+        if (!exprIsScalarCharacterKindOne(self, actual.value)) {
+            return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, true);
+        }
+    }
+    if (nthOrKeywordActual(args, 1, "value")) |actual| {
+        if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+            return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, true);
+        }
+    }
+}
+
+fn checkLegacyWidecharCallConstraints(self: *context.Context, name: []const u8, args: []const ast.CallArg) CheckError!void {
+    const conversion_style =
+        std.ascii.eqlIgnoreCase(name, "getenv") or
+        std.ascii.eqlIgnoreCase(name, "system");
+    const char_positions: ?[]const usize = blk: {
+        if (std.ascii.eqlIgnoreCase(name, "ctime")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "chdir")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "chmod")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "fdate")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "gerror")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "getcwd")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "getenv")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "getarg")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "getlog")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "fgetc")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "fget")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "fputc")) break :blk &.{1};
+        if (std.ascii.eqlIgnoreCase(name, "fput")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "hostnm")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "link")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "perror")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "rename")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "lstat")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "stat")) break :blk &.{0};
+        if (std.ascii.eqlIgnoreCase(name, "symlnk")) break :blk &.{0, 1};
+        if (std.ascii.eqlIgnoreCase(name, "system")) break :blk &.{0};
+        break :blk null;
+    };
+    if (char_positions) |positions| {
+        for (positions) |pos| {
+            if (nthOrKeywordActual(args, pos, null)) |actual| {
+                if (!exprIsScalarCharacterVariableKindOne(self, actual.value)) {
+                    return emitCharacterKindOneIntrinsicDiagnostic(self, actual.value, conversion_style);
+                }
+            }
+        }
     }
 }
 
