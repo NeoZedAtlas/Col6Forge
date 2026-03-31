@@ -143,7 +143,7 @@ fn complexTan(comptime T: type, z: Complex(T)) Complex(T) {
     return complexMul(T, complexSin(T, z), complexInv(T, complexCos(T, z)));
 }
 
-fn complexSinh(comptime T: type, z: Complex(T)) Complex(T) Complex(T) {
+fn complexSinh(comptime T: type, z: Complex(T)) Complex(T) {
     const a = z.r;
     const b = z.i;
     return .{
