@@ -46,6 +46,7 @@ pub fn installFunctionLocals(
         if (is_return_symbol and options.uses_hidden_result_ptr) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (saved_state.isSaved(save_info, sym.name) and !is_return_symbol) continue;
+        if (sym.is_alias) continue;
         if (sym.is_pointer) {
             const slot_name = try ctx.nextTemp();
             try builder.alloca(slot_name, .ptr);

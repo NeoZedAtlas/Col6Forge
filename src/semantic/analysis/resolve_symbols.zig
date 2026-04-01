@@ -248,11 +248,89 @@ pub fn installUnitSymbol(self: *context.Context) !void {
 
 pub fn installDummyArgs(self: *context.Context) !void {
     if (self.current_scope == null) return error.MissingScope;
-    for (self.unit.args) |arg| {
+    const unit_sig = lookupKnownProcedureSig(self, self.unit.name);
+    for (self.unit.args, 0..) |arg, arg_idx| {
         const info = implicitInfo(self, arg);
-        const symbol = Symbol.init(arg, info.type_spec, &.{}, .variable, .dummy);
+        var symbol = Symbol.init(arg, info.type_spec, &.{}, .variable, .dummy);
+        if (unit_sig) |sig| {
+            if (unitDeclaresEntity(self, arg)) {
+                _ = try internSymbol(self, symbol);
+                continue;
+            }
+            if (dummyArgSigForUnitArg(sig, arg, arg_idx)) |arg_sig| {
+                symbol.applyTypeSpec(arg_sig.type_spec);
+                symbol.type_explicit = true;
+                symbol.dims = try syntheticRankDims(self, arg_sig.rank);
+                symbol.is_pointer = arg_sig.pointer;
+                symbol.is_allocatable = arg_sig.allocatable;
+                symbol.contiguous = arg_sig.contiguous;
+                if (arg_sig.is_procedure) {
+                    if (arg_sig.procedure_kind == .function) {
+                        symbol.kind = .function;
+                    } else if (arg_sig.procedure_kind == .subroutine) {
+                        symbol.kind = .subroutine;
+                    }
+                }
+            }
+        }
         _ = try internSymbol(self, symbol);
     }
+}
+
+fn dummyArgSigForUnitArg(
+    sig: context.Context.ProcedureSig,
+    arg_name: []const u8,
+    arg_idx: usize,
+) ?context.Context.ProcedureSig.ArgSig {
+    for (sig.args) |arg_sig| {
+        if (arg_sig.name.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(arg_sig.name, arg_name)) return arg_sig;
+    }
+    if (arg_idx < sig.args.len) return sig.args[arg_idx];
+    return null;
+}
+
+fn syntheticRankDims(self: *context.Context, rank: usize) ![]*ast.Expr {
+    if (rank == 0) return &.{};
+    const out = try self.arena.alloc(*ast.Expr, rank);
+    var idx: usize = 0;
+    while (idx < rank) : (idx += 1) {
+        const dim_expr = try self.arena.create(ast.Expr);
+        dim_expr.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        out[idx] = dim_expr;
+    }
+    return out;
+}
+
+fn unitDeclaresEntity(self: *const context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .dimension => |dim_decl| {
+                for (dim_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .common => |common_decl| {
+                for (common_decl.blocks) |block| {
+                    for (block.items) |item| {
+                        if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
@@ -311,6 +389,7 @@ pub fn installAliasSymbol(
     name: []const u8,
     spec: TypeSpec,
     rank: usize,
+    alias_definable: bool,
 ) !usize {
     const dims: []*ast.Expr = if (rank == 0) &.{} else blk: {
         const out = try self.arena.alloc(*ast.Expr, rank);
@@ -324,6 +403,8 @@ pub fn installAliasSymbol(
     };
     var symbol = Symbol.init(name, spec, dims, .variable, .local);
     symbol.type_explicit = true;
+    symbol.is_alias = true;
+    symbol.alias_definable = alias_definable;
     return internSymbol(self, symbol);
 }
 
@@ -469,9 +550,15 @@ pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?contex
     if (getLowercaseMapValue(?context.Context.ProcedureSig, &self.known_procedure_sig_cache, name)) |cached| {
         return cached;
     }
-    const resolved = lookupQualifiedKnownProcedureSig(self, name) orelse
-        getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name) orelse
-        lookupVisibleQualifiedKnownProcedureSig(self, name);
+    const prefer_unqualified = self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name);
+    const resolved = if (prefer_unqualified)
+        (getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name) orelse
+            lookupQualifiedKnownProcedureSig(self, name) orelse
+            lookupVisibleQualifiedKnownProcedureSig(self, name))
+    else
+        (lookupQualifiedKnownProcedureSig(self, name) orelse
+            getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name) orelse
+            lookupVisibleQualifiedKnownProcedureSig(self, name));
     putKnownProcedureSigCache(self, name, resolved);
     return resolved;
 }

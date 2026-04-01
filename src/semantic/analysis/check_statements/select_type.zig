@@ -9,18 +9,46 @@ const resolve_symbols = @import("../resolve_symbols.zig");
 pub const CheckError = anyerror;
 
 pub fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock, comptime deps: anytype) CheckError!void {
-    for (associate.bindings) |binding| {
-        _ = try deps.checkExprType(self, binding.selector, .{
+    var first_err: ?anyerror = null;
+    const binding_ok = try self.arena.alloc(bool, associate.bindings.len);
+    for (associate.bindings, 0..) |binding, idx| {
+        var ok = true;
+        _ = deps.checkExprType(self, binding.selector, .{
             .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
-        });
+        }) catch |err| blk: {
+            ok = false;
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+            break :blk .integer;
+        };
+        binding_ok[idx] = ok;
     }
     _ = try self.pushScope(.block);
     defer self.popScope();
-    for (associate.bindings) |binding| {
-        const spec = try resolve_expr.exprTypeSpec(self, binding.selector);
-        _ = try resolve_symbols.installAliasSymbol(self, binding.name, spec, resolve_expr.exprRank(self, binding.selector));
+    for (associate.bindings, 0..) |binding, idx| {
+        const spec = resolve_expr.exprTypeSpec(self, binding.selector) catch |err| blk: {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+            break :blk symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+        };
+        _ = try resolve_symbols.installAliasSymbol(
+            self,
+            binding.name,
+            spec,
+            resolve_expr.exprRank(self, binding.selector),
+            binding_ok[idx] and associateSelectorMayBeVariable(binding.selector),
+        );
     }
-    for (associate.stmts) |inner| try deps.checkStmt(self, inner);
+    for (associate.stmts) |inner| {
+        deps.checkStmt(self, inner) catch |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+        };
+    }
+    if (first_err) |err| return err;
 }
 
 pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock, comptime deps: anytype) CheckError!void {
@@ -82,7 +110,7 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
             defer self.popScope();
             if (alias_name) |name| {
                 if (alias_spec) |spec| {
-                    _ = try resolve_symbols.installAliasSymbol(self, name, spec, selector_rank);
+                    _ = try resolve_symbols.installAliasSymbol(self, name, spec, selector_rank, true);
                 }
             }
             for (clause.stmts) |inner| {
@@ -95,6 +123,13 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
         }
     }
     if (first_err) |err| return err;
+}
+
+fn associateSelectorMayBeVariable(selector: *ast.Expr) bool {
+    return switch (selector.*) {
+        .identifier, .component, .substring, .call_or_subscript => true,
+        else => false,
+    };
 }
 
 fn validateSelectTypeSelector(

@@ -41,6 +41,12 @@ pub const Symbol = struct {
     // Internal compiler-generated temporaries (e.g. intrinsic array-conversion buffers).
     // Backends may choose a dedicated storage strategy for these symbols.
     is_generated_temp: bool = false,
+    // Compiler-synthesized ASSOCIATE/SELECT TYPE alias symbol.
+    // These aliases may be rewritten away before codegen.
+    is_alias: bool = false,
+    // Whether an alias is definable in variable-definition contexts.
+    // Only meaningful when `is_alias` is true.
+    alias_definable: bool = true,
     const_value: ?ConstValue,
     type_explicit: bool,
     is_host_associated: bool = false,
@@ -116,6 +122,8 @@ pub const Symbol = struct {
             .is_intrinsic = false,
             .is_allocatable = false,
             .is_pointer = false,
+            .is_alias = false,
+            .alias_definable = true,
             .const_value = null,
             .type_explicit = false,
         };

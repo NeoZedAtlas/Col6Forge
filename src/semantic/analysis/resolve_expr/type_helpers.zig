@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const symbols = @import("../../symbol/mod.zig");
 const evaluator = @import("../../evaluator.zig");
 const literal_utils = @import("../../evaluator/literals.zig");
@@ -19,12 +20,33 @@ pub fn resolveArrayConstructorTypeSpec(
         }
         return symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
     }
-    const selector_value = if (type_spec.kind_selector) |selector|
-        try constants.evalConst(self, selector)
-    else
-        null;
+    const selector_value = if (type_spec.kind_selector) |selector| blk: {
+        const const_value = (try constants.evalConst(self, selector)) orelse {
+            emitArrayConstructorKindSelectorDiagnostic(self, selector);
+            return error.InvalidCharLen;
+        };
+        switch (const_value) {
+            .integer => {},
+            else => {
+                emitArrayConstructorKindSelectorDiagnostic(self, selector);
+                return error.InvalidCharLen;
+            },
+        }
+        break :blk const_value;
+    } else null;
     return type_kind_selector.resolveSpecWithConst(type_spec.type_kind, type_spec.kind_selector, selector_value)
         .withPolymorphic(type_spec.polymorphic);
+}
+
+fn emitArrayConstructorKindSelectorDiagnostic(self: *context.Context, selector: *ast.Expr) void {
+    const source = self.sourceForExpr(selector) orelse self.current_source orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.invalid_char_len.code,
+        "Scalar INTEGER expression",
+        source.text,
+    );
 }
 
 pub fn mergeArrayConstructorItemTypeSpec(first: symbols.TypeSpec, next: symbols.TypeSpec) symbols.TypeSpec {

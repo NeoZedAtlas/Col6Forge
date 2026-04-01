@@ -145,6 +145,7 @@ const IntrinsicTag = enum {
     size,
     is_contiguous,
     len_,
+    kind_,
     len_trim,
     lbound,
     trim_,
@@ -260,6 +261,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "size", .size },
     .{ "is_contiguous", .is_contiguous },
     .{ "len", .len_ },
+    .{ "kind", .kind_ },
     .{ "len_trim", .len_trim },
     .{ "lbound", .lbound },
     .{ "trim", .trim_ },
@@ -406,6 +408,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .size => return emitIntrinsicSize(ctx, builder, args),
         .is_contiguous => return emitIntrinsicIsContiguous(ctx, builder, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
+        .kind_ => return emitIntrinsicKind(ctx, args),
         .len_trim => return shared.emitIntrinsicLenTrim(ctx, builder, args),
         .lbound => return emitIntrinsicLbound(ctx, builder, args),
         .trim_ => return emitIntrinsicTrim(ctx, builder, args),
@@ -457,6 +460,27 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .clog => return emitComplexClog(ctx, builder, args),
         .csqrt => return emitComplexCsqrt(ctx, builder, args),
     }
+}
+
+fn emitIntrinsicKind(ctx: *Context, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (dispatch.isCharacterExpr(ctx, args[0])) return ctx.constDefaultInteger(1);
+
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    const default_int_kind: i64 = switch (ctx.defaultIntegerIRType()) {
+        .i64 => 8,
+        else => 4,
+    };
+    const kind_value: i64 = switch (arg_ty) {
+        .i1, .i32 => default_int_kind,
+        .i64 => 8,
+        .f32 => 4,
+        .f64 => 8,
+        .complex_f32 => 4,
+        .complex_f64 => 8,
+        else => return error.UnsupportedIntrinsicType,
+    };
+    return ctx.constDefaultInteger(kind_value);
 }
 
 fn emitDeclaredLogicalIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {

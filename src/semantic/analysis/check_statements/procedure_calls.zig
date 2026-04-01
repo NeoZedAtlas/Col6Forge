@@ -1224,6 +1224,16 @@ fn checkProcedureActualArg(
         .identifier => |name| {
             const actual_sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse lookupProcedureDeclaratorSig(self, name);
             if (actual_sig) |sig| {
+                if (sig.elemental and !resolve_symbols.isIntrinsicName(name)) {
+                    return emitProcedureActualCallDiagnostic(
+                        self,
+                        callee_name,
+                        formal.name,
+                        actual_expr,
+                        error.InvalidArgumentCount,
+                        "not allowed as an actual argument",
+                    );
+                }
                 return checkProcedureActualSigCompatibility(self, callee_name, formal, sig, actual_expr, deps);
             }
 
@@ -1418,6 +1428,16 @@ fn checkDataActualArgCompatibility(
     comptime deps: anytype,
 ) CheckError!void {
     if (formal.pointer and isNullPointerIntrinsic(actual_expr)) return;
+    if (actual_expr.* == .identifier and identifierIsProcedureDesignatorForDataActual(self, actual_expr.identifier)) {
+        return emitProcedureActualCallDiagnostic(
+            self,
+            callee_name,
+            formal.name,
+            actual_expr,
+            error.InvalidArgumentCount,
+            "not allowed as an actual argument",
+        );
+    }
     try resolve_expr.resolveExpr(self, actual_expr);
     if ((formal.intent == .out or formal.intent == .inout) and !exprIsVariableDefinitionActual(self, actual_expr)) {
         return emitVariableDefinitionContextDiagnostic(self, callee_name, formal.name, actual_expr);
@@ -1448,6 +1468,28 @@ fn checkDataActualArgCompatibility(
         }
     }
     return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
+}
+
+fn identifierIsProcedureDesignatorForDataActual(self: *context.Context, name: []const u8) bool {
+    if (self.unit.kind == .function) {
+        if (std.ascii.eqlIgnoreCase(name, self.unit.name)) return false;
+        if (self.unit.result_name) |result_name| {
+            if (std.ascii.eqlIgnoreCase(name, result_name)) return false;
+        }
+    }
+
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.kind == .subroutine) return true;
+        if (sym.kind == .function) {
+            if (sym.storage == .dummy or sym.is_external or sym.is_host_associated or sym.is_intrinsic) return true;
+            if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return true;
+            if (lookupProcedureDeclaratorSig(self, name) != null) return true;
+            return false;
+        }
+    }
+    return resolve_symbols.lookupKnownProcedureSig(self, name) != null or
+        lookupProcedureDeclaratorSig(self, name) != null;
 }
 
 pub fn rejectDefinitelyNoncontiguousPointerAssociation(
@@ -1830,6 +1872,9 @@ fn checkKnownImplicitProcedureScalarActualArg(
     actual_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
+    if (actual_expr.* == .identifier and identifierIsProcedureDesignatorForDataActual(self, actual_expr.identifier)) {
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "not allowed as an actual argument");
+    }
     if (!knownImplicitProcedureScalarTypeCheckEligibleActual(self, actual_expr)) return;
     if (formal.is_procedure) return;
     if (formal.rank != 0) return;
@@ -2132,7 +2177,12 @@ fn emitVariableDefinitionContextDiagnostic(
 
 fn exprIsVariableDefinitionActual(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
-        .identifier => true,
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            if (sym.is_alias and !sym.alias_definable) break :blk false;
+            break :blk true;
+        },
         .component => |comp| exprIsVariableDefinitionActual(self, comp.base),
         .call_or_subscript => |call| blk: {
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false;

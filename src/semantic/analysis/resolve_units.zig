@@ -37,6 +37,7 @@ pub const Resolver = struct {
         }
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
+        emitHostDummyNameConflictDiagnostic(ctx);
         try statements.preinstallUseImports(ctx);
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (shouldSkipMirroredHostDecl(ctx, decl, decl_idx)) continue;
@@ -309,6 +310,23 @@ fn hasCustomCurrentDiagnostic(ctx: *context.Context) bool {
         }
     }
     return false;
+}
+
+fn emitHostDummyNameConflictDiagnostic(ctx: *context.Context) void {
+    if (ctx.unit.owner_name == null) return;
+    if (symbols_mod.lookupHostAssociatedParameter(ctx, ctx.unit.name)) |host_sym| {
+        if (host_sym.storage != .dummy) return;
+        const source_line = if (ctx.unit.stmts.len > 0 and ctx.unit.stmts[0].source_line != 0) ctx.unit.stmts[0].source_line else 1;
+        const source_col = if (ctx.unit.stmts.len > 0 and ctx.unit.stmts[0].source_column != 0) ctx.unit.stmts[0].source_column else 1;
+        const source_text = if (ctx.unit.stmts.len > 0) ctx.unit.stmts[0].source_text else "";
+        ctx.setDiagnostic(
+            source_line,
+            source_col,
+            catalog.semantic.duplicate_declaration.code,
+            "conflicts with DUMMY argument",
+            source_text,
+        );
+    }
 }
 
 fn buildDerivedComponentInfo(

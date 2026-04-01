@@ -51,9 +51,11 @@ pub fn resolveCallOrSubscriptExpr(
     } else if (sym.storage == .dummy) {
         if (sym.dims.len > 0) {
             kind = .subscript;
-        } else if (sym.type_explicit and !sym.is_external and sym.kind == .variable and call.args.len == 0) {
-            return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
         } else {
+            if (knownProcedureConflictsWithDummy(self, call.name)) {
+                const message = std.fmt.allocPrint(self.arena, "'{s}' conflicts with DUMMY argument", .{call.name}) catch "conflicts with DUMMY argument";
+                return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.duplicate_declaration.code, message);
+            }
             kind = .call;
             if (sym.kind == .variable) sym.kind = .function;
             self.symbols.items[idx] = sym;
@@ -121,8 +123,9 @@ pub fn resolveCallOrSubscriptExpr(
                     }
                 }
                 self.symbols.items[idx] = sym;
+                resolved_spec = sym.type_spec;
             } else {
-                return error.InvalidSubscript;
+                return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.actual_argument_not_function.code, "Unexpected use of subroutine name");
             }
         } else if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
             const was_variable = sym.kind == .variable;
@@ -134,6 +137,7 @@ pub fn resolveCallOrSubscriptExpr(
                 sym.type_explicit = true;
             }
             self.symbols.items[idx] = sym;
+            resolved_spec = sym.type_spec;
         } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
             kind = .call;
         } else if (sym.type_explicit and call.args.len > 0) {
@@ -174,6 +178,11 @@ pub fn resolveCallOrSubscriptExpr(
     }
     try deps.recordResolvedRef(self, expr_node, call.name, kind, idx);
     try deps.cacheExprType(self, expr_node, resolved_spec);
+}
+
+fn knownProcedureConflictsWithDummy(self: *context.Context, name: []const u8) bool {
+    const sig = symbols_mod.lookupKnownProcedureSig(self, name) orelse return false;
+    return sig.definition_known_from_current_program;
 }
 
 fn isAbstractDerivedType(self: *context.Context, type_name: []const u8) bool {
@@ -222,8 +231,17 @@ pub fn resolveComponentExpr(
     try deps.resolveExpr(self, comp.base);
     for (comp.args) |arg| try deps.resolveExpr(self, arg);
     const base_spec = try deps.exprTypeSpecCached(self, comp.base);
+    if (pseudoComponentInfo(base_spec, comp.name)) |pseudo| {
+        if (comp.has_parens or comp.args.len != 0) {
+            return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+        }
+        try deps.cacheExprType(self, expr_node, pseudo.result_spec);
+        return;
+    }
     if (base_spec.lowered_kind != .derived) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
-    const derived_name = base_spec.derived_type_name orelse return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+    const derived_name = base_spec.derived_type_name orelse
+        derivedTypeNameForExprFallback(self, comp.base) orelse
+        return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, expr_node);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
         if (component.procedure) {
@@ -404,8 +422,15 @@ pub fn exprRankForComponent(
 ) usize {
     const base_rank = deps.exprRank(self, comp.base);
     const base_spec = deps.exprTypeSpec(self, comp.base) catch return 0;
+    if (pseudoComponentInfo(base_spec, comp.name)) |pseudo| {
+        if (comp.has_parens or comp.args.len != 0) return 0;
+        return switch (pseudo.rank_mode) {
+            .preserve_base => base_rank,
+            .scalar => 0,
+        };
+    }
     if (base_spec.lowered_kind != .derived) return 0;
-    const derived_name = base_spec.derived_type_name orelse return 0;
+    const derived_name = base_spec.derived_type_name orelse derivedTypeNameForExprFallback(self, comp.base) orelse return 0;
     const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return 0;
     if (component.procedure and comp.has_parens) {
         const sig = procedureComponentSig(self, component) orelse return 0;
@@ -459,8 +484,12 @@ pub fn exprTypeSpecForComponent(
     comptime deps: anytype,
 ) ResolveError!symbols.TypeSpec {
     const base_spec = try deps.exprTypeSpecCached(self, comp.base);
+    if (pseudoComponentInfo(base_spec, comp.name)) |pseudo| {
+        if (comp.has_parens or comp.args.len != 0) return error.InvalidSubscript;
+        return pseudo.result_spec;
+    }
     if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
-    const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+    const derived_name = base_spec.derived_type_name orelse derivedTypeNameForExprFallback(self, comp.base) orelse return error.InvalidSubscript;
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, comp.base);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
         if (component.procedure and comp.has_parens) return procedureComponentResultTypeSpec(self, component);
@@ -542,6 +571,77 @@ fn canTreatTypedScalarReferenceAsFunction(sym: symbols.Symbol, args: []*ast.Expr
     if (args.len == 0) return false;
     if (hasDimRangeActual(args)) return false;
     return sym.kind == .variable or sym.kind == .function;
+}
+
+pub const PseudoComponentRankMode = enum {
+    preserve_base,
+    scalar,
+};
+
+pub const PseudoComponentInfo = struct {
+    result_spec: symbols.TypeSpec,
+    rank_mode: PseudoComponentRankMode,
+};
+
+pub fn pseudoComponentInfo(base_spec: symbols.TypeSpec, name: []const u8) ?PseudoComponentInfo {
+    if (std.ascii.eqlIgnoreCase(name, "re") or std.ascii.eqlIgnoreCase(name, "im")) {
+        return switch (base_spec.lowered_kind) {
+            .complex => .{
+                .result_spec = symbols.TypeSpec.fromResolvedKind(.real, .real, base_spec.kind_value),
+                .rank_mode = .preserve_base,
+            },
+            .complex_double => .{
+                .result_spec = symbols.TypeSpec.fromResolvedKind(.real, .double_precision, complexToRealKindValue(base_spec.kind_value)),
+                .rank_mode = .preserve_base,
+            },
+            else => null,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(name, "len")) {
+        if (base_spec.lowered_kind != .character) return null;
+        return .{
+            .result_spec = symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            .rank_mode = .scalar,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(name, "kind")) {
+        if (base_spec.lowered_kind == .derived) return null;
+        return .{
+            .result_spec = symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            .rank_mode = .scalar,
+        };
+    }
+    return null;
+}
+
+fn complexToRealKindValue(kind_value: ?i64) ?i64 {
+    const value = kind_value orelse return null;
+    if (value >= 16) return @divTrunc(value, 2);
+    return value;
+}
+
+fn derivedTypeNameForExprFallback(self: *context.Context, expr_node: *ast.Expr) ?[]const u8 {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const idx = symbols_mod.findSymbolIndex(self, name) orelse break :blk null;
+            const sym = self.symbols.items[idx];
+            if (sym.type_spec.lowered_kind != .derived) break :blk null;
+            break :blk sym.type_spec.derived_type_name;
+        },
+        .call_or_subscript => |call| blk: {
+            const idx = symbols_mod.findSymbolIndex(self, call.name) orelse break :blk null;
+            const sym = self.symbols.items[idx];
+            if (sym.type_spec.lowered_kind != .derived) break :blk null;
+            break :blk sym.type_spec.derived_type_name;
+        },
+        .component => |comp| blk: {
+            const base_name = derivedTypeNameForExprFallback(self, comp.base) orelse break :blk null;
+            const component = symbols_mod.lookupDerivedComponent(self, base_name, comp.name) orelse break :blk null;
+            if (component.type_spec.lowered_kind != .derived) break :blk null;
+            break :blk component.type_spec.derived_type_name;
+        },
+        else => null,
+    };
 }
 
 fn hasProcedureActualExprArgs(self: *context.Context, args: []*ast.Expr) bool {

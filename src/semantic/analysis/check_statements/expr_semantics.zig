@@ -324,6 +324,13 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
         .component => |comp| {
             _ = try checkExprType(self, comp.base, deps);
             const base_spec = try resolve_expr.exprTypeSpec(self, comp.base);
+            if (resolve_calls.pseudoComponentInfo(base_spec, comp.name) != null) {
+                if (comp.has_parens or comp.args.len != 0) {
+                    self.setCurrentSource(self.sourceForExpr(expr));
+                    return error.InvalidSubscript;
+                }
+                return try resolve_expr.exprType(self, expr);
+            }
             if (base_spec.lowered_kind != .derived) {
                 self.setCurrentSource(self.sourceForExpr(comp.base));
                 return error.InvalidSubscript;
@@ -534,7 +541,15 @@ pub fn symbolIndexForResolvedCall(self: *const context.Context, expr: *ast.Expr)
 
 pub fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
-        .identifier => true,
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk true;
+            const sym = self.symbols.items[idx];
+            if (sym.is_alias and !sym.alias_definable) {
+                emitExprConstraintDiagnostic(self, expr, "cannot be used in a variable definition context") catch {};
+                break :blk false;
+            }
+            break :blk true;
+        },
         .substring => true,
         .component => true,
         .call_or_subscript => |call| blk: {
@@ -543,6 +558,10 @@ pub fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            if (kind == .call and sym.is_alias) {
+                emitExprConstraintDiagnostic(self, expr, "array reference of a non-array") catch {};
+                break :blk false;
+            }
             break :blk kind == .subscript or kind == .call;
         },
         else => false,

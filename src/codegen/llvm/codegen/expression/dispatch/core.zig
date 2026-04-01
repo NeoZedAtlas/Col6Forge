@@ -127,6 +127,12 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return casting.emitLiteral(ctx, builder, lit);
         },
         .component => |comp| {
+            if (emitPseudoComponentExpr(ctx, builder, comp, subst_depth)) |value| {
+                return value;
+            } else |err| switch (err) {
+                error.NotPseudoComponent => {},
+                else => return err,
+            }
             const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
             if (ctx.lookupDerivedComponentLayout(base_type_name, comp.name)) |component| {
                 if (component.procedure) {
@@ -302,6 +308,57 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         .dim_range => return error.InvalidExpression,
         .implied_do => return error.UnsupportedImpliedDo,
     }
+}
+
+fn emitPseudoComponentExpr(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    subst_depth: usize,
+) EmitError!ValueRef {
+    if (comp.has_parens or comp.args.len != 0) return error.NotPseudoComponent;
+
+    if (std.ascii.eqlIgnoreCase(comp.name, "re") or std.ascii.eqlIgnoreCase(comp.name, "im")) {
+        const base_val = try emitExprImpl(ctx, builder, comp.base, subst_depth);
+        if (!complex.isComplexType(base_val.ty)) return error.InvalidSubscript;
+        const index: usize = if (std.ascii.eqlIgnoreCase(comp.name, "im")) 1 else 0;
+        return complex.extractComplex(ctx, builder, base_val, index);
+    }
+
+    if (std.ascii.eqlIgnoreCase(comp.name, "len")) {
+        var len_val = (try character.emitCharacterLenValue(ctx, builder, comp.base)) orelse return error.NonConstantCharacterLength;
+        const target_ty = ctx.defaultIntegerIRType();
+        if (len_val.ty != target_ty) {
+            len_val = try casting.coerce(ctx, builder, len_val, target_ty);
+        }
+        return len_val;
+    }
+
+    if (std.ascii.eqlIgnoreCase(comp.name, "kind")) {
+        const kind_value = try pseudoComponentKindValue(ctx, builder, comp.base, subst_depth);
+        return ctx.constDefaultInteger(kind_value);
+    }
+
+    return error.NotPseudoComponent;
+}
+
+fn pseudoComponentKindValue(
+    ctx: *Context,
+    builder: anytype,
+    base_expr: *Expr,
+    subst_depth: usize,
+) EmitError!i64 {
+    if (character.isCharacterExpr(ctx, base_expr)) return 1;
+    const base_val = try emitExprImpl(ctx, builder, base_expr, subst_depth);
+    return switch (base_val.ty) {
+        .i1, .i32 => 4,
+        .i64 => 8,
+        .f32 => 4,
+        .f64 => 8,
+        .complex_f32 => 8,
+        .complex_f64 => 16,
+        else => error.InvalidSubscript,
+    };
 }
 
 fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) !ValueRef {
@@ -532,6 +589,11 @@ fn emitStructureConstructorComponentStore(
     }
 
     if (component.type_spec.lowered_kind == .character) {
+        if (component.allocatable and component.type_spec.char_len == null) {
+            if (component.dims.len != 0) return error.UnsupportedCharacterArgumentLength;
+            try emitStructureConstructorDeferredCharacterAllocatableStore(ctx, builder, component_ptr, value_expr);
+            return;
+        }
         const plan = (try character.emitCharacterValuePlan(ctx, builder, value_expr)) orelse return error.UnsupportedCharacterArgumentLength;
         const src_len = plan.logical_len_const orelse return error.UnsupportedCharacterArgumentLength;
         try character.copyCharacterBytesFromPlan(ctx, builder, component_ptr, plan, 0);
@@ -553,6 +615,42 @@ fn emitStructureConstructorComponentStore(
     const target_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
     const coerced = if (value.ty == target_ty) value else try casting.coerce(ctx, builder, value, target_ty);
     try builder.store(coerced, component_ptr);
+}
+
+fn emitStructureConstructorDeferredCharacterAllocatableStore(
+    ctx: *Context,
+    builder: anytype,
+    component_ptr: ValueRef,
+    value_expr: *Expr,
+) EmitError!void {
+    const plan = (try character.emitCharacterValuePlan(ctx, builder, value_expr)) orelse return error.UnsupportedCharacterArgumentLength;
+    var len_i64 = plan.logical_len;
+    if (len_i64.ty != .i64) len_i64 = try casting.coerce(ctx, builder, len_i64, .i64);
+
+    const is_zero_name = try ctx.nextTemp();
+    try builder.compare(is_zero_name, "icmp", "eq", .i64, len_i64, .{ .name = "0", .ty = .i64, .is_ptr = false });
+    const alloc_bytes_name = try ctx.nextTemp();
+    try builder.select(
+        alloc_bytes_name,
+        .i64,
+        .{ .name = is_zero_name, .ty = .i1, .is_ptr = false },
+        .{ .name = "1", .ty = .i64, .is_ptr = false },
+        len_i64,
+    );
+    const alloc_bytes = ValueRef{ .name = alloc_bytes_name, .ty = .i64, .is_ptr = false };
+
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]ir.IRType{.i64}, false);
+    const data_ptr_name = try ctx.nextTemp();
+    try builder.callTyped(data_ptr_name, .ptr, malloc_name, &.{alloc_bytes});
+    const data_ptr = ValueRef{ .name = data_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(data_ptr, component_ptr);
+
+    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]ir.IRType{ .ptr, .ptr, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memcpy_name, &.{ data_ptr, plan.ptr, len_i64, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+
+    const len_slot_name = try ctx.nextTemp();
+    try builder.gep(len_slot_name, .i8, component_ptr, try ctx.constI64(@intCast(@sizeOf(usize))));
+    try builder.store(len_i64, .{ .name = len_slot_name, .ty = .ptr, .is_ptr = true });
 }
 
 fn flattenStructureConstructorArrayItems(ctx: *Context, expr_node: *Expr) EmitError!?[]const *Expr {

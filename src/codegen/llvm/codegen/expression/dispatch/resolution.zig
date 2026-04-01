@@ -39,6 +39,19 @@ pub fn roughExprKind(ctx: *Context, expr: *Expr) ast.TypeKind {
             return if (real_kind == .double_precision or imag_kind == .double_precision) .complex_double else .complex;
         },
         .component => |comp| blk: {
+            if (!comp.has_parens and comp.args.len == 0) {
+                if (std.ascii.eqlIgnoreCase(comp.name, "len") or std.ascii.eqlIgnoreCase(comp.name, "kind")) {
+                    break :blk .integer;
+                }
+                if (std.ascii.eqlIgnoreCase(comp.name, "re") or std.ascii.eqlIgnoreCase(comp.name, "im")) {
+                    const base_kind = roughExprKind(ctx, comp.base);
+                    break :blk switch (base_kind) {
+                        .complex_double => .double_precision,
+                        .complex => .real,
+                        else => .integer,
+                    };
+                }
+            }
             const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse break :blk .integer;
             const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk .integer;
             break :blk component.type_spec.lowered_kind;

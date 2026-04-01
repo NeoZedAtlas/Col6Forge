@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const case_insensitive = @import("../../common/case_insensitive.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const expressions = @import("resolve_expr.zig");
@@ -234,17 +235,56 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
 }
 
 fn resolveAssociateBlock(self: *context.Context, associate: ast.AssociateBlock) ResolveError!void {
-    for (associate.bindings) |binding| {
-        try expressions.resolveExpr(self, binding.selector);
+    var first_err: ?anyerror = null;
+    const binding_ok = try self.arena.alloc(bool, associate.bindings.len);
+    for (associate.bindings, 0..) |binding, idx| {
+        var ok = true;
+        expressions.resolveExpr(self, binding.selector) catch |err| {
+            ok = false;
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+        };
+        binding_ok[idx] = ok;
     }
     _ = try self.pushScope(.block);
     defer self.popScope();
-    for (associate.bindings) |binding| {
-        const spec = try expressions.exprTypeSpec(self, binding.selector);
+    for (associate.bindings, 0..) |binding, idx| {
+        const spec = expressions.exprTypeSpec(self, binding.selector) catch |err| blk: {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+            break :blk symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+        };
         const rank = expressions.exprRank(self, binding.selector);
-        _ = try symbols_mod.installAliasSymbol(self, binding.name, spec, rank);
+        _ = symbols_mod.installAliasSymbol(
+            self,
+            binding.name,
+            spec,
+            rank,
+            binding_ok[idx] and associateSelectorMayBeVariable(binding.selector),
+        ) catch |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+            continue;
+        };
     }
-    for (associate.stmts) |inner| try resolveStmt(self, inner);
+    for (associate.stmts) |inner| {
+        resolveStmt(self, inner) catch |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+        };
+    }
+    if (first_err) |err| return err;
+}
+
+fn associateSelectorMayBeVariable(selector: *ast.Expr) bool {
+    return switch (selector.*) {
+        .identifier, .component, .substring, .call_or_subscript => true,
+        else => false,
+    };
 }
 
 fn resolveSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock) ResolveError!void {
@@ -261,7 +301,7 @@ fn resolveSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlo
                     if (!self.usesExplicitDiagnosticBag()) return err;
                     break :blk selector_spec;
                 };
-                _ = try symbols_mod.installAliasSymbol(self, alias_name, alias_spec, selector_rank);
+                _ = try symbols_mod.installAliasSymbol(self, alias_name, alias_spec, selector_rank, true);
             }
             for (clause.stmts) |inner| try resolveStmt(self, inner);
         }
@@ -327,6 +367,10 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
     const may_have_builtin_consts = isIsoFortranEnvModule(use_stmt.module_name);
     for (use_stmt.only_items) |item| {
         if (item.generic_spec) continue;
+        if (useImportConflictsWithCurrentUnit(self, item.local_name)) {
+            emitUseImportConflictDiagnostic(self, use_stmt, item.local_name);
+            continue;
+        }
         if (may_have_builtin_consts) {
             if (symbols_mod.findBuiltinModuleConstant(self, use_stmt.module_name, item.remote_name)) |builtin| {
                 try bindBuiltinUseImport(self, item.local_name, builtin);
@@ -719,4 +763,31 @@ fn isIsoCBindingModule(module_name: []const u8) bool {
     var buf: [32]u8 = undefined;
     for (module_name, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
     return std.mem.eql(u8, buf[0..module_name.len], target);
+}
+
+fn useImportConflictsWithCurrentUnit(self: *context.Context, local_name: []const u8) bool {
+    if (self.unit.kind != .subroutine and self.unit.kind != .function) return false;
+    if (std.ascii.eqlIgnoreCase(local_name, self.unit.name)) return true;
+    if (self.unit.result_name) |result_name| {
+        if (std.ascii.eqlIgnoreCase(local_name, result_name)) return true;
+    }
+    return false;
+}
+
+fn emitUseImportConflictDiagnostic(
+    self: *context.Context,
+    use_stmt: ast.UseStmt,
+    local_name: []const u8,
+) void {
+    const source = use_stmt.source;
+    const line = if (source.line == 0) 1 else source.line;
+    const col = if (source.column == 0) 1 else source.column;
+    const message = std.fmt.allocPrint(self.arena, "'{s}' conflicts with the current program unit", .{local_name}) catch "conflicts with the current program unit";
+    self.setDiagnostic(
+        line,
+        col,
+        catalog.semantic.duplicate_declaration.code,
+        message,
+        source.text,
+    );
 }

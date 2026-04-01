@@ -141,20 +141,23 @@ fn parseCharacterArrayKindSelector(
 ) ParseExprError!?*Expr {
     if (!lp.consume(.l_paren)) return null;
     var kind_selector: ?*Expr = null;
+    var fallback_selector: ?*Expr = null;
     while (!lp.peekIs(.r_paren)) {
         if (lp.consumeKeyword("KIND")) {
             _ = lp.expect(.equals) orelse return error.UnexpectedToken;
             kind_selector = try parseExprDepthFn(lp, arena, 0, depth + 1);
         } else if (lp.consumeKeyword("LEN")) {
             _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-            _ = try parseExprDepthFn(lp, arena, 0, depth + 1);
+            const len_expr = try parseExprDepthFn(lp, arena, 0, depth + 1);
+            if (fallback_selector == null) fallback_selector = len_expr;
         } else {
-            _ = try parseExprDepthFn(lp, arena, 0, depth + 1);
+            const bare_expr = try parseExprDepthFn(lp, arena, 0, depth + 1);
+            if (fallback_selector == null) fallback_selector = bare_expr;
         }
         if (!lp.consume(.comma)) break;
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    return kind_selector;
+    return kind_selector orelse fallback_selector;
 }
 
 fn consumeDoubleColon(lp: *LineParser) bool {
