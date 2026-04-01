@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const common_diag = @import("../../../common/diagnostic.zig");
+const type_specs = @import("../../../common/type_specs.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
@@ -8,7 +9,6 @@ const symbols_mod = @import("../resolve_symbols.zig");
 const decls = @import("../resolve_decls.zig");
 const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 const split_api = @import("../../split/api/mod.zig");
-const type_kind_selector = @import("../../type_kind_selector.zig");
 const helpers = @import("helpers.zig");
 
 const setAttributeConflictDiagnostic = helpers.setAttributeConflictDiagnostic;
@@ -1042,33 +1042,16 @@ fn interfaceProcedureResultTypeSpecForValidation(
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
-                    return applyInterfaceResultDeclaratorCharLen(interfaceResultTypeDeclSpec(type_decl), item);
+                    return applyInterfaceResultDeclaratorCharLen(type_specs.typeSpecFromTypeDecl(type_decl), item);
                 }
             },
             else => {},
         }
     }
     if (proc_header.type_spec) |type_spec| {
-        return if (type_spec.type_kind != .derived)
-            type_kind_selector.resolveSpec(type_spec.type_kind, type_spec.kind_selector).withPolymorphic(type_spec.polymorphic)
-        else if (type_spec.derived_type_name) |derived_name|
-            symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic)
-        else
-            symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
+        return type_specs.typeSpecFromProcedureType(type_spec);
     }
     return symbols_mod.implicitTypeSpec(self, proc_header.name);
-}
-
-fn interfaceResultTypeDeclSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
-    if (type_decl.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
-            .withPolymorphic(type_decl.polymorphic);
-    }
-    const base = if (type_decl.derived_type_name) |derived_name|
-        symbols.TypeSpec.fromDerived(derived_name)
-    else
-        symbols.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(type_decl.polymorphic);
 }
 
 fn applyInterfaceResultDeclaratorCharLen(type_spec: symbols.TypeSpec, declarator: ast.Declarator) symbols.TypeSpec {

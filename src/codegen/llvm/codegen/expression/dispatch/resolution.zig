@@ -5,6 +5,7 @@ const llvm_types = @import("../../../types.zig");
 const context = @import("../../context/mod.zig");
 const utils = @import("../../utils.zig");
 const procedure_pass = @import("../../../../../common/procedure_pass.zig");
+const type_specs = @import("../../../../../common/type_specs.zig");
 const type_kind_selector = @import("../../../../../semantic/type_kind_selector.zig");
 const ast_nodes = @import("../../../../../ast/nodes.zig");
 const character = @import("character.zig");
@@ -198,7 +199,7 @@ pub fn interfaceProcedureResultTypeSpec(
 ) ?ast.TypeSpec {
     if (proc_header.kind != .function) return null;
     if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
-    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
+    if (proc_header.type_spec) |type_spec| return type_specs.typeSpecFromProcedureType(type_spec);
     return implicitTypeSpecForName(unit, proc_header.name);
 }
 
@@ -391,14 +392,14 @@ fn findInterfaceProcedureDeclaredResultTypeSpec(
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
-                    return applyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
+                    return applyDeclaratorCharLen(type_specs.typeSpecFromTypeDecl(type_decl), item);
                 }
             },
             .procedure => |procedure_decl| {
                 for (procedure_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
                     return switch (procedure_decl.interface) {
-                        .type_spec => |proc_type| applyDeclaratorCharLen(procedureTypeSpec(proc_type), item),
+                        .type_spec => |proc_type| applyDeclaratorCharLen(type_specs.typeSpecFromProcedureType(proc_type), item),
                         else => applyDeclaratorCharLen(implicitTypeSpecForName(unit, result_name), item),
                     };
                 }
@@ -407,30 +408,6 @@ fn findInterfaceProcedureDeclaredResultTypeSpec(
         }
     }
     return null;
-}
-
-fn typeDeclTypeSpec(type_decl: ast.TypeDecl) ast.TypeSpec {
-    if (type_decl.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
-            .withPolymorphic(type_decl.polymorphic);
-    }
-    const base = if (type_decl.derived_type_name) |derived_name|
-        ast.TypeSpec.fromDerived(derived_name)
-    else
-        ast.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(type_decl.polymorphic);
-}
-
-fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) ast.TypeSpec {
-    if (proc_type.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
-            .withPolymorphic(proc_type.polymorphic);
-    }
-    const base = if (proc_type.derived_type_name) |derived_name|
-        ast.TypeSpec.fromDerived(derived_name)
-    else
-        ast.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(proc_type.polymorphic);
 }
 
 fn implicitTypeSpecForName(unit: ast.ProgramUnit, name: []const u8) ast.TypeSpec {

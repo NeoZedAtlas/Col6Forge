@@ -39,6 +39,20 @@ const common_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/common/procedure_pass.zig",
     },
+    .{
+        .id = "AR-OWN-031",
+        .title = "type declaration type-spec helper owner",
+        .symbol_name = "typeSpecFromTypeDecl",
+        .definition_kind = .function,
+        .owner_exact_path = "src/common/type_specs.zig",
+    },
+    .{
+        .id = "AR-OWN-032",
+        .title = "procedure type-spec helper owner",
+        .symbol_name = "typeSpecFromProcedureType",
+        .definition_kind = .function,
+        .owner_exact_path = "src/common/type_specs.zig",
+    },
 };
 
 const frontend_specs = [_]OwnerSpec{

@@ -1,8 +1,8 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const type_specs = @import("../../common/type_specs.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
-const type_kind_selector = @import("../type_kind_selector.zig");
 const symbols = @import("../symbol/mod.zig");
 const procedure_inference = @import("./api/procedure_inference.zig");
 
@@ -159,11 +159,11 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
                 for (type_decl.items) |item| {
                     if (explicit_result_name) |result_name| {
                         if (std.ascii.eqlIgnoreCase(item.name, result_name)) {
-                            return applyDeclaratorLen(typeDeclTypeSpec(type_decl), item);
+                            return applyDeclaratorLen(type_specs.typeSpecFromTypeDecl(type_decl), item);
                         }
                     }
                     if (std.ascii.eqlIgnoreCase(item.name, unit.name)) {
-                        return applyDeclaratorLen(typeDeclTypeSpec(type_decl), item);
+                        return applyDeclaratorLen(type_specs.typeSpecFromTypeDecl(type_decl), item);
                     }
                 }
             },
@@ -176,7 +176,7 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
                     if (!matches) continue;
                     if (procedure_decl.interface != .type_spec) continue;
                     const proc_type = procedure_decl.interface.type_spec;
-                    return procedureTypeSpec(proc_type);
+                    return type_specs.typeSpecFromProcedureType(proc_type);
                 }
             },
             else => {},
@@ -200,30 +200,6 @@ fn matchesResultName(explicit_result_name: ?[]const u8, unit_name: []const u8, c
         std.ascii.eqlIgnoreCase(candidate_name, result_name)
     else
         std.ascii.eqlIgnoreCase(candidate_name, unit_name);
-}
-
-fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
-    if (type_decl.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
-            .withPolymorphic(type_decl.polymorphic);
-    }
-    const base = if (type_decl.derived_type_name) |derived_name|
-        symbols.TypeSpec.fromDerived(derived_name)
-    else
-        symbols.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(type_decl.polymorphic);
-}
-
-fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
-    if (proc_type.type_kind != .derived) {
-        return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
-            .withPolymorphic(proc_type.polymorphic);
-    }
-    const base = if (proc_type.derived_type_name) |derived_name|
-        symbols.TypeSpec.fromDerived(derived_name)
-    else
-        symbols.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(proc_type.polymorphic);
 }
 
 fn applyDeclaratorLen(type_spec: symbols.TypeSpec, item: ast.Declarator) symbols.TypeSpec {
