@@ -361,7 +361,26 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                 const operand = try parseExprDepth(lp, arena, 3, depth + 1);
                 return shared.makeExprNode(arena, .{ .unary = .{ .op = .not, .expr = operand } }, start_source);
             }
-            return error.UnexpectedToken;
+            const op_tok = lp.next();
+            const op_name = parseDefinedDotOperatorName(arena, lp.tokenText(op_tok)) orelse return error.UnexpectedToken;
+            const operand = try parseExprDepth(lp, arena, 3, depth + 1);
+            const call_args = try arena.alloc(*Expr, 1);
+            call_args[0] = operand;
+            const call_node = try shared.makeExprNode(
+                arena,
+                .{ .call_or_subscript = .{ .name = op_name, .args = call_args } },
+                start_source,
+            );
+            return suffixes.parseComponentSuffixes(
+                lp,
+                arena,
+                call_node,
+                depth + 1,
+                start_source,
+                parseCallArgExpr,
+                parseExprDepth,
+                shared.makeExprNode,
+            );
         },
         else => return error.UnexpectedToken,
     }
@@ -384,4 +403,16 @@ fn isBozPrefix(text: []const u8) bool {
         'b', 'o', 'z' => true,
         else => false,
     };
+}
+
+fn parseDefinedDotOperatorName(arena: std.mem.Allocator, text: []const u8) ?[]const u8 {
+    if (text.len < 3 or text[0] != '.') return null;
+    var i: usize = 1;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) : (i += 1) {}
+    const start = i;
+    while (i < text.len and std.ascii.isAlphabetic(text[i])) : (i += 1) {}
+    const end = i;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) : (i += 1) {}
+    if (start == end or i >= text.len or text[i] != '.') return null;
+    return arena.dupe(u8, text[start..end]) catch null;
 }

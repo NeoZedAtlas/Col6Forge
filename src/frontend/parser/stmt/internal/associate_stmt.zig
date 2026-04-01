@@ -38,6 +38,20 @@ fn isEndAssociateLine(lp: LineParser) bool {
     return helpers.isEndKeywordLine(lp, "ENDASSOCIATE", "ASSOCIATE");
 }
 
+fn isUnitTerminatorLine(lp: LineParser) bool {
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return true;
+    const next_tok = lp.tokens[next_idx];
+    if (next_tok.kind != .identifier) return true;
+    const next = lp.tokenText(next_tok);
+    return context.eqNoCase(next, "PROGRAM") or
+        context.eqNoCase(next, "SUBROUTINE") or
+        context.eqNoCase(next, "FUNCTION") or
+        context.eqNoCase(next, "MODULE") or
+        context.eqNoCase(next, "BLOCKDATA");
+}
+
 fn parseAssociateBindings(arena: std.mem.Allocator, lp: *LineParser) ![]ast.AssociateBinding {
     var bindings = std.array_list.Managed(ast.AssociateBinding).init(arena);
     while (!lp.peekIs(.r_paren)) {
@@ -72,7 +86,7 @@ fn parseAssociateBlock(
         const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
         defer arena.free(tokens);
         const lp = LineParser.init(line, tokens);
-        if (isEndAssociateLine(lp)) break;
+        if (isEndAssociateLine(lp) or isUnitTerminatorLine(lp)) break;
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
         var stmt = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
         setStmtSourceIfMissing(&stmt, line);
@@ -120,8 +134,11 @@ pub fn parseAssociateStatement(
     const end_tokens = try lexLine(arena, end_line, diag_bag, lex_diag_bag);
     defer arena.free(end_tokens);
     const end_lp = LineParser.init(end_line, end_tokens);
-    if (!isEndAssociateLine(end_lp)) return error.UnexpectedToken;
-    index.* += 1;
+    if (isEndAssociateLine(end_lp)) {
+        index.* += 1;
+    } else if (!isUnitTerminatorLine(end_lp)) {
+        return error.UnexpectedToken;
+    }
 
     return .{
         .label = label,

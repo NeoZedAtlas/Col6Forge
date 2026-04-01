@@ -539,6 +539,65 @@ pub fn symbolIndexForResolvedCall(self: *const context.Context, expr: *ast.Expr)
     return self.ref_symbol_index.get(@intFromPtr(expr));
 }
 
+pub fn exprUsesNonDefinableAlias(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            break :blk sym.is_alias and !sym.alias_definable;
+        },
+        .component => |comp| exprUsesNonDefinableAlias(self, comp.base),
+        .substring => |sub| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, sub.name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            break :blk sym.is_alias and !sym.alias_definable;
+        },
+        .call_or_subscript => |call| blk: {
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            if (kind != .subscript) break :blk false;
+            break :blk sym.is_alias and !sym.alias_definable;
+        },
+        else => false,
+    };
+}
+
+pub fn exprRootIsIntentInNonpointerDummy(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| dummyArgIsIntentInNonpointer(self, name),
+        .component => |comp| exprRootIsIntentInNonpointerDummy(self, comp.base),
+        .substring => |sub| dummyArgIsIntentInNonpointer(self, sub.name),
+        .call_or_subscript => |call| blk: {
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            if (kind != .subscript) break :blk false;
+            break :blk dummyArgIsIntentInNonpointer(self, call.name);
+        },
+        else => false,
+    };
+}
+
+pub fn selectorIsDefinableAlias(self: *context.Context, selector: *ast.Expr) bool {
+    if (exprUsesNonDefinableAlias(self, selector)) return false;
+    if (exprRootIsIntentInNonpointerDummy(self, selector) and !isPointerValuedExpr(self, selector)) return false;
+    return true;
+}
+
+fn dummyArgIsIntentInNonpointer(self: *context.Context, name: []const u8) bool {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, self.unit.name) orelse return false;
+    for (sig.args) |arg| {
+        if (!std.ascii.eqlIgnoreCase(arg.name, name)) continue;
+        return arg.intent == .in and !arg.pointer;
+    }
+    return false;
+}
+
 pub fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
         .identifier => |name| blk: {

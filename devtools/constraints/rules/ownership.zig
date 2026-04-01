@@ -128,6 +128,13 @@ const implied_helper_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/codegen/llvm/stmts/io/implied_helpers.zig",
     },
+    .{
+        .id = "AR-OWN-030",
+        .title = "stream chunk loop helper owner",
+        .symbol_name = "emitChunkedStream",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/stream_chunks.zig",
+    },
 };
 
 const runtime_arg_specs = [_]OwnerSpec{

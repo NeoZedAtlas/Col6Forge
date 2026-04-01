@@ -63,6 +63,28 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             });
             try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.target, error.AssignmentTypeMismatch);
             try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.value, error.AssignmentTypeMismatch);
+            if (expr_semantics.exprUsesNonDefinableAlias(self, assign.target)) {
+                const source = self.sourceForExpr(assign.target) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "in variable definition context",
+                    source.text,
+                );
+                return error.AssignmentTypeMismatch;
+            }
+            if (expr_semantics.exprRootIsIntentInNonpointerDummy(self, assign.target)) {
+                const source = self.sourceForExpr(assign.target) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "in pointer association context",
+                    source.text,
+                );
+                return error.AssignmentTypeMismatch;
+            }
             if (!expr_semantics.isPointerTarget(self, assign.target)) {
                 const source = self.sourceForExpr(assign.target) orelse ast.SourceRef{};
                 self.setDiagnostic(

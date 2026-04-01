@@ -168,7 +168,7 @@ pub fn parseActionStmtNode(
         },
         'D' => {
             if (lp.isKeywordSplit("DEALLOCATE")) return try parseDeallocateStatement(arena, lp);
-            if (mode == .top_level and lp.isKeywordSplit("DATA")) {
+            if (mode == .top_level and lp.isKeywordSplit("DATA") and !lineHasPointerAssignmentArrow(lp.*)) {
                 return try data_stmt.parseDataStatement(arena, lp);
             }
             if (lp.isKeywordSplit("DO")) {
@@ -340,6 +340,14 @@ fn parseStopStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNo
         _ = try expr.parseExpr(lp, arena, 0);
     }
     return .{ .stop = {} };
+}
+
+fn lineHasPointerAssignmentArrow(lp: LineParser) bool {
+    var i: usize = lp.index;
+    while (i + 1 < lp.tokens.len) : (i += 1) {
+        if (lp.tokens[i].kind == .equals and lp.tokens[i + 1].kind == .greater) return true;
+    }
+    return false;
 }
 
 pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {

@@ -14,6 +14,7 @@ const EmitError = anyerror;
 const io_utils = @import("utils.zig");
 const implied_helpers = @import("implied_helpers.zig");
 const expansion = @import("expansion.zig");
+const stream_chunks = @import("stream_chunks.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitStackValue = io_utils.emitStackValue;
@@ -31,6 +32,7 @@ const scalarByteSize = io_utils.scalarByteSize;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
 const expandIoArgs = expansion.expandIoArgs;
+const emitChunkedStream = stream_chunks.emitChunkedStream;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
 const impliedStrideForDim = implied_helpers.impliedStrideForDims;
 const impliedStrideForSymbolDim = implied_helpers.impliedStrideForSymbolDim;
@@ -534,29 +536,27 @@ fn emitUnformattedReadBlockTransfer(ctx: *Context, builder: anytype, state: Valu
 }
 
 fn emitUnformattedWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
-            try emitUnformattedWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitUnformattedWriteBlockTransfer(ctx, builder, state, transfer);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitUnformattedWriteTypedSlice(ctx, builder, state, args[chunk_start..]);
+    try emitChunkedStream(
+        ctx,
+        builder,
+        state,
+        args,
+        emitBlockTransferIfPossible,
+        emitUnformattedWriteTypedSlice,
+        emitUnformattedWriteBlockTransfer,
+    );
 }
 
 fn emitUnformattedReadStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
-            try emitUnformattedReadTypedSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitUnformattedReadBlockTransfer(ctx, builder, state, transfer);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitUnformattedReadTypedSlice(ctx, builder, state, args[chunk_start..]);
+    try emitChunkedStream(
+        ctx,
+        builder,
+        state,
+        args,
+        emitBlockTransferIfPossible,
+        emitUnformattedReadTypedSlice,
+        emitUnformattedReadBlockTransfer,
+    );
 }
 
 fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {

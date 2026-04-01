@@ -15,6 +15,7 @@ const max_static_implied_do_unroll: i64 = 4096;
 const io_utils = @import("utils.zig");
 const implied_helpers = @import("implied_helpers.zig");
 const expansion = @import("expansion.zig");
+const stream_chunks = @import("stream_chunks.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const internalUnitRecordCount = io_utils.internalUnitRecordCount;
@@ -28,6 +29,7 @@ const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
+const emitChunkedStream = stream_chunks.emitChunkedStream;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
@@ -390,16 +392,15 @@ fn emitListWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: [
 }
 
 fn emitListReadStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
-            try emitListReadTypedSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitListReadBlockTransfer(ctx, builder, state, transfer);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitListReadTypedSlice(ctx, builder, state, args[chunk_start..]);
+    try emitChunkedStream(
+        ctx,
+        builder,
+        state,
+        args,
+        emitBlockTransferIfPossible,
+        emitListReadTypedSlice,
+        emitListReadBlockTransfer,
+    );
 }
 
 fn shouldStreamList(ctx: *Context, args: []*ast.Expr) bool {

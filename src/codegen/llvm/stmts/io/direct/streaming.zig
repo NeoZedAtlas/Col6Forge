@@ -14,6 +14,7 @@ const EmitError = anyerror;
 const io_utils = @import("../utils.zig");
 const implied_helpers = @import("../implied_helpers.zig");
 const expansion = @import("../expansion.zig");
+const stream_chunks = @import("../stream_chunks.zig");
 const typed = @import("typed.zig");
 const arrays = @import("arrays.zig");
 
@@ -28,6 +29,7 @@ const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
 const impliedStrideForDim = implied_helpers.impliedStrideForSymbolDim;
 const expandIoArgs = expansion.expandIoArgs;
+const emitChunkedStream = stream_chunks.emitChunkedStream;
 const buildTypedWriteArgs = typed.buildTypedWriteArgs;
 const buildTypedReadArgs = typed.buildTypedReadArgs;
 const packTypedDirectArgs = typed.packTypedDirectArgs;
@@ -462,29 +464,27 @@ fn emitDirectReadBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef,
 }
 
 fn emitDirectWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
-            try emitDirectWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitDirectWriteBlockTransfer(ctx, builder, state, transfer);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitDirectWriteTypedSlice(ctx, builder, state, args[chunk_start..]);
+    try emitChunkedStream(
+        ctx,
+        builder,
+        state,
+        args,
+        emitBlockTransferIfPossible,
+        emitDirectWriteTypedSlice,
+        emitDirectWriteBlockTransfer,
+    );
 }
 
 fn emitDirectReadStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
-            try emitDirectReadTypedSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitDirectReadBlockTransfer(ctx, builder, state, transfer);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitDirectReadTypedSlice(ctx, builder, state, args[chunk_start..]);
+    try emitChunkedStream(
+        ctx,
+        builder,
+        state,
+        args,
+        emitBlockTransferIfPossible,
+        emitDirectReadTypedSlice,
+        emitDirectReadBlockTransfer,
+    );
 }
 
 fn shouldStreamDirect(ctx: *Context, args: []*ast.Expr) bool {

@@ -5,6 +5,7 @@ const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
+const expr_semantics = @import("expr_semantics.zig");
 
 pub const CheckError = anyerror;
 
@@ -38,7 +39,7 @@ pub fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock
             binding.name,
             spec,
             resolve_expr.exprRank(self, binding.selector),
-            binding_ok[idx] and associateSelectorMayBeVariable(binding.selector),
+            binding_ok[idx] and associateSelectorMayBeVariable(binding.selector) and expr_semantics.selectorIsDefinableAlias(self, binding.selector),
         );
     }
     for (associate.stmts) |inner| {
@@ -71,6 +72,16 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
         if (!self.usesExplicitDiagnosticBag()) return err;
         if (first_err == null) first_err = err;
     };
+    const alias_name = selectTypeAliasName(select_type);
+    const enforce_alias_definable = shouldEnforceAliasDefinableForSelectType(self, select_type);
+    const alias_definable = if (alias_name != null and enforce_alias_definable)
+        expr_semantics.selectorIsDefinableAlias(self, select_type.selector)
+    else
+        true;
+    if (alias_name != null and enforce_alias_definable and !alias_definable) {
+        emitCurrentStmtVariableDefinitionContext(self);
+        if (first_err == null) first_err = error.AssignmentTypeMismatch;
+    }
     if (select_type.leading_stmts.len != 0) {
         const stmt = select_type.leading_stmts[0];
         self.setDiagnostic(
@@ -87,7 +98,6 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
         if (first_err == null) first_err = err;
     };
 
-    const alias_name = selectTypeAliasName(select_type);
     const selector_rank = resolve_expr.exprRank(self, select_type.selector);
     for (select_type.leading_stmts) |inner| {
         deps.checkStmt(self, inner) catch |err| {
@@ -110,7 +120,7 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
             defer self.popScope();
             if (alias_name) |name| {
                 if (alias_spec) |spec| {
-                    _ = try resolve_symbols.installAliasSymbol(self, name, spec, selector_rank, true);
+                    _ = try resolve_symbols.installAliasSymbol(self, name, spec, selector_rank, alias_definable);
                 }
             }
             for (clause.stmts) |inner| {
@@ -130,6 +140,25 @@ fn associateSelectorMayBeVariable(selector: *ast.Expr) bool {
         .identifier, .component, .substring, .call_or_subscript => true,
         else => false,
     };
+}
+
+fn shouldEnforceAliasDefinableForSelectType(
+    self: *context.Context,
+    select_type: ast.SelectTypeBlock,
+) bool {
+    if (select_type.associate_name != null) return true;
+    return expr_semantics.exprUsesNonDefinableAlias(self, select_type.selector);
+}
+
+fn emitCurrentStmtVariableDefinitionContext(self: *context.Context) void {
+    const stmt = self.current_stmt orelse return;
+    self.setDiagnostic(
+        if (stmt.source_line == 0) 1 else stmt.source_line,
+        if (stmt.source_column == 0) 1 else stmt.source_column,
+        catalog.semantic.assignment_type_mismatch.code,
+        "in variable definition context",
+        stmt.source_text,
+    );
 }
 
 fn validateSelectTypeSelector(
