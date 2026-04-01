@@ -6,6 +6,7 @@ const free_form = @import("../../../frontend/free_form.zig");
 const parser = @import("../../../frontend/parser/mod.zig");
 const diagnostic = @import("../../diagnostic.zig");
 const api = @import("mod.zig");
+const procedure_inference = @import("procedure_inference.zig");
 const analyzeProgram = api.analyzeProgram;
 const analyzeProgramWithKnownAndOptionsAndDiagnostics = api.analyzeProgramWithKnownAndOptionsAndDiagnostics;
 
@@ -137,6 +138,33 @@ test "analyzeProgram accepts pointer assignment from single-target generic funct
 
     _ = try analyzeProgram(arena.allocator(), program);
     try testing.expect(diagnostic.take() == null);
+}
+
+test "inferProcedureArgSigs marks implicit dummy procedure arguments from call usage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        \\      REAL FUNCTION FF326(RDON02,RDON03)
+        \\      CALL RDON02(RDON03)
+        \\      FF326 = RDON03 + 1.0
+        \\      RETURN
+        \\      END
+        \\
+    ;
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    const arg_sigs = try procedure_inference.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+    try testing.expectEqual(@as(usize, 2), arg_sigs.len);
+    try testing.expect(arg_sigs[0].is_procedure);
+    try testing.expectEqual(ast.ProgramUnitKind.subroutine, arg_sigs[0].procedure_kind.?);
+    try testing.expect(!arg_sigs[1].is_procedure);
 }
 
 test "analyzeProgram selects the unique visible generic specific after USE association" {

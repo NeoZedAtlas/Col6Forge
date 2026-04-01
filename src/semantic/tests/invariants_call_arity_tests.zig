@@ -133,6 +133,42 @@ test "invariant call arity 12 dummy procedure argument skips global arity checks
     try expectSemanticSuccessInvariant(source);
 }
 
+test "invariant call arity 12a implicit dummy subroutine accepts procedure actual without explicit interface" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      EXTERNAL FS327\n" ++
+        "      REAL RVON01, RVCOMP\n" ++
+        "      RVON01 = 3.5\n" ++
+        "      RVCOMP = FF326(FS327,RVON01)\n" ++
+        "      END\n" ++
+        "      REAL FUNCTION FF326(RDON02,RDON03)\n" ++
+        "      CALL RDON02(RDON03)\n" ++
+        "      FF326 = RDON03 + 1.0\n" ++
+        "      END\n" ++
+        "      SUBROUTINE FS327(RDON04)\n" ++
+        "      RDON04 = RDON04 + 1.0\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant call arity 12b implicit dummy function accepts procedure actual without explicit interface" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      DOUBLE PRECISION DVN009, DVCOMP\n" ++
+        "      EXTERNAL DF723\n" ++
+        "      DVN009 = 10D2\n" ++
+        "      CALL SN725(DF723,DVN009)\n" ++
+        "      END\n" ++
+        "      DOUBLE PRECISION FUNCTION DF723(DVN008)\n" ++
+        "      DF723 = DVN008 + 100D2\n" ++
+        "      END\n" ++
+        "      SUBROUTINE SN725(DTINT, DVN008)\n" ++
+        "      IMPLICIT DOUBLE PRECISION (D)\n" ++
+        "      DVC006 = DTINT(DVN008) + 10D2\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
 test "invariant call arity 13 alternate return succeeds when callee declares star dummy" {
     const source =
         "      SUBROUTINE S\n" ++

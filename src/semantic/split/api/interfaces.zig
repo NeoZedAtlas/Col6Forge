@@ -42,6 +42,13 @@ pub fn installExplicitInterfaceProcedures(
         for (unit.decls) |decl| {
             if (decl != .interface_block) continue;
             for (decl.interface_block.procedure_headers) |proc_header| {
+                // Parser-generated sibling ENTRY visibility shims carry no source
+                // location and must not overwrite the real known procedure sig.
+                if (proc_header.source.line == 0 and
+                    lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, proc_header.name) != null)
+                {
+                    continue;
+                }
                 const proc_key = try symbol_lookup.lowerDup(arena, proc_header.name);
                 try known_procedure_sigs.put(proc_key, .{
                     .kind = proc_header.kind,
