@@ -23,6 +23,14 @@ pub fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock
             self.recordSemanticError(err);
             break :blk .integer;
         };
+        if (ok) {
+            validateAssociateSelectorTarget(self, binding) catch |err| {
+                ok = false;
+                if (!self.usesExplicitDiagnosticBag()) return err;
+                if (first_err == null) first_err = err;
+                self.recordSemanticError(err);
+            };
+        }
         binding_ok[idx] = ok;
     }
     _ = try self.pushScope(.block);
@@ -38,7 +46,7 @@ pub fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock
             self,
             binding.name,
             spec,
-            resolve_expr.exprRank(self, binding.selector),
+            selectorRankForAssociateAlias(self, binding.selector),
             binding_ok[idx] and associateSelectorMayBeVariable(binding.selector) and expr_semantics.selectorIsDefinableAlias(self, binding.selector),
         );
     }
@@ -159,6 +167,143 @@ fn emitCurrentStmtVariableDefinitionContext(self: *context.Context) void {
         "in variable definition context",
         stmt.source_text,
     );
+}
+
+fn validateAssociateSelectorTarget(self: *context.Context, binding: ast.AssociateBinding) CheckError!void {
+    const selector = binding.selector;
+    if (selectorIsNullCall(selector)) {
+        return emitAssociateSelectorDiagnostic(self, selector, "cannot be NULL()");
+    }
+    if (selectorUsesVectorIndex(self, selector)) {
+        return emitAssociateSelectorDiagnostic(self, selector, "vector-indexed target");
+    }
+    if (selectorIsDerivedTypeName(self, selector)) |type_name| {
+        const msg = std.fmt.allocPrint(self.arena, "Derived type '{s}' cannot be used as a variable", .{type_name}) catch "Derived type cannot be used as a variable";
+        return emitAssociateSelectorDiagnostic(self, selector, msg);
+    }
+    if (selectorProcedureName(self, selector)) |name| {
+        const msg = std.fmt.allocPrint(
+            self.arena,
+            "Invalid association target; Associating entity '{s}' at (1) is a procedure name; Expected array subscript; Associate-name '{s}' at (1) is used as array; Expecting END FUNCTION statement; Expecting END PROGRAM statement",
+            .{ name, binding.name },
+        ) catch "Invalid association target";
+        return emitAssociateSelectorDiagnostic(self, selector, msg);
+    }
+}
+
+fn selectorIsNullCall(selector: *ast.Expr) bool {
+    return switch (selector.*) {
+        .call_or_subscript => |call| call.args.len == 0 and std.ascii.eqlIgnoreCase(call.name, "null"),
+        else => false,
+    };
+}
+
+fn selectorUsesVectorIndex(self: *context.Context, selector: *ast.Expr) bool {
+    return switch (selector.*) {
+        .component => |comp| blk: {
+            if (componentArgsUseVectorIndex(self, comp)) break :blk true;
+            break :blk selectorUsesVectorIndex(self, comp.base);
+        },
+        .call_or_subscript => |call| blk: {
+            const idx = expr_semantics.symbolIndexForResolvedCall(self, selector) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
+            const sym = self.symbols.items[idx];
+            const kind: symbols.ResolvedRefKind = expr_semantics.resolvedKindFor(self, selector) orelse
+                (if (sym.dims.len > 0) .subscript else .call);
+            if (kind != .subscript) break :blk false;
+            break :blk argsUseVectorIndex(self, call.args);
+        },
+        .substring => |sub| argsUseVectorIndex(self, sub.args),
+        else => false,
+    };
+}
+
+fn componentArgsUseVectorIndex(self: *context.Context, comp: ast.ComponentExpr) bool {
+    if (comp.args.len == 0) return false;
+    const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch return false;
+    if (base_spec.lowered_kind != .derived) return false;
+    const derived_name = base_spec.derived_type_name orelse return false;
+    const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return false;
+    if (component.procedure) return false;
+    return argsUseVectorIndex(self, comp.args);
+}
+
+fn argsUseVectorIndex(self: *context.Context, args: []const *ast.Expr) bool {
+    for (args) |arg| {
+        if (arg.* == .dim_range) continue;
+        if (resolve_expr.exprRank(self, arg) != 0) return true;
+    }
+    return false;
+}
+
+fn selectorRankForAssociateAlias(self: *context.Context, selector: *ast.Expr) usize {
+    const resolved_rank = resolve_expr.exprRank(self, selector);
+    const fallback_rank = syntacticSectionRank(selector);
+    return if (resolved_rank >= fallback_rank) resolved_rank else fallback_rank;
+}
+
+fn syntacticSectionRank(expr: *ast.Expr) usize {
+    return switch (expr.*) {
+        .component => |comp| syntacticSectionRank(comp.base) + sectionRankFromArgs(comp.args),
+        .call_or_subscript => |call| sectionRankFromArgs(call.args),
+        else => 0,
+    };
+}
+
+fn sectionRankFromArgs(args: []const *ast.Expr) usize {
+    var rank: usize = 0;
+    for (args) |arg| {
+        if (arg.* == .dim_range) rank += 1;
+    }
+    return rank;
+}
+
+fn selectorIsDerivedTypeName(self: *context.Context, selector: *ast.Expr) ?[]const u8 {
+    const name = switch (selector.*) {
+        .identifier => |ident| ident,
+        else => return null,
+    };
+    if (!resolve_symbols.hasDerivedType(self, name)) return null;
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        if (self.symbols.items[idx].kind == .variable) return null;
+    }
+    return name;
+}
+
+fn selectorProcedureName(self: *context.Context, selector: *ast.Expr) ?[]const u8 {
+    const name = switch (selector.*) {
+        .identifier => |ident| ident,
+        else => return null,
+    };
+    if (isFunctionResultDesignatorName(self, name)) return null;
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.kind == .function or sym.kind == .subroutine or sym.is_external) return name;
+    }
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return name;
+    return null;
+}
+
+fn isFunctionResultDesignatorName(self: *context.Context, name: []const u8) bool {
+    if (self.unit.kind != .function) return false;
+    const result_name = self.unit.result_name orelse self.unit.name;
+    return std.ascii.eqlIgnoreCase(name, result_name);
+}
+
+fn emitAssociateSelectorDiagnostic(
+    self: *context.Context,
+    selector: *ast.Expr,
+    message: []const u8,
+) CheckError {
+    const source = self.sourceForExpr(selector) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
 }
 
 fn validateSelectTypeSelector(

@@ -995,7 +995,7 @@ pub const Context = struct {
                 error.NumberTooLong => return error.ArraySizeOverflow,
                 else => return err,
             }) orelse return error.ArrayDimNotConstant;
-            if (value <= 0) return error.InvalidArrayDim;
+            if (value < 0) return error.InvalidArrayDim;
             const dim_u: usize = @intCast(value);
             const mul = @mulWithOverflow(total, dim_u);
             if (mul[1] != 0) return error.ArraySizeOverflow;

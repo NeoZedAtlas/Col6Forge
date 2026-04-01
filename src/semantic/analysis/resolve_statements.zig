@@ -4,6 +4,7 @@ const case_insensitive = @import("../../common/case_insensitive.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
+const decls = @import("resolve_decls.zig");
 const expressions = @import("resolve_expr.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 
@@ -261,7 +262,7 @@ fn resolveAssociateBlock(self: *context.Context, associate: ast.AssociateBlock) 
             self,
             binding.name,
             spec,
-            rank,
+            if (rank >= syntacticSectionRank(binding.selector)) rank else syntacticSectionRank(binding.selector),
             binding_ok[idx] and associateSelectorMayBeVariable(binding.selector),
         ) catch |err| {
             if (!self.usesExplicitDiagnosticBag()) return err;
@@ -285,6 +286,22 @@ fn associateSelectorMayBeVariable(selector: *ast.Expr) bool {
         .identifier, .component, .substring, .call_or_subscript => true,
         else => false,
     };
+}
+
+fn syntacticSectionRank(expr: *ast.Expr) usize {
+    return switch (expr.*) {
+        .component => |comp| syntacticSectionRank(comp.base) + sectionRankFromArgs(comp.args),
+        .call_or_subscript => |call| sectionRankFromArgs(call.args),
+        else => 0,
+    };
+}
+
+fn sectionRankFromArgs(args: []const *ast.Expr) usize {
+    var rank: usize = 0;
+    for (args) |arg| {
+        if (arg.* == .dim_range) rank += 1;
+    }
+    return rank;
 }
 
 fn resolveSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock) ResolveError!void {
@@ -657,6 +674,8 @@ fn bindKnownUseImportFromModule(
     local_name: []const u8,
     remote_name: []const u8,
 ) ResolveError!void {
+    if (unitAlreadyHasImportedUseDecl(self, module_name, local_name)) return;
+
     if (symbols_mod.lookupKnownProcedureSigInOwner(self, module_name, remote_name)) |sig| {
         const idx = try symbols_mod.ensureSymbol(self, local_name);
         const sym = &self.symbols.items[idx];
@@ -692,7 +711,64 @@ fn bindKnownUseImportFromModule(
         return;
     }
 
+    if (!isIsoCBindingModule(module_name)) {
+        if (try bindKnownDataUseImportFromModule(self, module_name, local_name, remote_name)) return;
+    }
+
     try bindKnownUseImport(self, local_name, remote_name);
+}
+
+fn bindKnownDataUseImportFromModule(
+    self: *context.Context,
+    module_name: []const u8,
+    local_name: []const u8,
+    remote_name: []const u8,
+) ResolveError!bool {
+    for (self.unit.decls, 0..) |decl_node, decl_idx| {
+        const decl_source = if (decl_idx < self.unit.decl_sources.len) self.unit.decl_sources[decl_idx] else ast.DeclSource{};
+        const owner_name = decl_source.owner_name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(owner_name, module_name)) continue;
+        switch (decl_node) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, remote_name)) continue;
+                    const prev_decl_idx = self.current_decl_index;
+                    const prev_decl_source = self.current_decl_source;
+                    self.setCurrentDeclIndex(decl_idx);
+                    self.setCurrentDeclSource(decl_source);
+                    defer self.setCurrentDeclIndex(prev_decl_idx);
+                    defer self.setCurrentDeclSource(prev_decl_source);
+
+                    var local_item = item;
+                    local_item.name = local_name;
+                    const resolved_type = try decls.resolvedDeclTypeSpec(
+                        self,
+                        type_decl.type_kind,
+                        type_decl.derived_type_name,
+                        type_decl.kind_selector,
+                        type_decl.polymorphic,
+                    );
+                    try decls.applyDeclarator(
+                        self,
+                        resolved_type,
+                        local_item,
+                        .local,
+                        true,
+                        type_decl.allocatable,
+                        type_decl.pointer,
+                        type_decl.contiguous,
+                    );
+                    if (symbols_mod.findSymbolIndex(self, local_name)) |idx| {
+                        self.symbols.items[idx].is_host_associated = true;
+                        self.symbols.items[idx].host_owner_name = owner_name;
+                    }
+                    return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn bindKnownModuleUseImports(self: *context.Context, module_name: []const u8) ResolveError!void {

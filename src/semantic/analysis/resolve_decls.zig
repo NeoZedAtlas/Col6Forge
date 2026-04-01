@@ -32,10 +32,32 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
         try applyDeclarator(self, effective_type, effective_item, .local, true, decl.allocatable, decl.pointer, decl.contiguous);
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
+        try validateDeclaratorInitializer(self, item.init);
         if (decl.external) {
             self.symbols.items[idx].is_external = true;
         }
     }
+}
+
+pub fn validateDeclaratorInitializer(self: *context.Context, init_expr: ?*ast.Expr) !void {
+    const expr = init_expr orelse return;
+    const intrinsic_name = findDisallowedInitializationIntrinsic(expr) orelse return;
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    const line = if (decl_source.line == 0) 1 else decl_source.line;
+    const column = if (decl_source.column == 0) 1 else decl_source.column;
+    const message = std.fmt.allocPrint(
+        self.arena,
+        "Intrinsic function '{s}' is not permitted in an initialization expression",
+        .{intrinsic_name},
+    ) catch "Intrinsic function is not permitted in an initialization expression";
+    self.setDiagnostic(
+        line,
+        column,
+        catalog.semantic.parameter_not_constant.code,
+        message,
+        decl_source.text,
+    );
+    return error.ParameterNotConstant;
 }
 
 fn isoCBindingCharacterKindShorthandType(
@@ -51,6 +73,64 @@ fn isoCBindingCharacterKindShorthandType(
     const builtin = symbols_mod.findBuiltinModuleConstant(self, "iso_c_binding", name) orelse return null;
     if (builtin.type_spec.lowered_kind != .integer) return null;
     return symbols.TypeSpec.fromResolvedKind(.character, .character, builtin.value.integer).withCharacterLength(.constant, 1);
+}
+
+fn findDisallowedInitializationIntrinsic(expr: *ast.Expr) ?[]const u8 {
+    return switch (expr.*) {
+        .call_or_subscript => |call| {
+            if (std.ascii.eqlIgnoreCase(call.name, "c_loc") or std.ascii.eqlIgnoreCase(call.name, "c_funloc")) {
+                return call.name;
+            }
+            for (call.args) |arg| {
+                if (findDisallowedInitializationIntrinsic(arg)) |name| return name;
+            }
+            return null;
+        },
+        .unary => |un| findDisallowedInitializationIntrinsic(un.expr),
+        .binary => |bin| findDisallowedInitializationIntrinsic(bin.left) orelse findDisallowedInitializationIntrinsic(bin.right),
+        .component => |comp| findDisallowedInitializationIntrinsic(comp.base),
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (findDisallowedInitializationIntrinsic(arg)) |name| break :blk name;
+            }
+            if (sub.start) |start| {
+                if (findDisallowedInitializationIntrinsic(start)) |name| break :blk name;
+            }
+            if (sub.end) |end| {
+                if (findDisallowedInitializationIntrinsic(end)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (findDisallowedInitializationIntrinsic(lower)) |name| break :blk name;
+            }
+            if (findDisallowedInitializationIntrinsic(range.upper)) |name| break :blk name;
+            if (range.stride) |stride| {
+                if (findDisallowedInitializationIntrinsic(stride)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        .array_constructor => |ctor| blk: {
+            for (ctor.items) |item| {
+                if (findDisallowedInitializationIntrinsic(item)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        .complex_literal => |lit| findDisallowedInitializationIntrinsic(lit.real) orelse findDisallowedInitializationIntrinsic(lit.imag),
+        .implied_do => |ido| blk: {
+            for (ido.items) |item| {
+                if (findDisallowedInitializationIntrinsic(item)) |name| break :blk name;
+            }
+            if (findDisallowedInitializationIntrinsic(ido.start)) |name| break :blk name;
+            if (findDisallowedInitializationIntrinsic(ido.end)) |name| break :blk name;
+            if (ido.step) |step| {
+                if (findDisallowedInitializationIntrinsic(step)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
 }
 
 pub fn applyProcedureDecl(self: *context.Context, decl: ast.ProcedureDecl) !void {

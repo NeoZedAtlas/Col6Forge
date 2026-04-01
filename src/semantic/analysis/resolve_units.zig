@@ -342,6 +342,7 @@ fn buildDerivedComponentInfo(
             ctx.current_decl_source;
         ctx.setCurrentDeclSource(component_source);
         for (type_decl.items) |item| {
+            try decls.validateDeclaratorInitializer(ctx, item.init);
             var spec = symbols.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
             if (type_decl.type_kind == .derived) {
                 if (type_decl.derived_type_name) |name| {

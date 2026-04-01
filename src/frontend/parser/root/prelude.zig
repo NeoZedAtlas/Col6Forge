@@ -299,7 +299,7 @@ pub fn selectPreludeDecls(
 ) !ImportedPreludeDecls {
     var selected_decls = std.array_list.Managed(Decl).init(arena);
     var selected_sources = std.array_list.Managed(DeclSource).init(arena);
-    var seen = std.StringHashMap(void).init(arena);
+    var seen = CaseInsensitiveStringHashMap(void).initContext(arena, .{});
     var missing_generic = false;
 
     for (use_stmt.only_items) |item| {
@@ -359,32 +359,118 @@ fn appendPreludeDeclByName(
     only_items: []const ast.UseOnlyItem,
     out_decls: *std.array_list.Managed(Decl),
     out_sources: *std.array_list.Managed(DeclSource),
-    seen: *std.StringHashMap(void),
-) !void {
-    if (seen.contains(remote_name)) return;
+    seen: *CaseInsensitiveStringHashMap(void),
+) anyerror!void {
+    const seen_key = try preludeImportSeenKey(arena, remote_name, local_name);
+    if (seen.contains(seen_key)) return;
     for (prelude.decls, 0..) |decl_node, decl_idx| {
         const exported_name = preludeDeclExportedName(decl_node) orelse continue;
         if (!std.ascii.eqlIgnoreCase(exported_name, remote_name)) continue;
-        try seen.put(remote_name, {});
+        try seen.put(seen_key, {});
+        try appendPreludeDeclDependencies(arena, prelude, decl_node, only_items, out_decls, out_sources, seen);
         try out_decls.append(try renamePreludeDecl(arena, decl_node, local_name, only_items));
         if (decl_idx < prelude.decl_sources.len) {
             try out_sources.append(prelude.decl_sources[decl_idx]);
         }
-        if (decl_node == .derived_type_def) {
-            const derived = decl_node.derived_type_def;
+        return;
+    }
+}
+
+fn appendPreludeDeclDependencies(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    decl_node: Decl,
+    only_items: []const ast.UseOnlyItem,
+    out_decls: *std.array_list.Managed(Decl),
+    out_sources: *std.array_list.Managed(DeclSource),
+    seen: *CaseInsensitiveStringHashMap(void),
+) anyerror!void {
+    switch (decl_node) {
+        .derived_type_def => |derived| {
             if (derived.parent_name) |parent_name| {
-                const renamed_parent = renamePreludeTypeName(parent_name, only_items);
-                try appendPreludeDeclByName(arena, prelude, parent_name, renamed_parent, only_items, out_decls, out_sources, seen);
+                try appendPreludeDerivedTypeDependency(arena, prelude, parent_name, only_items, out_decls, out_sources, seen);
             }
             for (derived.components) |component| {
                 if (component.derived_type_name) |type_name| {
-                    const renamed_type = renamePreludeTypeName(type_name, only_items);
-                    try appendPreludeDeclByName(arena, prelude, type_name, renamed_type, only_items, out_decls, out_sources, seen);
+                    try appendPreludeDerivedTypeDependency(arena, prelude, type_name, only_items, out_decls, out_sources, seen);
                 }
             }
-        }
-        return;
+            for (derived.procedure_components) |procedure_decl| {
+                try appendPreludeProcedureDeclDependencies(arena, prelude, procedure_decl, only_items, out_decls, out_sources, seen);
+            }
+        },
+        .type_decl => |type_decl| {
+            if (type_decl.derived_type_name) |type_name| {
+                try appendPreludeDerivedTypeDependency(arena, prelude, type_name, only_items, out_decls, out_sources, seen);
+            }
+        },
+        .procedure => |procedure_decl| {
+            try appendPreludeProcedureDeclDependencies(arena, prelude, procedure_decl, only_items, out_decls, out_sources, seen);
+        },
+        .interface_block => |interface_block| {
+            for (interface_block.procedure_headers) |proc_header| {
+                if (proc_header.type_spec) |type_spec| {
+                    try appendPreludeProcedureTypeSpecDependencies(arena, prelude, type_spec, only_items, out_decls, out_sources, seen);
+                }
+                for (proc_header.decls) |proc_decl_node| {
+                    try appendPreludeDeclDependencies(arena, prelude, proc_decl_node, only_items, out_decls, out_sources, seen);
+                }
+            }
+        },
+        else => {},
     }
+}
+
+fn appendPreludeProcedureDeclDependencies(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    procedure_decl: ast.ProcedureDecl,
+    only_items: []const ast.UseOnlyItem,
+    out_decls: *std.array_list.Managed(Decl),
+    out_sources: *std.array_list.Managed(DeclSource),
+    seen: *CaseInsensitiveStringHashMap(void),
+) anyerror!void {
+    switch (procedure_decl.interface) {
+        .type_spec => |type_spec| {
+            try appendPreludeProcedureTypeSpecDependencies(arena, prelude, type_spec, only_items, out_decls, out_sources, seen);
+        },
+        else => {},
+    }
+}
+
+fn appendPreludeProcedureTypeSpecDependencies(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    type_spec: ast.ProcedureTypeSpec,
+    only_items: []const ast.UseOnlyItem,
+    out_decls: *std.array_list.Managed(Decl),
+    out_sources: *std.array_list.Managed(DeclSource),
+    seen: *CaseInsensitiveStringHashMap(void),
+) anyerror!void {
+    if (type_spec.derived_type_name) |type_name| {
+        try appendPreludeDerivedTypeDependency(arena, prelude, type_name, only_items, out_decls, out_sources, seen);
+    }
+}
+
+fn appendPreludeDerivedTypeDependency(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    type_name: []const u8,
+    only_items: []const ast.UseOnlyItem,
+    out_decls: *std.array_list.Managed(Decl),
+    out_sources: *std.array_list.Managed(DeclSource),
+    seen: *CaseInsensitiveStringHashMap(void),
+) anyerror!void {
+    const renamed_type = renamePreludeTypeName(type_name, only_items);
+    try appendPreludeDeclByName(arena, prelude, type_name, renamed_type, only_items, out_decls, out_sources, seen);
+}
+
+fn preludeImportSeenKey(
+    arena: std.mem.Allocator,
+    remote_name: []const u8,
+    local_name: []const u8,
+) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}\x1f{s}", .{ remote_name, local_name });
 }
 
 fn preludeDeclExportedName(decl_node: Decl) ?[]const u8 {

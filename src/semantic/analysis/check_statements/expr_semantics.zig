@@ -420,6 +420,18 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            if (kind == .call and sym.is_alias and sym.dims.len == 0) {
+                if (call.args.len != 0) return try resolve_expr.exprType(self, expr);
+                const source = self.sourceForExpr(expr) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "Expected array subscript",
+                    source.text,
+                );
+                return error.AssignmentTypeMismatch;
+            }
             if (kind == .subscript) {
                 if (sym.dims.len == 0) {
                     self.setCurrentSource(self.sourceForExpr(expr));
@@ -688,6 +700,7 @@ pub fn isAddressableDataTargetExpr(self: *context.Context, expr: *ast.Expr) bool
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind == .subscript) break :blk true;
+            if (kind == .call and sym.is_alias and call.args.len != 0) break :blk true;
             break :blk hasTripletSectionArg(call.args);
         },
         .substring => |sub| blk: {
