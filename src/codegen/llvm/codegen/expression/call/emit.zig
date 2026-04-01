@@ -270,6 +270,9 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             return .{ .ptr = try dispatch.emitLValue(ctx, builder, expr) };
         },
         .substring => {
+            if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| {
+                return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
+            }
             return .{ .ptr = try dispatch.emitLValue(ctx, builder, expr) };
         },
         else => {},

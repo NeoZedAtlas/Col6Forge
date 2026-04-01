@@ -374,6 +374,9 @@ fn emitLogicalCast(ctx: *Context, builder: anytype, value: ValueRef) EmitError!V
 
 pub fn emitIntrinsicAny(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (try emitShapeCompareAnyReduction(ctx, builder, args[0])) |reduced| {
+        return reduced;
+    }
     if (try emitWholeArrayAnyReduction(ctx, builder, args[0])) |reduced| {
         return reduced;
     }
@@ -573,6 +576,35 @@ fn emitShapeCompareAllReduction(ctx: *Context, builder: anytype, expr_node: *Exp
     for (left_extents, right_extents) |lhs, rhs| {
         const cmp = try binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitShapeCompareAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
+    if (expr_node.* != .binary) return null;
+    const bin = expr_node.binary;
+    switch (bin.op) {
+        .eq, .ne, .lt, .le, .gt, .ge => {},
+        else => return null,
+    }
+
+    const shape_side = shapeIntrinsicSubject(bin.left) orelse shapeIntrinsicSubject(bin.right) orelse return null;
+    const vector_side = if (shapeIntrinsicSubject(bin.left) != null) bin.right else bin.left;
+    const shape_on_left = shapeIntrinsicSubject(bin.left) != null;
+
+    const extents = try shapeSubjectExtents(ctx, builder, shape_side) orelse return null;
+    const vector_actual = (try array_actuals.resolveArrayActual(ctx, builder, vector_side)) orelse return null;
+    defer array_actuals.emitOwnedHeapActualFree(ctx, builder, vector_actual.owned_heap_ptr) catch {};
+    try vector_actual.validate();
+    if (vector_actual.extents.len != 1) return null;
+
+    var acc = ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
+    for (extents, 0..) |extent, idx| {
+        const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), vector_actual);
+        const lhs_cmp = if (shape_on_left) extent else rhs;
+        const rhs_cmp = if (shape_on_left) rhs else extent;
+        const cmp = try binary.emitBinary(ctx, builder, bin.op, lhs_cmp, rhs_cmp);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
 }

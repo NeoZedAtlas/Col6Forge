@@ -5,6 +5,8 @@ const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const resolve_units = @import("resolve_units.zig");
 const check_units = @import("check_units.zig");
+const check_statements = @import("check_statements/mod.zig");
+const procedure_calls = @import("check_statements/procedure_calls.zig");
 const diag = @import("../diagnostic.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
 const free_form = @import("../../frontend/free_form.zig");
@@ -3215,4 +3217,351 @@ test "character array component element substring resolves as character expressi
     diag.clear();
     _ = try split_api.analyzeProgram(arena.allocator(), program);
     try testing.expect(diag.take() == null);
+}
+
+test "assumed-type intrinsic candidate statements stay compatible with sequence association" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const candidates = [_]struct {
+        name: []const u8,
+        stmt: []const u8,
+    }{
+        .{
+            .name = "lbound",
+            .stmt = "    if (any (lbound(arg2) /= lbounds)) STOP 2\n",
+        },
+        .{
+            .name = "ubound",
+            .stmt = "    if (any (ubound(arg2) /= ubounds)) STOP 3\n",
+        },
+        .{
+            .name = "shape",
+            .stmt = "    if (any (shape(arg2) /= ubounds-lbounds+1)) STOP 4\n",
+        },
+        .{
+            .name = "size",
+            .stmt = "    if (size(arg2) /= product (ubounds-lbounds+1)) STOP 5\n",
+        },
+        .{
+            .name = "rank",
+            .stmt = "    if (rank (arg2) /= 2) STOP 6\n",
+        },
+        .{
+            .name = "all-five",
+            .stmt = "    if (any (lbound(arg2) /= lbounds)) STOP 2\n" ++
+                "    if (any (ubound(arg2) /= ubounds)) STOP 3\n" ++
+                "    if (any (shape(arg2) /= ubounds-lbounds+1)) STOP 4\n" ++
+                "    if (size(arg2) /= product (ubounds-lbounds+1)) STOP 5\n" ++
+                "    if (rank (arg2) /= 2) STOP 6\n",
+        },
+    };
+
+    for (candidates) |candidate| {
+        const source = try std.fmt.allocPrint(
+            allocator,
+            "module mod\n" ++
+                "contains\n" ++
+                "  subroutine sub_array_shape(arg2, lbounds, ubounds)\n" ++
+                "    type(*), target :: arg2(:,:)\n" ++
+                "    integer :: lbounds(2), ubounds(2)\n" ++
+                "{s}" ++
+                "    call sub_array_assumed(arg2)\n" ++
+                "  end subroutine sub_array_shape\n" ++
+                "  subroutine sub_array_assumed(arg3)\n" ++
+                "    type(*), target :: arg3(*)\n" ++
+                "  end subroutine sub_array_assumed\n" ++
+                "end module mod\n",
+            .{candidate.stmt},
+        );
+        defer allocator.free(source);
+
+        const lines = try free_form.normalizeFreeForm(allocator, source);
+        defer free_form.freeLogicalLines(allocator, lines);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const program = try parser.parseProgram(arena.allocator(), lines);
+
+        diag.clear();
+        _ = split_api.analyzeProgram(arena.allocator(), program) catch |err| {
+            const got = diag.take();
+            std.debug.panic(
+                "candidate {s} failed with {s}: {s}",
+                .{ candidate.name, @errorName(err), if (got) |d| d.message else "<no diagnostic>" },
+            );
+        };
+    }
+}
+
+test "assumed-type direct call check stays green while full checkStmt reproduces failure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "contains\n" ++
+        "  subroutine sub_array_shape(arg2)\n" ++
+        "    type(*), target :: arg2(:,:)\n" ++
+        "    call sub_array_assumed(arg2)\n" ++
+        "  end subroutine sub_array_shape\n" ++
+        "  subroutine sub_array_assumed(arg3)\n" ++
+        "    type(*), target :: arg3(*)\n" ++
+        "  end subroutine sub_array_assumed\n" ++
+        "end module\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_fn_types = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    try split_api.analyzeProgram(arena.allocator(), program) catch {};
+
+    const mutable_program = program;
+    try @import("../split/api/analyze.zig").seedKnownProcedures(arena.allocator(), &.{}, &.{}, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/analyze.zig").inferProgramProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installExplicitInterfaceProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installSingleTargetGenericInterfaces(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+
+    var target_unit: ?*ast.ProgramUnit = null;
+    for (mutable_program.units) |*unit| {
+        if (std.ascii.eqlIgnoreCase(unit.name, "sub_array_shape")) {
+            target_unit = unit;
+            break;
+        }
+    }
+    const unit = target_unit orelse return error.TestExpectedEqual;
+
+    const stmt = unit.stmts[0];
+
+    {
+        var direct_analyzer = UnitAnalyzer.init(
+            arena.allocator(),
+            unit,
+            &.{},
+            &known_fn_types,
+            &known_procedure_sigs,
+            &known_host_parameters,
+            &known_host_derived_types,
+            &known_host_interface_sources,
+            &known_host_abstract_interfaces,
+            null,
+            .{},
+            false,
+        );
+        var resolver = resolve_units.Resolver.init(&direct_analyzer.ctx, &.{});
+        try resolver.run();
+        try procedure_calls.checkProcedureActualArgsForCall(&direct_analyzer.ctx, stmt.node.call.name, stmt.node.call.args, .{
+            .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+        });
+    }
+
+    {
+        var stmt_analyzer = UnitAnalyzer.init(
+            arena.allocator(),
+            unit,
+            &.{},
+            &known_fn_types,
+            &known_procedure_sigs,
+            &known_host_parameters,
+            &known_host_derived_types,
+            &known_host_interface_sources,
+            &known_host_abstract_interfaces,
+            null,
+            .{},
+            false,
+        );
+        var resolver = resolve_units.Resolver.init(&stmt_analyzer.ctx, &.{});
+        try resolver.run();
+        try testing.expectError(error.InvalidArgumentCount, check_statements.checkStmt(&stmt_analyzer.ctx, stmt));
+    }
+}
+
+test "assumed-type identifies which call precheck poisons compatibility" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "contains\n" ++
+        "  subroutine sub_array_shape(arg2)\n" ++
+        "    type(*), target :: arg2(:,:)\n" ++
+        "    call sub_array_assumed(arg2)\n" ++
+        "  end subroutine sub_array_shape\n" ++
+        "  subroutine sub_array_assumed(arg3)\n" ++
+        "    type(*), target :: arg3(*)\n" ++
+        "  end subroutine sub_array_assumed\n" ++
+        "end module\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_fn_types = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    const mutable_program = program;
+    try @import("../split/api/analyze.zig").seedKnownProcedures(arena.allocator(), &.{}, &.{}, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/analyze.zig").inferProgramProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installExplicitInterfaceProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installSingleTargetGenericInterfaces(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+
+    var target_unit: ?*ast.ProgramUnit = null;
+    for (mutable_program.units) |*unit| {
+        if (std.ascii.eqlIgnoreCase(unit.name, "sub_array_shape")) {
+            target_unit = unit;
+            break;
+        }
+    }
+    const unit = target_unit orelse return error.TestExpectedEqual;
+
+    var unit_analyzer = UnitAnalyzer.init(
+        arena.allocator(),
+        unit,
+        &.{},
+        &known_fn_types,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+
+    var resolver = resolve_units.Resolver.init(&unit_analyzer.ctx, &.{});
+    try resolver.run();
+
+    const stmt = unit.stmts[0];
+    const call = stmt.node.call;
+    const call_idx = @import("resolve_symbols.zig").findSymbolIndex(&unit_analyzer.ctx, call.name);
+
+    procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, call.name, call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }) catch |err| std.debug.panic("baseline direct call unexpectedly failed: {s}", .{@errorName(err)});
+
+    try check_statements.expr_semantics.checkSpecialCallConstraints(&unit_analyzer.ctx, call.name, procedure_calls.collectCallExprArgsScratch(&unit_analyzer.ctx, call.args));
+    procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, call.name, call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }) catch |err| std.debug.panic("after special-call precheck failed: {s}", .{@errorName(err)});
+
+    try procedure_calls.checkIntrinsicCallConstraintsForCallArgs(&unit_analyzer.ctx, call.name, call.args);
+    procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, call.name, call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }) catch |err| std.debug.panic("after intrinsic-call precheck failed: {s}", .{@errorName(err)});
+
+    try procedure_calls.checkExplicitInterfaceRequirementForCallArgs(&unit_analyzer.ctx, call.name, call.args, call_idx);
+    procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, call.name, call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }) catch |err| std.debug.panic("after explicit-interface precheck failed: {s}", .{@errorName(err)});
+
+    try procedure_calls.checkKnownProcedureCallArity(
+        &unit_analyzer.ctx,
+        call.name,
+        procedure_calls.countCallExprArgs(call.args),
+        procedure_calls.countCallAltReturnArgs(call.args),
+        true,
+        call_idx,
+    );
+    procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, call.name, call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }) catch |err| std.debug.panic("after arity precheck failed: {s}", .{@errorName(err)});
+
+    try testing.expectError(error.InvalidArgumentCount, check_statements.checkStmt(&unit_analyzer.ctx, stmt));
+}
+
+test "assumed-type direct call fails once current stmt context is installed" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "contains\n" ++
+        "  subroutine sub_array_shape(arg2)\n" ++
+        "    type(*), target :: arg2(:,:)\n" ++
+        "    call sub_array_assumed(arg2)\n" ++
+        "  end subroutine sub_array_shape\n" ++
+        "  subroutine sub_array_assumed(arg3)\n" ++
+        "    type(*), target :: arg3(*)\n" ++
+        "  end subroutine sub_array_assumed\n" ++
+        "end module\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_fn_types = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    const mutable_program = program;
+    try @import("../split/api/analyze.zig").seedKnownProcedures(arena.allocator(), &.{}, &.{}, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/analyze.zig").inferProgramProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installExplicitInterfaceProcedures(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+    try @import("../split/api/interfaces.zig").installSingleTargetGenericInterfaces(arena.allocator(), mutable_program, &known_fn_types, &known_procedure_sigs);
+
+    var target_unit: ?*ast.ProgramUnit = null;
+    for (mutable_program.units) |*unit| {
+        if (std.ascii.eqlIgnoreCase(unit.name, "sub_array_shape")) {
+            target_unit = unit;
+            break;
+        }
+    }
+    const unit = target_unit orelse return error.TestExpectedEqual;
+
+    var unit_analyzer = UnitAnalyzer.init(
+        arena.allocator(),
+        unit,
+        &.{},
+        &known_fn_types,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+
+    var resolver = resolve_units.Resolver.init(&unit_analyzer.ctx, &.{});
+    try resolver.run();
+
+    const stmt = unit.stmts[0];
+    unit_analyzer.ctx.setCurrentStmt(stmt);
+    unit_analyzer.ctx.setCurrentSource(if (stmt.node.call.source.line != 0) stmt.node.call.source else null);
+    const sig = @import("resolve_symbols.zig").lookupKnownProcedureSig(&unit_analyzer.ctx, stmt.node.call.name) orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 1), sig.args[0].rank);
+    try testing.expect(!sig.args[0].requires_descriptor);
+    try testing.expectEqual(@as(usize, 2), procedure_calls.procedureActualExprRank(&unit_analyzer.ctx, stmt.node.call.args[0].expr.value));
+    try testing.expect((try procedure_calls.sequenceAssociationAvailableElements(&unit_analyzer.ctx, stmt.node.call.args[0].expr.value)) != null);
+    diag.clear();
+    try testing.expectError(error.InvalidArgumentCount, procedure_calls.checkProcedureActualArgsForCall(&unit_analyzer.ctx, stmt.node.call.name, stmt.node.call.args, .{
+        .dummyArgTypeCompatible = check_statements.dummyArgTypeCompatible,
+    }));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Rank mismatch in argument") != null);
 }

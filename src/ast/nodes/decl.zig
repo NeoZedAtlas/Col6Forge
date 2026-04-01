@@ -36,6 +36,7 @@ pub const TypeDecl = struct {
     kind_selector: ?*Expr = null,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    assumed_type: bool = false,
     items: []Declarator,
     parameter: bool = false,
     save: bool = false,
@@ -55,6 +56,7 @@ pub const ProcedureTypeSpec = struct {
     kind_selector: ?*Expr = null,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    assumed_type: bool = false,
 };
 
 pub const ProcedureInterface = union(enum) {

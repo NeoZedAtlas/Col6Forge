@@ -314,6 +314,7 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
                 }
             }
             if (kind == .call) {
+                if (try analyzeIntrinsicBoundsActual(ctx, builder, call)) |actual| break :blk actual;
                 if (try analyzeElementalArrayFunctionActual(ctx, builder, call)) |actual| break :blk actual;
                 if (try analyzeKnownArrayFunctionActual(ctx, builder, call)) |actual| break :blk actual;
                 break :blk null;
@@ -1472,13 +1473,19 @@ fn analyzeIntrinsicBoundsActual(
     builder: anytype,
     call: ast.CallOrSubscript,
 ) !?ArrayActualPlan {
-    const is_lower =
-        if (std.ascii.eqlIgnoreCase(call.name, "lbound"))
-            true
-        else if (std.ascii.eqlIgnoreCase(call.name, "ubound"))
-            false
-        else
-            return null;
+    const BoundsMode = enum {
+        lbound,
+        ubound,
+        shape,
+    };
+    const mode = if (std.ascii.eqlIgnoreCase(call.name, "lbound"))
+        BoundsMode.lbound
+    else if (std.ascii.eqlIgnoreCase(call.name, "ubound"))
+        BoundsMode.ubound
+    else if (std.ascii.eqlIgnoreCase(call.name, "shape"))
+        BoundsMode.shape
+    else
+        return null;
     if (call.args.len == 0 or call.args.len > 2) return null;
 
     const subject = arrayBoundsSubject(ctx, call.args[0]) orelse return null;
@@ -1490,21 +1497,33 @@ fn analyzeIntrinsicBoundsActual(
             break :blk component.dims.len;
         },
     };
-    if (call.args.len == 2) {
+    if (mode != .shape and call.args.len == 2) {
         const second = evalConstIntArg(ctx, call.args[1]) orelse return null;
         if (second >= 1 and second <= rank) return null;
     }
 
-    const result_ty: IRType = if (call.args.len == 2)
-        (if ((evalConstIntArg(ctx, call.args[1]) orelse return null) >= 8) .i64 else .i32)
-    else
-        ctx.defaultIntegerIRType();
+    const result_ty: IRType = if (call.args.len == 2) blk: {
+        const kind_value = evalConstIntArg(ctx, call.args[1]) orelse return null;
+        break :blk if (kind_value >= 8) .i64 else .i32;
+    } else ctx.defaultIntegerIRType();
     const extents = try ctx.allocator.alloc(ValueRef, 1);
     extents[0] = i64Const(ctx, @intCast(rank));
     const multipliers = try ctx.allocator.alloc(ValueRef, 1);
     multipliers[0] = i64Const(ctx, 1);
     const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, result_ty, extents[0]);
-    try emitBoundsVectorLoop(ctx, builder, subject, is_lower, rank, dst_ptr, result_ty);
+    switch (mode) {
+        .lbound => try emitBoundsVectorLoop(ctx, builder, subject, true, rank, dst_ptr, result_ty),
+        .ubound => try emitBoundsVectorLoop(ctx, builder, subject, false, rank, dst_ptr, result_ty),
+        .shape => {
+            const subject_extents = try shapeSubjectExtents(ctx, builder, call.args[0]) orelse return null;
+            for (subject_extents, 0..) |extent, idx| {
+                const coerced = if (extent.ty == result_ty) extent else try casting.coerce(ctx, builder, extent, result_ty);
+                const elem_ptr_name = try ctx.nextTemp();
+                try builder.gep(elem_ptr_name, result_ty, dst_ptr, i64Const(ctx, @intCast(idx)));
+                try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+            }
+        },
+    }
 
     return .{
         .base_ptr = dst_ptr,

@@ -51,6 +51,19 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
 fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
     if (depth >= shared.max_expression_depth) return error.ExpressionDepthExceeded;
     const start_source = shared.currentSource(lp.*);
+    if (lp.peekIs(.dotdot)) {
+        _ = lp.next();
+        const upper = try shared.makeExprNode(
+            arena,
+            .{ .literal = .{ .kind = .assumed_size, .text = "*" } },
+            start_source,
+        );
+        return shared.makeExprNode(
+            arena,
+            .{ .dim_range = .{ .lower = null, .upper = upper, .stride = null, .assumed_shape = true } },
+            start_source,
+        );
+    }
     if (lp.peekIs(.star)) {
         const tok = lp.next();
         return shared.makeExprNode(arena, .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } }, start_source);

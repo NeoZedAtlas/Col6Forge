@@ -426,6 +426,8 @@ fn dummyArgTypeCompatible(
     expected: symbols.TypeSpec,
     actual: symbols.TypeSpec,
 ) bool {
+    if (expected.assumed_type) return true;
+    if (actual.assumed_type) return false;
     if (expected.polymorphic and expected.derived_type_name == null) {
         return true;
     }

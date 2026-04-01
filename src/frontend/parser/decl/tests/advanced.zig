@@ -193,6 +193,60 @@ test "parseDecl preserves OPTIONAL declaration attribute" {
     }
 }
 
+test "parseDecl handles assumed type declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      TYPE(*) :: X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.derived, td.type_kind);
+            try testing.expect(!td.polymorphic);
+            try testing.expect(td.assumed_type);
+            try testing.expect(td.derived_type_name == null);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles SAVE with double colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      SAVE :: X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .save => |save_decl| {
+            try testing.expect(!save_decl.save_all);
+            try testing.expectEqual(@as(usize, 1), save_decl.items.len);
+            try testing.expect(save_decl.items[0] == .name);
+            try testing.expectEqualStrings("X", save_decl.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseDecl preserves asynchronous and volatile attributes" {
     const testing = std.testing;
     const allocator = testing.allocator;

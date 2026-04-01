@@ -143,6 +143,8 @@ const IntrinsicTag = enum {
     count,
     index,
     size,
+    sizeof_,
+    c_sizeof,
     is_contiguous,
     len_,
     kind_,
@@ -259,6 +261,8 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "count", .count },
     .{ "index", .index },
     .{ "size", .size },
+    .{ "sizeof", .sizeof_ },
+    .{ "c_sizeof", .c_sizeof },
     .{ "is_contiguous", .is_contiguous },
     .{ "len", .len_ },
     .{ "kind", .kind_ },
@@ -406,6 +410,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .count => return emitIntrinsicCount(ctx, builder, args),
         .index => return emitIntrinsicIndex(ctx, builder, args, .index),
         .size => return emitIntrinsicSize(ctx, builder, args),
+        .sizeof_, .c_sizeof => return emitIntrinsicSizeof(ctx, args),
         .is_contiguous => return emitIntrinsicIsContiguous(ctx, builder, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
         .kind_ => return emitIntrinsicKind(ctx, args),
@@ -481,6 +486,11 @@ fn emitIntrinsicKind(ctx: *Context, args: []*Expr) EmitError!ValueRef {
         else => return error.UnsupportedIntrinsicType,
     };
     return ctx.constDefaultInteger(kind_value);
+}
+
+fn emitIntrinsicSizeof(ctx: *Context, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    return ctx.constDefaultInteger(0);
 }
 
 fn emitDeclaredLogicalIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {

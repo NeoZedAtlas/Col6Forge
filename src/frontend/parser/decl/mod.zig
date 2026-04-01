@@ -169,6 +169,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("SAVE")) {
         _ = lp.consumeKeyword("SAVE");
+        _ = declarators.consumeDoubleColon(lp);
         var items = std.array_list.Managed(ast.SaveItem).init(arena);
         var save_all = true;
         while (lp.peek()) |_| {
@@ -213,6 +214,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .kind_selector = type_spec.kind_selector,
         .derived_type_name = type_spec.derived_type_name,
         .polymorphic = type_spec.polymorphic,
+        .assumed_type = type_spec.assumed_type,
         .items = try declarators.parseDeclarators(lp, arena, default_char_len, attrs.dimension, attrs.pointer),
         .parameter = attrs.parameter,
         .save = attrs.save,

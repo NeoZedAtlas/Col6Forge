@@ -13,6 +13,7 @@ pub const ArrayConstructorTypeSpec = struct {
     kind_selector: ?*Expr = null,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    assumed_type: bool = false,
 };
 
 pub const ArrayConstructor = struct {

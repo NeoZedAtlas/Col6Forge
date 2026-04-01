@@ -722,13 +722,14 @@ fn typeDeclTypeSpecWithDecls(decls: []const ast.Decl, type_decl: ast.TypeDecl) s
             type_decl.kind_selector,
             resolveKindSelectorConstValue(decls, type_decl.kind_selector),
         )
-            .withPolymorphic(type_decl.polymorphic);
+            .withPolymorphic(type_decl.polymorphic)
+            .withAssumedType(type_decl.assumed_type);
     }
     const base = if (type_decl.derived_type_name) |derived_name|
         symbols.TypeSpec.fromDerived(derived_name)
     else
         symbols.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(type_decl.polymorphic);
+    return base.withPolymorphic(type_decl.polymorphic).withAssumedType(type_decl.assumed_type);
 }
 
 fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
@@ -742,13 +743,14 @@ pub fn procedureTypeSpecWithDecls(decls: []const ast.Decl, proc_type: ast.Proced
             proc_type.kind_selector,
             resolveKindSelectorConstValue(decls, proc_type.kind_selector),
         )
-            .withPolymorphic(proc_type.polymorphic);
+            .withPolymorphic(proc_type.polymorphic)
+            .withAssumedType(proc_type.assumed_type);
     }
     const base = if (proc_type.derived_type_name) |derived_name|
         symbols.TypeSpec.fromDerived(derived_name)
     else
         symbols.TypeSpec.fromKind(.derived);
-    return base.withPolymorphic(proc_type.polymorphic);
+    return base.withPolymorphic(proc_type.polymorphic).withAssumedType(proc_type.assumed_type);
 }
 
 pub fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {

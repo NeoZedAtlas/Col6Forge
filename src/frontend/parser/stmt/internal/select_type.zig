@@ -43,6 +43,14 @@ pub fn isSelectTypeStart(lp: LineParser) bool {
     return scan.isKeywordSplit("TYPE");
 }
 
+pub fn isSelectRankStart(lp: LineParser) bool {
+    var scan = lp;
+    consumeOptionalBlockName(&scan);
+    if (!scan.isKeywordSplit("SELECT")) return false;
+    _ = scan.consumeKeyword("SELECT");
+    return scan.isKeywordSplit("RANK");
+}
+
 fn isSelectStart(lp: LineParser) bool {
     return isSelectTypeStart(lp) or select_case.isSelectCaseStart(lp);
 }
@@ -104,6 +112,14 @@ fn isClassDefaultLine(lp: LineParser) bool {
 
 pub fn isSelectTypeClauseLine(lp: LineParser) bool {
     return isTypeIsLine(lp) or isClassIsLine(lp) or isClassDefaultLine(lp);
+}
+
+fn isRankClauseLine(lp: LineParser) bool {
+    if (lp.isKeywordSplit("RANKDEFAULT")) return true;
+    if (!lp.isKeywordSplit("RANK")) return false;
+    var scan = lp;
+    _ = scan.consumeKeyword("RANK");
+    return scan.peekIs(.l_paren) or scan.isKeywordSplit("DEFAULT");
 }
 
 fn parseSelectTypeSelector(lp: *LineParser, arena: std.mem.Allocator) anyerror!ParsedSelector {
@@ -367,6 +383,88 @@ pub fn parseSelectTypeStatement(
             .construct_name = construct_name,
             .leading_stmts = try leading_stmts.toOwnedSlice(),
             .clauses = try clauses.toOwnedSlice(),
+        } },
+    };
+}
+
+pub fn parseSelectRankStatement(
+    arena: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    index: *usize,
+    label: ?[]const u8,
+    lp: *LineParser,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    parse_statement_fn: ParseStatementFn,
+) anyerror!Stmt {
+    _ = parseOptionalBlockName(lp, arena);
+    if (!lp.consumeKeyword("SELECT")) return error.UnexpectedToken;
+    if (!lp.consumeKeyword("RANK")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const parsed_selector = try parseSelectTypeSelector(lp, arena);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    index.* += 1;
+    var body_stmts = std.array_list.Managed(Stmt).init(arena);
+    var saw_end_select = false;
+
+    while (index.* < lines.len) {
+        const line = lines[index.*];
+        const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
+        defer arena.free(tokens);
+        const scan = LineParser.init(line, tokens);
+
+        if (isEndSelectLine(scan)) {
+            index.* += 1;
+            saw_end_select = true;
+            break;
+        }
+        if (isRankClauseLine(scan)) {
+            index.* += 1;
+            const clause_stmts = try parseSelectTypeClauseBody(
+                arena,
+                lines,
+                index,
+                do_ctx,
+                param_ints,
+                param_strings,
+                array_names,
+                diag_bag,
+                lex_diag_bag,
+                parse_statement_fn,
+            );
+            for (clause_stmts) |stmt| try body_stmts.append(stmt);
+            continue;
+        }
+        if (decl.isDeclarationStart(scan)) return error.DeclarationInIfBlock;
+        var stmt = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
+        setStmtSourceIfMissing(&stmt, line);
+        try body_stmts.append(stmt);
+    }
+
+    if (!saw_end_select) return error.UnexpectedEOF;
+
+    const binding_name = parsed_selector.associate_name orelse switch (parsed_selector.selector.*) {
+        .identifier => |name| name,
+        else => null,
+    };
+    const bindings = if (binding_name) |name| blk: {
+        const out = try arena.alloc(ast.AssociateBinding, 1);
+        out[0] = .{ .name = name, .selector = parsed_selector.selector };
+        break :blk out;
+    } else blk: {
+        break :blk try arena.alloc(ast.AssociateBinding, 0);
+    };
+
+    return .{
+        .label = label,
+        .node = .{ .associate_block = .{
+            .bindings = bindings,
+            .stmts = try body_stmts.toOwnedSlice(),
         } },
     };
 }

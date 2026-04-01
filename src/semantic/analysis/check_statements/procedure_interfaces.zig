@@ -316,7 +316,7 @@ pub fn calleeRequiresExplicitInterface(self: *context.Context, name: []const u8)
 
 pub fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
     const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
-    return spec.lowered_kind == .derived and spec.polymorphic;
+    return spec.lowered_kind == .derived and spec.polymorphic and !spec.assumed_type;
 }
 
 pub fn isProcedureActualExpr(self: *context.Context, expr: *ast.Expr) bool {
@@ -534,6 +534,8 @@ fn genericActualTypeCompatible(
     expected: symbols.TypeSpec,
     actual: symbols.TypeSpec,
 ) bool {
+    if (expected.assumed_type) return true;
+    if (actual.assumed_type) return false;
     if (expected.polymorphic and expected.derived_type_name == null) return true;
     if (expected.lowered_kind != actual.lowered_kind) return false;
     if (expected.lowered_kind != .derived) return true;
@@ -553,6 +555,7 @@ fn procedureSigRequiresExplicitInterface(sig: context.Context.ProcedureSig) bool
         if (arg.optional) return true;
         if (arg.requires_descriptor) return true;
         if (arg.pointer or arg.allocatable or arg.contiguous) return true;
+        if (arg.type_spec.assumed_type) return true;
         if (arg.type_spec.polymorphic) return true;
     }
     return false;
@@ -562,6 +565,7 @@ fn genericSigHasDerivedOrProcedureRequiredArg(sig: context.Context.ProcedureSig)
     for (sig.args) |arg| {
         if (arg.optional) continue;
         if (arg.is_procedure) return true;
+        if (arg.type_spec.assumed_type) return true;
         if (arg.type_spec.lowered_kind == .derived) return true;
     }
     return false;
@@ -569,6 +573,7 @@ fn genericSigHasDerivedOrProcedureRequiredArg(sig: context.Context.ProcedureSig)
 
 fn genericArgEquivalent(a: context.Context.ProcedureSig.ArgSig, b: context.Context.ProcedureSig.ArgSig) bool {
     if (a.is_procedure or b.is_procedure) return a.is_procedure and b.is_procedure;
+    if (a.type_spec.assumed_type or b.type_spec.assumed_type) return a.type_spec.assumed_type and b.type_spec.assumed_type;
     if (a.rank != b.rank) return false;
     if (a.pointer != b.pointer) return false;
     if (a.allocatable != b.allocatable) return false;

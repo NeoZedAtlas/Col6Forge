@@ -40,6 +40,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     rule.derived_type_name,
                     rule.kind_selector,
                     rule.polymorphic,
+                    false,
                 );
                 if (resolved_rule_type.lowered_kind == .derived and !resolved_rule_type.polymorphic) {
                     if (resolved_rule_type.derived_type_name) |derived_name| {

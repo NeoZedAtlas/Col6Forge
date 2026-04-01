@@ -283,16 +283,31 @@ pub fn exprRankForCallOrSubscript(
     const kind: ResolvedRefKind = deps.refKindIndex(self, @intFromPtr(expr_node)) orelse
         (if (sym.dims.len > 0) .subscript else .call);
     if (kind == .subscript) return sectionResultRank(self, call.args, deps);
+    if (sym.is_intrinsic or symbols_mod.isIntrinsicName(call.name)) {
+        if (intrinsicResultRank(self, call.name, call.args, deps)) |rank| return rank;
+        return 0;
+    }
     if (resolvedProcedureSig(self, call.name, false, visibleSingleTargetGenericSig(self, call.name))) |sig| {
-        if (sym.is_intrinsic or symbols_mod.isIntrinsicName(call.name)) {
-            if (intrinsicResultRank(self, call.name, call.args, deps)) |rank| return rank;
-        }
         if (sig.elemental and sig.result_rank == 0) {
             return elementalActualRank(self, call.args, deps);
         }
         return sig.result_rank;
     }
     return sym.dims.len;
+}
+
+pub fn exprRankForSubstring(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    sub: ast.SubstringExpr,
+    comptime deps: anytype,
+) usize {
+    const idx = self.ref_symbol_index.get(@intFromPtr(expr_node)) orelse
+        (symbols_mod.findSymbolIndex(self, sub.name) orelse return 0);
+    const sym = self.symbols.items[idx];
+    if (isArraySectionSubstring(sym, sub)) return 1;
+    if (sub.args.len != 0) return sectionResultRank(self, sub.args, deps);
+    return 0;
 }
 
 fn intrinsicResultRank(

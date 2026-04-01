@@ -25,6 +25,7 @@ pub const ParsedTypeSpec = struct {
     char_len_deferred: bool = false,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    assumed_type: bool = false,
     legacy_star_kind: bool = false,
     invalid_bare_double: bool = false,
 };

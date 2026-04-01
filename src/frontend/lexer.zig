@@ -12,6 +12,7 @@ pub const TokenKind = enum {
     string,
     hollerith,
     dot_op,
+    dotdot,
     power,
     l_paren,
     r_paren,
@@ -117,6 +118,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
         .string => "string",
         .hollerith => "hollerith",
         .dot_op => "dot_op",
+        .dotdot => "dotdot",
         .power => "power",
         .l_paren => "l_paren",
         .r_paren => "r_paren",
@@ -249,6 +251,11 @@ fn lexLogicalLineImpl(
         }
 
         if (ch == '.') {
+            if (i + 1 < text.len and text[i + 1] == '.') {
+                try tokens.append(makeToken(line, .dotdot, i, i + 2));
+                i += 2;
+                continue;
+            }
             var j = i + 1;
             while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
             var k = j;

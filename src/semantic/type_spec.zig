@@ -15,6 +15,7 @@ pub const TypeSpec = struct {
     char_len: ?usize = null,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    assumed_type: bool = false,
 
     pub fn fromKind(kind: ast.TypeKind) TypeSpec {
         return .{
@@ -44,6 +45,7 @@ pub const TypeSpec = struct {
         if (lowered_kind != .derived) {
             spec.derived_type_name = null;
             spec.polymorphic = false;
+            spec.assumed_type = false;
         }
         return spec;
     }
@@ -63,6 +65,16 @@ pub const TypeSpec = struct {
             return out;
         }
         out.polymorphic = polymorphic;
+        return out;
+    }
+
+    pub fn withAssumedType(self: TypeSpec, assumed_type: bool) TypeSpec {
+        var out = self;
+        if (out.lowered_kind != .derived) {
+            out.assumed_type = false;
+            return out;
+        }
+        out.assumed_type = assumed_type;
         return out;
     }
 

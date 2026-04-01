@@ -62,6 +62,8 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "SHAPE", .integer },
     .{ "SCAN", .integer },
     .{ "SIZE", .integer },
+    .{ "SIZEOF", .integer },
+    .{ "C_SIZEOF", .integer },
     .{ "VERIFY", .integer },
     .{ "ACHAR", .character },
     .{ "CHAR", .character },

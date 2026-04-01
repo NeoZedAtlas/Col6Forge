@@ -3,7 +3,10 @@ const ast = @import("../../../ast/nodes.zig");
 const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const procedure_pass = @import("../../../common/procedure_pass.zig");
+const free_form = @import("../../../frontend/free_form.zig");
+const parser = @import("../../../frontend/parser/mod.zig");
 const symbols = @import("../../symbol/mod.zig");
+const procedure_inference = @import("../../split/api/procedure_inference.zig");
 const context = @import("../context.zig");
 const constants = @import("../resolve_const.zig");
 const resolve_expr = @import("../resolve_expr.zig");
@@ -1444,6 +1447,14 @@ fn checkDataActualArgCompatibility(
     }
     const actual_rank = procedureActualExprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
+    if (actual_spec.assumed_type and !formal.type_spec.assumed_type) {
+        const message = std.fmt.allocPrint(
+            self.arena,
+            "Assumed-type actual argument at (1) requires that dummy argument '{s}' is of assumed type",
+            .{formal.name},
+        ) catch "Assumed-type actual argument requires assumed-type dummy";
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
+    }
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
     }
@@ -1677,38 +1688,7 @@ fn rangeExtent(self: *context.Context, dim: *ast.Expr, range: ast.DimRange) ?i64
     return tripletExtent(lower, upper, stride);
 }
 
-fn procedureActualExprRank(self: *context.Context, expr: *ast.Expr) usize {
-    return switch (expr.*) {
-        .call_or_subscript => |call| procedureActualCallExprRank(self, expr, call),
-        else => resolve_expr.exprRank(self, expr),
-    };
-}
-
-fn procedureActualCallExprRank(
-    self: *context.Context,
-    expr: *ast.Expr,
-    call: ast.CallOrSubscript,
-) usize {
-    if (resolve_symbols.isIntrinsicName(call.name)) {
-        var upper_buf: [64]u8 = undefined;
-        if (call.name.len <= upper_buf.len) {
-            for (call.name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
-            const upper = upper_buf[0..call.name.len];
-            if (std.mem.eql(u8, upper, "SUM")) {
-                if (call.args.len == 0) return 0;
-                const array_rank = resolve_expr.exprRank(self, call.args[0]);
-                if (call.args.len >= 2) return array_rank -| 1;
-                return 0;
-            }
-        }
-    }
-    if (resolvedProcedureSig(self, call.name)) |sig| {
-        if (sig.elemental and sig.result_rank == 0) {
-            var rank: usize = 0;
-            for (call.args) |arg| rank = @max(rank, resolve_expr.exprRank(self, arg));
-            return rank;
-        }
-    }
+pub fn procedureActualExprRank(self: *context.Context, expr: *ast.Expr) usize {
     return resolve_expr.exprRank(self, expr);
 }
 
@@ -1819,6 +1799,8 @@ fn procedureDummyDataArgMismatchMessage(
     if (formal.requires_descriptor != actual.requires_descriptor) return "Descriptor mismatch in argument";
     if (formal.pointer != actual.pointer) return "POINTER attribute mismatch in argument";
     if (formal.allocatable != actual.allocatable) return "ALLOCATABLE attribute mismatch in argument";
+    if (formal.type_spec.assumed_type) return null;
+    if (actual.type_spec.assumed_type) return "Type mismatch in argument";
     if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Polymorphic mismatch in argument";
     if (formal.type_spec.lowered_kind == .character and actual.type_spec.lowered_kind == .character) {
         if (formal.type_spec.char_len_kind != actual.type_spec.char_len_kind or formal.type_spec.char_len != actual.type_spec.char_len) {
@@ -1878,7 +1860,7 @@ fn checkKnownImplicitProcedureScalarActualArg(
     }
     if (!knownImplicitProcedureScalarTypeCheckEligibleActual(self, actual_expr)) return;
     if (formal.rank != 0) return;
-    if (formal.requires_descriptor or formal.pointer or formal.allocatable or formal.type_spec.polymorphic) return;
+    if (formal.requires_descriptor or formal.pointer or formal.allocatable or formal.type_spec.polymorphic or formal.type_spec.assumed_type) return;
 
     try resolve_expr.resolveExpr(self, actual_expr);
     if (resolve_expr.exprRank(self, actual_expr) != 0) return;
@@ -2261,12 +2243,14 @@ fn checkImplicitExternalCallConsistencyForExpr(
 
 fn shouldTrackImplicitExternalCall(self: *context.Context, name: []const u8) bool {
     if (resolve_symbols.hasDerivedType(self, name)) return false;
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return false;
     if (resolvedProcedureSig(self, name) != null) return false;
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return false;
     if (hasVisibleGenericInterface(self, name)) return false;
     if (leaf_helpers.lookupIntrinsicArity(self, name) != null) return false;
     if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
+        if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) return false;
         if (sym.is_intrinsic or sym.is_external) return false;
     }
     return true;
@@ -2474,8 +2458,16 @@ fn actualWholeArrayElementCount(self: *context.Context, expr: *ast.Expr) ?usize 
     }
 }
 
-fn sequenceAssociationAvailableElements(self: *context.Context, expr: *ast.Expr) CheckError!?usize {
+const unknown_sequence_association_elements = std.math.maxInt(usize);
+
+pub fn sequenceAssociationAvailableElements(self: *context.Context, expr: *ast.Expr) CheckError!?usize {
     switch (expr.*) {
+        .identifier => |name| {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse return null;
+            const dims = self.symbols.items[idx].dims;
+            if (dims.len == 0) return null;
+            return arrayElementCountForDims(self, dims) orelse unknown_sequence_association_elements;
+        },
         .call_or_subscript => |call| {
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse return null;
             const sym = self.symbols.items[idx];
@@ -2483,13 +2475,25 @@ fn sequenceAssociationAvailableElements(self: *context.Context, expr: *ast.Expr)
             const kind = self.ref_kind_index.get(@intFromPtr(expr)) orelse
                 (if (sym.dims.len > 0) symbols.ResolvedRefKind.subscript else symbols.ResolvedRefKind.call);
             if (kind != .subscript or call.args.len != sym.dims.len) return null;
+            if (sectionHasArraySelection(self, call.args)) {
+                if (sectionIsDefinitelyNoncontiguous(self, sym.dims, call.args)) return null;
+                return sectionElementCount(self, sym.dims, call.args) orelse unknown_sequence_association_elements;
+            }
             const total = arrayElementCountForDims(self, sym.dims) orelse return null;
             const offset = linearSubscriptOffset(self, sym.dims, call.args) orelse return null;
             return total -% offset;
         },
         .component => |comp| {
             const component = componentInfoForExpr(self, comp) orelse return null;
-            if (component.dims.len == 0 or comp.args.len != component.dims.len) return null;
+            if (component.dims.len == 0) return null;
+            if (comp.args.len == 0) {
+                return arrayElementCountForDims(self, component.dims) orelse unknown_sequence_association_elements;
+            }
+            if (comp.args.len != component.dims.len) return null;
+            if (sectionHasArraySelection(self, comp.args)) {
+                if (sectionIsDefinitelyNoncontiguous(self, component.dims, comp.args)) return null;
+                return sectionElementCount(self, component.dims, comp.args) orelse unknown_sequence_association_elements;
+            }
             const total = arrayElementCountForDims(self, component.dims) orelse return null;
             const offset = linearSubscriptOffset(self, component.dims, comp.args) orelse return null;
             return total -% offset;
@@ -2564,6 +2568,29 @@ fn linearSubscriptOffset(self: *context.Context, dims: []const *ast.Expr, args: 
     return offset;
 }
 
+fn sectionHasArraySelection(self: *context.Context, args: []const *ast.Expr) bool {
+    for (args) |arg| {
+        if (arg.* == .dim_range) return true;
+        if (resolve_expr.exprRank(self, arg) != 0) return true;
+    }
+    return false;
+}
+
+fn sectionElementCount(self: *context.Context, dims: []const *ast.Expr, args: []const *ast.Expr) ?usize {
+    if (args.len == 0 or args.len != dims.len) return null;
+    var total: usize = 1;
+    for (args, 0..) |arg, idx| {
+        const extent_i64 = switch (arg.*) {
+            .dim_range => |range| rangeExtent(self, dims[idx], range) orelse return null,
+            else => if (resolve_expr.exprRank(self, arg) == 0) 1 else return null,
+        };
+        if (extent_i64 < 0) return null;
+        const extent: usize = @intCast(extent_i64);
+        total = std.math.mul(usize, total, extent) catch return null;
+    }
+    return total;
+}
+
 fn constIntValue(self: *context.Context, expr: *ast.Expr) ?i64 {
     resolve_expr.resolveExpr(self, expr) catch return null;
     const value = constants.evalConst(self, expr) catch return null;
@@ -2611,6 +2638,136 @@ fn getLowercaseMapPtr(
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr;
     }
     return null;
+}
+
+test "procedure call assumed-type helpers keep array section rank and sequence count" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var known_fn_specs = std.StringHashMap(symbols.TypeSpec).init(a);
+    var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(a);
+    var known_host = std.StringHashMap(symbols.Symbol).init(a);
+    var known_host_derived = std.StringHashMap(context.Context.DerivedTypeInfo).init(a);
+    var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(a);
+    var known_host_abstract = std.StringHashMap(void).init(a);
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "s",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(a, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, &known_host_abstract, null, .{});
+    try ctx.initScopeTree();
+    try resolve_symbols.initImplicitDefaults(&ctx);
+
+    const dim_upper = try a.create(ast.Expr);
+    dim_upper.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
+    const dims = try a.alloc(*ast.Expr, 1);
+    dims[0] = dim_upper;
+
+    var sym = symbols.Symbol.init("a", symbols.TypeSpec.fromResolvedKind(.real, .real, null), dims, .variable, .local);
+    sym.type_explicit = true;
+    _ = try resolve_symbols.internSymbol(&ctx, sym);
+
+    const lower = try a.create(ast.Expr);
+    lower.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const upper = try a.create(ast.Expr);
+    upper.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+    const range = try a.create(ast.Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = range;
+    var section = ast.Expr{
+        .call_or_subscript = .{
+            .name = "a",
+            .args = args,
+        },
+    };
+
+    try resolve_expr.resolveExpr(&ctx, &section);
+    try testing.expectEqual(@as(usize, 1), procedureActualExprRank(&ctx, &section));
+    try testing.expectEqual(@as(?usize, 2), try sequenceAssociationAvailableElements(&ctx, &section));
+}
+
+test "procedure call assumed-type helpers keep SHAPE rank one" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var known_fn_specs = std.StringHashMap(symbols.TypeSpec).init(a);
+    var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(a);
+    var known_host = std.StringHashMap(symbols.Symbol).init(a);
+    var known_host_derived = std.StringHashMap(context.Context.DerivedTypeInfo).init(a);
+    var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(a);
+    var known_host_abstract = std.StringHashMap(void).init(a);
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "s",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(a, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, &known_host_abstract, null, .{});
+    try ctx.initScopeTree();
+    try resolve_symbols.initImplicitDefaults(&ctx);
+
+    const dim1 = try a.create(ast.Expr);
+    dim1.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
+    const dim2 = try a.create(ast.Expr);
+    dim2.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
+    const dims = try a.alloc(*ast.Expr, 2);
+    dims[0] = dim1;
+    dims[1] = dim2;
+
+    var sym = symbols.Symbol.init("a", symbols.TypeSpec.fromResolvedKind(.real, .real, null), dims, .variable, .local);
+    sym.type_explicit = true;
+    _ = try resolve_symbols.internSymbol(&ctx, sym);
+
+    const actuals = try a.alloc(*ast.Expr, 1);
+    const ident = try a.create(ast.Expr);
+    ident.* = .{ .identifier = "a" };
+    actuals[0] = ident;
+    var shape_call = ast.Expr{
+        .call_or_subscript = .{
+            .name = "shape",
+            .args = actuals,
+        },
+    };
+
+    try resolve_expr.resolveExpr(&ctx, &shape_call);
+    try testing.expectEqual(@as(usize, 1), procedureActualExprRank(&ctx, &shape_call));
+}
+
+test "procedure call assumed-type inference keeps assumed-size dummy rank" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const source =
+        "subroutine foo(x)\n" ++
+        "  type(*) :: x(*)\n" ++
+        "end subroutine foo\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    const sigs = try procedure_inference.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+    try testing.expectEqual(@as(usize, 1), sigs.len);
+    try testing.expectEqual(@as(usize, 1), sigs[0].rank);
+    try testing.expect(!sigs[0].requires_descriptor);
+    try testing.expect(sigs[0].type_spec.assumed_type);
 }
 
 fn lookupProcedureDeclaratorSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {

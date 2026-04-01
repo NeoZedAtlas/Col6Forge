@@ -205,6 +205,14 @@ pub fn parseStatementWithDiagnostics(
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
+    if (select_type.isSelectRankStart(lp)) {
+        var stmt = select_type.parseSelectRankStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
+            return err;
+        };
+        setStmtSourceIfMissing(&stmt, line);
+        return stmt;
+    }
     if (select_type.isSelectTypeStart(lp)) {
         var stmt = select_type.parseSelectTypeStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
             if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);

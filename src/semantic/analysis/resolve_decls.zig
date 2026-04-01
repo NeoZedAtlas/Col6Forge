@@ -18,8 +18,8 @@ pub const DeclarationAspect = enum {
 };
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
-    var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector, decl.polymorphic);
-    resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
+    var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector, decl.polymorphic, decl.assumed_type);
+    resolved_type = resolved_type.withPolymorphic(decl.polymorphic).withAssumedType(decl.assumed_type);
     for (decl.items) |item| {
         var effective_type = resolved_type;
         var effective_item = item;
@@ -520,6 +520,7 @@ fn functionResultMismatchMessage(
     if (declared.lowered_kind != known.lowered_kind) return "Return type mismatch of function";
     if (!compatibleKindValue(declared.kind_value, known.kind_value)) return "Return type mismatch of function";
     if (declared.polymorphic != known.polymorphic) return "Return type mismatch of function";
+    if (declared.assumed_type != known.assumed_type) return "Return type mismatch of function";
     if (declared.lowered_kind == .derived) {
         const declared_name = declared.derived_type_name orelse return "Return type mismatch of function";
         const known_name = known.derived_type_name orelse return "Return type mismatch of function";
@@ -591,6 +592,7 @@ fn resolveProcedureDeclarator(
                 type_spec.derived_type_name,
                 type_spec.kind_selector,
                 type_spec.polymorphic,
+                type_spec.assumed_type,
             ),
             .explicit_type = true,
             .kind = .function,
@@ -604,10 +606,12 @@ pub fn resolvedDeclTypeSpec(
     derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
     polymorphic: bool,
+    assumed_type: bool,
 ) !symbols.TypeSpec {
     if (base_type_kind == .derived) {
         const name = derived_type_name orelse {
             if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
+            if (assumed_type) return symbols.TypeSpec.fromKind(.derived).withAssumedType(true);
             return error.UnexpectedTypeDecl;
         };
         if (!symbols_mod.hasDerivedType(self, name)) {

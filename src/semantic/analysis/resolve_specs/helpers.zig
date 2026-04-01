@@ -118,10 +118,12 @@ pub fn resolvedDeclTypeSpec(
     derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
     polymorphic: bool,
+    assumed_type: bool,
 ) !symbols.TypeSpec {
     if (base_type_kind == .derived) {
         const name = derived_type_name orelse {
             if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
+            if (assumed_type) return symbols.TypeSpec.fromKind(.derived).withAssumedType(true);
             return error.UnexpectedTypeDecl;
         };
         if (!symbols_mod.hasDerivedType(self, name)) {

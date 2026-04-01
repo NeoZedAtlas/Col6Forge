@@ -89,6 +89,7 @@ pub fn parseProcedureInterface(lp: *LineParser, arena: std.mem.Allocator) !ast.P
             .kind_selector = parsed.kind_selector,
             .derived_type_name = parsed.derived_type_name,
             .polymorphic = parsed.polymorphic,
+            .assumed_type = parsed.assumed_type,
         } };
     }
 
@@ -139,6 +140,10 @@ pub fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec 
     }
     if (lp.consumeKeyword("TYPE")) {
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .type_kind = .derived, .derived_type_name = null, .assumed_type = true };
+        }
         const name = lp.readName(arena) orelse return error.MissingName;
         if (lp.consume(.l_paren)) try declarators.consumeBalancedParens(lp);
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;

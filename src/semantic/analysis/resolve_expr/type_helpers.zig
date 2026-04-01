@@ -16,9 +16,9 @@ pub fn resolveArrayConstructorTypeSpec(
     if (type_spec.type_kind == .derived) {
         if (type_spec.derived_type_name) |derived_name| {
             if (!symbols_mod.hasDerivedType(self, derived_name)) return error.UnexpectedTypeDecl;
-            return symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic);
+            return symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic).withAssumedType(type_spec.assumed_type);
         }
-        return symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
+        return symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic).withAssumedType(type_spec.assumed_type);
     }
     const selector_value = if (type_spec.kind_selector) |selector| blk: {
         const const_value = (try constants.evalConst(self, selector)) orelse {
@@ -35,7 +35,8 @@ pub fn resolveArrayConstructorTypeSpec(
         break :blk const_value;
     } else null;
     return type_kind_selector.resolveSpecWithConst(type_spec.type_kind, type_spec.kind_selector, selector_value)
-        .withPolymorphic(type_spec.polymorphic);
+        .withPolymorphic(type_spec.polymorphic)
+        .withAssumedType(type_spec.assumed_type);
 }
 
 fn emitArrayConstructorKindSelectorDiagnostic(self: *context.Context, selector: *ast.Expr) void {

@@ -747,6 +747,7 @@ fn bindKnownDataUseImportFromModule(
                         type_decl.derived_type_name,
                         type_decl.kind_selector,
                         type_decl.polymorphic,
+                        type_decl.assumed_type,
                     );
                     try decls.applyDeclarator(
                         self,

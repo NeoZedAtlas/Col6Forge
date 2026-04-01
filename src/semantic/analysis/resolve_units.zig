@@ -448,7 +448,7 @@ fn resolveDerivedProcedureTypeSpec(
     if (type_spec.type_kind == .derived) {
         if (type_spec.derived_type_name) |derived_name| {
             if (std.ascii.eqlIgnoreCase(derived_name, enclosing_derived_name)) {
-                return symbols.TypeSpec.fromDerived(enclosing_derived_name).withPolymorphic(type_spec.polymorphic);
+                return symbols.TypeSpec.fromDerived(enclosing_derived_name).withPolymorphic(type_spec.polymorphic).withAssumedType(type_spec.assumed_type);
             }
         }
     }
@@ -458,6 +458,7 @@ fn resolveDerivedProcedureTypeSpec(
         type_spec.derived_type_name,
         type_spec.kind_selector,
         type_spec.polymorphic,
+        type_spec.assumed_type,
     );
 }
 
