@@ -55,9 +55,6 @@ jobs:
       - name: Compile toolchain runners
         run: zig build tools-check
 
-      - name: Architecture audit
-        run: zig build architecture-audit
-
       - name: Unit tests
         run: zig build test
 
@@ -65,6 +62,31 @@ jobs:
         env:
           COL6FORGE_LEX_FUZZ_ITERS: "20000"
         run: zig build fuzz
+
+  architecture-audit:
+    name: Architecture Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+
+      - name: Architecture audit
+        run: zig build architecture-audit
 
   golden:
     name: Golden
