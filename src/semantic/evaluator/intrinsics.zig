@@ -37,6 +37,7 @@ const ConstCallKind = enum {
     ceiling,
     int,
     size,
+    index,
     extends_type_of,
 };
 
@@ -76,6 +77,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "CEILING", .ceiling },
     .{ "INT", .int },
     .{ "SIZE", .size },
+    .{ "INDEX", .index },
     .{ "EXTENDS_TYPE_OF", .extends_type_of },
 });
 
@@ -313,6 +315,27 @@ pub fn evalConstCall(
             } else null;
             return .{ .integer = res.arrayExtent(name, dim) orelse return null };
         },
+        .index => {
+            if (call.args.len < 2 or call.args.len > 3) return null;
+            const string_value = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const substring_value = (try eval_const_fn(call.args[1], resolver)) orelse return null;
+            const string_bytes = switch (string_value) {
+                .string => |bytes| bytes,
+                else => return null,
+            };
+            const substring_bytes = switch (substring_value) {
+                .string => |bytes| bytes,
+                else => return null,
+            };
+            const back = if (call.args.len == 3) blk: {
+                const back_value = (try eval_const_fn(call.args[2], resolver)) orelse return null;
+                break :blk switch (back_value) {
+                    .logical => |value| value,
+                    else => return null,
+                };
+            } else false;
+            return .{ .integer = evalConstIndex(string_bytes, substring_bytes, back) };
+        },
         .extends_type_of => {
             if (call.args.len != 2) return null;
             const res = resolver orelse return null;
@@ -321,6 +344,23 @@ pub fn evalConstCall(
             return .{ .logical = evalConstExtendsTypeOf(call.args[0], lhs, call.args[1], rhs, res) orelse return null };
         },
     }
+}
+
+fn evalConstIndex(string_bytes: []const u8, substring_bytes: []const u8, back: bool) i64 {
+    if (substring_bytes.len == 0) {
+        return if (back)
+            @intCast(string_bytes.len + 1)
+        else
+            1;
+    }
+    const idx = if (back)
+        std.mem.lastIndexOf(u8, string_bytes, substring_bytes)
+    else
+        std.mem.indexOf(u8, string_bytes, substring_bytes);
+    return if (idx) |value|
+        @intCast(value + 1)
+    else
+        0;
 }
 
 fn constValuePrefersDouble(value: ConstValue) bool {

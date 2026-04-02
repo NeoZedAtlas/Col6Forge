@@ -96,6 +96,37 @@ pub fn installFunctionLocals(
             continue;
         }
         if (sym.isCharacter()) {
+            if (sym.effectiveCharLenKind() == .deferred) {
+                const len_i32 = try emitDeferredCharacterLocalLen(ctx, builder, sym);
+                try ctx.char_arg_lens.put(sym.name, len_i32);
+
+                const len_i64 = if (len_i32.ty == .i64)
+                    len_i32
+                else
+                    try expression.coerce(ctx, builder, len_i32, .i64);
+                const alloca_name = try ctx.nextTemp();
+                if (sym.dims.len > 0) {
+                    const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                        error.ArrayDimNotConstant => null,
+                        else => return err,
+                    };
+                    const total = if (elem_count) |count|
+                        try expression.emitMul(ctx, builder, len_i64, constI64(ctx, @intCast(count)))
+                    else blk: {
+                        const dyn_count = try emitDynamicElemCount(ctx, builder, sym);
+                        const dyn_count_i64 = if (dyn_count.ty == .i64)
+                            dyn_count
+                        else
+                            try expression.coerce(ctx, builder, dyn_count, .i64);
+                        break :blk try expression.emitMul(ctx, builder, len_i64, dyn_count_i64);
+                    };
+                    try builder.allocaArrayValue(alloca_name, .i8, total);
+                } else {
+                    try builder.allocaArrayValue(alloca_name, .i8, len_i64);
+                }
+                try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
+                continue;
+            }
             const char_len = try common.requireConstantCharacterLen(sym);
             const alloca_name = try ctx.nextTemp();
             if (sym.dims.len > 0) {
@@ -255,6 +286,34 @@ fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) E
         total = try expression.emitMul(ctx, builder, total, extent);
     }
     return total;
+}
+
+fn emitDeferredCharacterLocalLen(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!ValueRef {
+    if (findLocalCharacterLenExpr(ctx.unit, sym.name)) |len_expr| {
+        var len_val = try expression.emitExpr(ctx, builder, len_expr);
+        if (len_val.ty != .i32) len_val = try expression.coerce(ctx, builder, len_val, .i32);
+        return len_val;
+    }
+    if (ctx.char_arg_lens.get(sym.name)) |len_val| {
+        return if (len_val.ty == .i32) len_val else try expression.coerce(ctx, builder, len_val, .i32);
+    }
+    return try ctx.constI32(1);
+}
+
+fn findLocalCharacterLenExpr(unit: ast.ProgramUnit, name: []const u8) ?*ast.Expr {
+    var decl_idx = unit.decls.len;
+    while (decl_idx > 0) {
+        decl_idx -= 1;
+        const decl = unit.decls[decl_idx];
+        if (decl != .type_decl or decl.type_decl.type_kind != .character) continue;
+        var item_idx = decl.type_decl.items.len;
+        while (item_idx > 0) {
+            item_idx -= 1;
+            const item = decl.type_decl.items[item_idx];
+            if (std.ascii.eqlIgnoreCase(item.name, name)) return item.char_len;
+        }
+    }
+    return null;
 }
 
 fn installDeferredArrayDescriptor(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!void {

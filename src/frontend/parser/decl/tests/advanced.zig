@@ -479,3 +479,79 @@ test "parseDecl accepts free-form POINTER declarator initialization with null in
         else => return error.UnexpectedToken,
     }
 }
+
+test "parseDecl accepts fixed-form legacy Cray POINTER pair syntax" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      POINTER(PTR_X, X)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("PTR_X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl accepts free-form legacy Cray POINTER pair list syntax" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "pointer(ptr1, x1), (ptr2, x2)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqualStrings("ptr1", td.items[0].name);
+            try testing.expectEqualStrings("ptr2", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl accepts CODIMENSION attribute syntax and continues to declarator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "character(*), dimension(*), codimension[*] :: x\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("x", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}

@@ -80,6 +80,7 @@ const emitIntrinsicAll = arrays.emitIntrinsicAll;
 const emitIntrinsicSum = arrays.emitIntrinsicSum;
 const emitIntrinsicCount = arrays.emitIntrinsicCount;
 const emitIntrinsicLbound = arrays.emitIntrinsicLbound;
+const emitIntrinsicRank = arrays.emitIntrinsicRank;
 const emitIntrinsicSize = arrays.emitIntrinsicSize;
 const emitIntrinsicUbound = arrays.emitIntrinsicUbound;
 const emitIntrinsicAllocated = arrays.emitIntrinsicAllocated;
@@ -150,6 +151,7 @@ const IntrinsicTag = enum {
     kind_,
     len_trim,
     lbound,
+    rank,
     trim_,
     tan,
     dtan,
@@ -268,6 +270,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "kind", .kind_ },
     .{ "len_trim", .len_trim },
     .{ "lbound", .lbound },
+    .{ "rank", .rank },
     .{ "trim", .trim_ },
     .{ "tan", .tan },
     .{ "dtan", .dtan },
@@ -416,6 +419,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .kind_ => return emitIntrinsicKind(ctx, args),
         .len_trim => return shared.emitIntrinsicLenTrim(ctx, builder, args),
         .lbound => return emitIntrinsicLbound(ctx, builder, args),
+        .rank => return emitIntrinsicRank(ctx, builder, args),
         .trim_ => return emitIntrinsicTrim(ctx, builder, args),
         .tan => return emitTan(ctx, builder, args),
         .dtan => return emitDoubleUnaryLibm(ctx, builder, "tan", args),

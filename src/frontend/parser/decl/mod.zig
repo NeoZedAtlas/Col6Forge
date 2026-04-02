@@ -105,6 +105,17 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("POINTER")) {
         _ = lp.consumeKeyword("POINTER");
+        // Support legacy Cray pointer declaration syntax:
+        //   POINTER(ptr, pointee)
+        //   POINTER(ptr1, pointee1), (ptr2, pointee2)
+        // We materialize pointer variables as INTEGER declarations so they are
+        // visible under IMPLICIT NONE and later semantic/type checks.
+        if (lp.peekIs(.l_paren)) {
+            return .{ .type_decl = .{
+                .type_kind = .integer,
+                .items = try parseCrayPointerDeclarators(lp, arena),
+            } };
+        }
         _ = declarators.consumeDoubleColon(lp);
         return .{ .dimension = .{ .items = try declarators.parseDeclarators(lp, arena, .{}, null, true), .pointer = true } };
     }
@@ -228,6 +239,46 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .value_attr = attrs.value_attr,
         .volatile_attr = attrs.volatile_attr,
     } };
+}
+
+fn parseCrayPointerDeclarators(lp: *LineParser, arena: std.mem.Allocator) ![]ast.Declarator {
+    var out = std.array_list.Managed(ast.Declarator).init(arena);
+    while (true) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const pointer_name = lp.readName(arena) orelse return error.MissingName;
+        try out.append(.{
+            .name = pointer_name,
+            .dims = &.{},
+            .char_len = null,
+        });
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+
+        // Pointee name is required, but pointee typing/shape is handled by the
+        // regular declaration stream.
+        _ = lp.readName(arena) orelse return error.MissingName;
+        if (lp.peekIs(.l_paren)) try consumeBalancedParens(lp);
+
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        if (!lp.consume(.comma)) break;
+    }
+    return out.toOwnedSlice();
+}
+
+fn consumeBalancedParens(lp: *LineParser) !void {
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var depth: usize = 1;
+    while (depth > 0) {
+        if (lp.consume(.l_paren)) {
+            depth += 1;
+            continue;
+        }
+        if (lp.consume(.r_paren)) {
+            depth -= 1;
+            continue;
+        }
+        _ = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+    }
 }
 
 pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast.AllocateTypeSpec {

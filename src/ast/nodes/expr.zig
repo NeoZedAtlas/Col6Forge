@@ -51,6 +51,7 @@ pub const DimRange = struct {
     upper: *Expr,
     stride: ?*Expr = null,
     assumed_shape: bool = false,
+    from_dotdot: bool = false,
 };
 
 pub const Literal = struct {

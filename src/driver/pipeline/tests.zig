@@ -852,6 +852,98 @@ test "runPipeline reports implicit external argument-count mismatch with related
     try testing.expectEqualStrings("previous implicit external call here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline accepts whole-array component actuals for contained dummy arrays" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "program test\n" ++
+        "  type t\n" ++
+        "    integer :: i\n" ++
+        "    integer :: j\n" ++
+        "  end type\n" ++
+        "  type (t) :: a(5)\n" ++
+        "  call sub('one',a%j)\n" ++
+        "  call sub('two',a%i)\n" ++
+        "contains\n" ++
+        "  subroutine sub(key,a)\n" ++
+        "    integer, intent(out) :: a(:)\n" ++
+        "    character(*), intent(in) :: key\n" ++
+        "    a = 1\n" ++
+        "  end subroutine\n" ++
+        "end program\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "whole_array_component_actuals.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_capture.bag);
+    try diag_capture.expectNone();
+}
+
+test "runPipeline accepts repository aliasing_dummy_2 regression file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/aliasing_dummy_2.f90",
+        .llvm,
+        .{},
+        &diag_capture.bag,
+    );
+    try diag_capture.expectNone();
+}
+
+test "runPipeline accepts repository auto_char_len_1 regression file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/auto_char_len_1.f90",
+        .llvm,
+        .{},
+        &diag_capture.bag,
+    );
+    try diag_capture.expectNone();
+}
+
+test "runPipeline accepts automatic character array local from dummy length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s(x)\n" ++
+        "  character(*), intent(in) :: x(:)\n" ++
+        "  character(len(x)) :: tmp(size(x))\n" ++
+        "  tmp = x\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "automatic_char_array_local.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_capture = PipelineDiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        file_path,
+        .llvm,
+        .{},
+        &diag_capture.bag,
+    );
+    try diag_capture.expectNone();
+}
+
 test "runPipeline reports procedure actual mismatch with actual procedure declaration source" {
     const testing = std.testing;
     const allocator = testing.allocator;

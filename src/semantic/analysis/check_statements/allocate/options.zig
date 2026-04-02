@@ -57,6 +57,16 @@ pub fn checkAllocationOptions(
                 if (saw_stat) return duplicateTag(self, option, "Redundant STAT");
                 saw_stat = true;
                 if (deps.identifierRequiresArgumentList(self, option.value)) return missingArgList(self, option);
+                if (isParameterInquiryExpr(option.value)) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.assignment_type_mismatch.code,
+                        "parameter inquiry",
+                        option.source.text,
+                    );
+                    return error.AssignmentTypeMismatch;
+                }
                 if (value_ty != .integer or exprRank(self, option.value, deps) != 0) {
                     self.setDiagnostic(
                         if (option.source.line == 0) 1 else option.source.line,
@@ -262,6 +272,17 @@ fn targetExprMatchesName(target: *ast.Expr, name: []const u8) bool {
         .identifier => std.ascii.eqlIgnoreCase(target.identifier, name),
         .component => targetExprMatchesName(target.component.base, name),
         .call_or_subscript => std.ascii.eqlIgnoreCase(target.call_or_subscript.name, name),
+        else => false,
+    };
+}
+
+fn isParameterInquiryExpr(expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .component => |comp| {
+            if (comp.args.len != 0) return false;
+            if (std.ascii.eqlIgnoreCase(comp.name, "len") or std.ascii.eqlIgnoreCase(comp.name, "kind")) return true;
+            return isParameterInquiryExpr(comp.base);
+        },
         else => false,
     };
 }

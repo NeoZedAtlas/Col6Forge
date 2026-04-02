@@ -60,7 +60,13 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
         );
         return shared.makeExprNode(
             arena,
-            .{ .dim_range = .{ .lower = null, .upper = upper, .stride = null, .assumed_shape = true } },
+            .{ .dim_range = .{
+                .lower = null,
+                .upper = upper,
+                .stride = null,
+                .assumed_shape = true,
+                .from_dotdot = true,
+            } },
             start_source,
         );
     }

@@ -49,6 +49,7 @@ pub const AssignLabelStmt = nodes.AssignLabelStmt;
 pub const UseStmt = nodes.UseStmt;
 pub const UseOnlyItem = nodes.UseOnlyItem;
 pub const CallStmt = nodes.CallStmt;
+pub const ActualArgExpr = nodes.ActualArgExpr;
 pub const CallArg = nodes.CallArg;
 pub const ReturnStmt = nodes.ReturnStmt;
 pub const EntryStmt = nodes.EntryStmt;

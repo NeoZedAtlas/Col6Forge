@@ -525,6 +525,7 @@ fn exprArgMatchesGenericFormal(
     const actual_spec = resolve_expr.exprTypeSpec(self, actual_expr) catch return false;
     const actual_rank = resolve_expr.exprRank(self, actual_expr);
     if (!genericActualTypeCompatible(self, formal.type_spec, actual_spec)) return false;
+    if (formal.assumed_rank) return true;
     if (formal.rank == 0 and actual_rank > 0 and sig.elemental) return true;
     return formal.rank == actual_rank;
 }

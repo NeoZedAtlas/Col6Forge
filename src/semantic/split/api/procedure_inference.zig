@@ -31,6 +31,7 @@ pub fn inferProcedureArgSigsWithKnown(
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .assumed_rank = dummyArgIsAssumedRank(dims),
             .shape_signature = try shapeSignatureForDims(arena, dims),
             .pointer = decl_info.pointer,
             .allocatable = decl_info.allocatable,
@@ -228,6 +229,7 @@ pub fn inferInterfaceProcedureArgSigs(
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .assumed_rank = dummyArgIsAssumedRank(dims),
             .shape_signature = try shapeSignatureForDims(arena, dims),
             .pointer = decl_info.pointer,
             .allocatable = decl_info.allocatable,
@@ -237,6 +239,7 @@ pub fn inferInterfaceProcedureArgSigs(
             .contiguous = decl_info.contiguous,
             .value_attr = decl_info.value_attr,
             .volatile_attr = decl_info.volatile_attr,
+            .no_arg_check = declarator != null and declarator.?.no_arg_check,
             .is_procedure = decl_info.interface_procedure != null or declarator_sig != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind
@@ -677,7 +680,10 @@ fn inferDummyArgTypeSpec(
     name: []const u8,
     declarator: ?ast.Declarator,
 ) symbols.TypeSpec {
-    for (decls) |decl| {
+    var decl_idx = decls.len;
+    while (decl_idx > 0) {
+        decl_idx -= 1;
+        const decl = decls[decl_idx];
         switch (decl) {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
@@ -897,6 +903,14 @@ fn dummyArgRequiresDescriptor(dims: []const *ast.Expr) bool {
         }
     }
     return false;
+}
+
+fn dummyArgIsAssumedRank(dims: []const *ast.Expr) bool {
+    if (dims.len != 1) return false;
+    return switch (dims[0].*) {
+        .dim_range => |range| range.from_dotdot,
+        else => false,
+    };
 }
 
 pub fn shapeSignatureForDims(arena: std.mem.Allocator, dims: []const *ast.Expr) ![]const []const u8 {

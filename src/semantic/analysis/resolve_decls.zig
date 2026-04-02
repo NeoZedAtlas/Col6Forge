@@ -31,11 +31,11 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
         }
         try applyDeclarator(self, effective_type, effective_item, .local, true, decl.allocatable, decl.pointer, decl.contiguous);
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
-        try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
-        try validateDeclaratorInitializer(self, item.init);
         if (decl.external) {
             self.symbols.items[idx].is_external = true;
         }
+        try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
+        try validateDeclaratorInitializer(self, item.init);
     }
 }
 
@@ -235,8 +235,7 @@ pub fn applyDeclarator(
         if (try constants.evalConst(self, len_expr)) |value| {
             switch (value) {
                 .integer => |int_val| {
-                    if (int_val < 0) return error.InvalidCharLen;
-                    length = @intCast(int_val);
+                    length = if (int_val < 0) 0 else @as(usize, @intCast(int_val));
                 },
                 .real, .complex, .logical, .string => {
                     if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
@@ -244,13 +243,13 @@ pub fn applyDeclarator(
                 },
             }
         } else {
-            if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
-            // Keep deferred/assumed length only where the rest of the semantic
-            // pipeline already supports unknown CHARACTER size.
-            if (allowsDeferredCharacterLength(self, sym.*)) {
+            // Explicit LEN expressions inside procedures may denote automatic
+            // CHARACTER objects whose length is only known at entry.
+            if (allowsNonConstantCharacterLengthExpr(self, sym.*)) {
                 sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
                 return;
             }
+            if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
             return error.InvalidCharLen;
         }
     } else if (!explicit_type and sym.effectiveCharLenKind() != .constant) {
@@ -473,7 +472,7 @@ fn validateKnownFunctionResultDeclaration(
         if (std.ascii.eqlIgnoreCase(sym.name, result_name)) return;
     }
     if (self.unit.kind == .function and self.unit.owner_name == null and self.unit.prelude_decl_count == 0) return;
-    if (self.unit.kind != .function and !procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name)) return;
+    if (self.unit.kind != .function and !procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name) and !sym.is_external) return;
     const known_sig = symbols_mod.lookupKnownProcedureSig(self, sym.name) orelse return;
     if (known_sig.kind != .function) return;
     const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;
@@ -516,6 +515,7 @@ fn functionResultMismatchMessage(
     prefer_length_message: bool,
 ) ?[]const u8 {
     if (declared.lowered_kind == .character and known.lowered_kind == .character) {
+        if (declared.char_len_kind != .constant and known.char_len_kind != .constant) return null;
         if (declared.char_len_kind != known.char_len_kind or declared.char_len != known.char_len) {
             return if (prefer_length_message) "Character length mismatch" else "Character length mismatch in function result";
         }
@@ -547,6 +547,12 @@ fn allowsDeferredCharacterLength(self: *context.Context, sym: symbols.Symbol) bo
     if (sym.is_allocatable) return true;
     if (sym.is_pointer) return true;
     return false;
+}
+
+fn allowsNonConstantCharacterLengthExpr(self: *context.Context, sym: symbols.Symbol) bool {
+    if (allowsDeferredCharacterLength(self, sym)) return true;
+    if (sym.storage != .local) return false;
+    return self.unit.kind == .subroutine or self.unit.kind == .function;
 }
 
 const ResolvedProcedureDecl = struct {

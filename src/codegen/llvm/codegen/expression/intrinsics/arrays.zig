@@ -1920,11 +1920,12 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     var result_ty = ctx.defaultIntegerIRType();
 
     if (args.len == 2) {
-        const second = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
-        if (second >= 1 and second <= rank) {
-            requested_dim = @intCast(second - 1);
-        } else {
-            result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+        if (evalConstIntArg(ctx, args[1])) |second| {
+            if (second >= 1 and second <= rank) {
+                requested_dim = @intCast(second - 1);
+            } else {
+                result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+            }
         }
     } else if (args.len == 3) {
         const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
@@ -1932,6 +1933,10 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
         requested_dim = @intCast(dim_value - 1);
         const kind_value = evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType;
         result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
+    }
+
+    if (requested_dim == null and args.len >= 2) {
+        return emitIntrinsicSizeDynamicDim(ctx, builder, subject, args[1], rank, result_ty);
     }
 
     var value = blk: {
@@ -1959,12 +1964,59 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     return value;
 }
 
+fn emitIntrinsicSizeDynamicDim(
+    ctx: *Context,
+    builder: anytype,
+    subject: SizeArraySubject,
+    dim_expr: *Expr,
+    rank: usize,
+    result_ty: IRType,
+) EmitError!ValueRef {
+    var dim_value = try dispatch.emitExpr(ctx, builder, dim_expr);
+    if (dim_value.ty != .i64) dim_value = try casting.coerce(ctx, builder, dim_value, .i64);
+
+    var result = utils.zeroValue(result_ty);
+    var dim_index: usize = 0;
+    while (dim_index < rank) : (dim_index += 1) {
+        var candidate = switch (subject) {
+            .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+            .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
+        };
+        if (candidate.ty != result_ty) candidate = try casting.coerce(ctx, builder, candidate, result_ty);
+
+        const cond_name = try ctx.nextTemp();
+        try builder.compare(cond_name, "icmp", "eq", .i64, dim_value, try ctx.constI64(@intCast(dim_index + 1)));
+        const next_name = try ctx.nextTemp();
+        try builder.select(next_name, result_ty, .{ .name = cond_name, .ty = .i1, .is_ptr = false }, candidate, result);
+        result = .{ .name = next_name, .ty = result_ty, .is_ptr = false };
+    }
+    return result;
+}
+
 pub fn emitIntrinsicLbound(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     return emitIntrinsicBoundsScalar(ctx, builder, args, true);
 }
 
 pub fn emitIntrinsicUbound(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     return emitIntrinsicBoundsScalar(ctx, builder, args, false);
+}
+
+pub fn emitIntrinsicRank(ctx: *Context, _: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const subject = lookupArraySubjectForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+    return switch (subject) {
+        .symbol => |sym| blk: {
+            if (ctx.runtimeArrayDescriptor(sym.name)) |desc| {
+                break :blk try ctx.constDefaultInteger(@intCast(desc.rank));
+            }
+            break :blk try ctx.constDefaultInteger(@intCast(sym.dims.len));
+        },
+        .component => |comp| blk: {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+            break :blk try ctx.constDefaultInteger(@intCast(component.dims.len));
+        },
+    };
 }
 
 fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
@@ -2019,11 +2071,12 @@ fn emitIntrinsicBoundsScalar(ctx: *Context, builder: anytype, args: []*Expr, com
     var result_ty = ctx.defaultIntegerIRType();
 
     if (args.len == 2) {
-        const second = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
-        if (second >= 1 and second <= rank) {
-            requested_dim = @intCast(second - 1);
-        } else {
-            result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+        if (evalConstIntArg(ctx, args[1])) |second| {
+            if (second >= 1 and second <= rank) {
+                requested_dim = @intCast(second - 1);
+            } else {
+                result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+            }
         }
     } else if (args.len == 3) {
         const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
@@ -2031,6 +2084,10 @@ fn emitIntrinsicBoundsScalar(ctx: *Context, builder: anytype, args: []*Expr, com
         requested_dim = @intCast(dim_value - 1);
         const kind_value = evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType;
         result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
+    }
+
+    if (requested_dim == null and args.len >= 2) {
+        return emitIntrinsicBoundsDynamicDim(ctx, builder, subject, args[1], rank, result_ty, use_lower);
     }
 
     const dim_index = requested_dim orelse return error.InvalidIntrinsicCall;
@@ -2052,6 +2109,52 @@ fn emitIntrinsicBoundsScalar(ctx: *Context, builder: anytype, args: []*Expr, com
     };
     if (value.ty != result_ty) value = try casting.coerce(ctx, builder, value, result_ty);
     return value;
+}
+
+fn emitIntrinsicBoundsDynamicDim(
+    ctx: *Context,
+    builder: anytype,
+    subject: SizeArraySubject,
+    dim_expr: *Expr,
+    rank: usize,
+    result_ty: IRType,
+    comptime use_lower: bool,
+) EmitError!ValueRef {
+    var dim_value = try dispatch.emitExpr(ctx, builder, dim_expr);
+    if (dim_value.ty != .i64) dim_value = try casting.coerce(ctx, builder, dim_value, .i64);
+
+    var result = if (use_lower)
+        try casting.coerce(ctx, builder, try oneIndexValue(ctx), result_ty)
+    else
+        utils.zeroValue(result_ty);
+
+    var dim_index: usize = 0;
+    while (dim_index < rank) : (dim_index += 1) {
+        var candidate = switch (subject) {
+            .symbol => |sym| if (use_lower)
+                try memory.emitSymbolDimLower(ctx, builder, sym, dim_index)
+            else blk: {
+                const lower = try memory.emitSymbolDimLower(ctx, builder, sym, dim_index);
+                const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+                break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
+            },
+            .component => |comp| if (use_lower)
+                try memory.emitComponentDimLower(ctx, builder, comp, dim_index)
+            else blk: {
+                const lower = try memory.emitComponentDimLower(ctx, builder, comp, dim_index);
+                const extent = try emitComponentDimExtentValue(ctx, builder, comp, dim_index);
+                break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
+            },
+        };
+        if (candidate.ty != result_ty) candidate = try casting.coerce(ctx, builder, candidate, result_ty);
+
+        const cond_name = try ctx.nextTemp();
+        try builder.compare(cond_name, "icmp", "eq", .i64, dim_value, try ctx.constI64(@intCast(dim_index + 1)));
+        const next_name = try ctx.nextTemp();
+        try builder.select(next_name, result_ty, .{ .name = cond_name, .ty = .i1, .is_ptr = false }, candidate, result);
+        result = .{ .name = next_name, .ty = result_ty, .is_ptr = false };
+    }
+    return result;
 }
 
 pub fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {

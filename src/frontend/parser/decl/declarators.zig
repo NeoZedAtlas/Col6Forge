@@ -35,6 +35,19 @@ pub fn consumeBalancedParens(lp: *LineParser) !void {
     }
 }
 
+pub fn consumeBalancedBrackets(lp: *LineParser) !void {
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_bracket => depth += 1,
+            .r_bracket => depth -= 1,
+            else => {},
+        }
+    }
+}
+
 pub fn parseAttrDimensions(lp: *LineParser, arena: std.mem.Allocator) ![]*ast.Expr {
     var dims = std.array_list.Managed(*ast.Expr).init(arena);
     while (!lp.peekIs(.r_paren)) {
@@ -146,6 +159,10 @@ pub fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAtt
             if (context.eqNoCase(attr_name, "DIMENSION")) {
                 if (lp.consume(.l_paren)) {
                     attrs.dimension = try parseAttrDimensions(lp, arena);
+                }
+            } else if (context.eqNoCase(attr_name, "CODIMENSION")) {
+                if (lp.consume(.l_bracket)) {
+                    try consumeBalancedBrackets(lp);
                 }
             } else if (lp.consume(.l_paren)) {
                 try consumeBalancedParens(lp);

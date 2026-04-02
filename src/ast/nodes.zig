@@ -50,6 +50,7 @@ pub const AssignLabelStmt = stmt_nodes.AssignLabelStmt;
 pub const UseStmt = stmt_nodes.UseStmt;
 pub const UseOnlyItem = stmt_nodes.UseOnlyItem;
 pub const CallStmt = stmt_nodes.CallStmt;
+pub const ActualArgExpr = stmt_nodes.ActualArgExpr;
 pub const CallArg = stmt_nodes.CallArg;
 pub const ReturnStmt = stmt_nodes.ReturnStmt;
 pub const EntryStmt = stmt_nodes.EntryStmt;

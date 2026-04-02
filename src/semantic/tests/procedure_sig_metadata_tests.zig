@@ -196,6 +196,45 @@ test "inferProcedureArgSigs captures dummy data attribute metadata" {
     try testing.expect(arg_sigs[3].volatile_attr);
 }
 
+test "inferProcedureArgSigs keeps contained dummy declaration type/rank for component-array call sites" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  type t\n" ++
+        "    integer :: i\n" ++
+        "    integer :: j\n" ++
+        "  end type\n" ++
+        "  type (t) :: a(5)\n" ++
+        "  call sub('one',a%j)\n" ++
+        "contains\n" ++
+        "  subroutine sub(key,a)\n" ++
+        "    integer, intent(out)    :: a(:)\n" ++
+        "    character(*),intent(in) :: key\n" ++
+        "    a = 1\n" ++
+        "  end subroutine\n" ++
+        "end program\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+    try testing.expectEqual(@as(usize, 2), arg_sigs.len);
+    try testing.expectEqualStrings("key", arg_sigs[0].name);
+    try testing.expectEqual(ast.TypeKind.character, arg_sigs[0].type_spec.lowered_kind);
+    try testing.expectEqual(@as(usize, 0), arg_sigs[0].rank);
+    try testing.expectEqualStrings("a", arg_sigs[1].name);
+    try testing.expectEqual(ast.TypeKind.integer, arg_sigs[1].type_spec.lowered_kind);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[1].rank);
+}
+
 test "inferProcedureArgSigs normalizes dummy array shape signature" {
     const testing = std.testing;
     const allocator = testing.allocator;

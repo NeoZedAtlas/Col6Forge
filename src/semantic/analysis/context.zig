@@ -96,6 +96,7 @@ pub const Context = struct {
             type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
             requires_descriptor: bool = false,
             rank: usize = 0,
+            assumed_rank: bool = false,
             shape_signature: []const []const u8 = &.{},
             pointer: bool = false,
             allocatable: bool = false,

@@ -77,20 +77,16 @@ pub fn checkProcedureActualArgsForCall(
         return;
     }
     if (sig.args.len == 0) return;
-    var formal_idx: usize = 0;
-    for (args) |arg| {
-        if (arg != .expr) continue;
-        if (formal_idx >= sig.args.len) break;
-        const actual = arg.expr;
-        if (declareVariantAdjustKind(self, callee_name, sig.args[formal_idx].name)) |kind| {
+    const bound_actuals = try bindCallActualsToFormals(self, sig, args);
+    for (sig.args, 0..) |formal, formal_idx| {
+        const actual = bound_actuals[formal_idx] orelse continue;
+        if (declareVariantAdjustKind(self, callee_name, formal.name)) |kind| {
             if (kind != .nothing) {
                 try resolve_expr.resolveExpr(self, actual.value);
-                formal_idx += 1;
                 continue;
             }
         }
-        try checkProcedureActualArg(self, callee_name, sig.args[formal_idx], actual.value, deps);
-        formal_idx += 1;
+        try checkProcedureActualArg(self, callee_name, formal, actual.value, deps);
     }
 }
 
@@ -662,9 +658,6 @@ pub fn checkIntrinsicCallConstraintsForExprArgs(
 ) CheckError!void {
     if (leaf_helpers.lookupIntrinsicArity(self, name) == null) return;
     try checkIntrinsicSpecialActualRestrictionsForExprArgs(self, name, args);
-    if (std.ascii.eqlIgnoreCase(name, "allocated")) {
-        try checkAllocatedExprCallConstraints(self, args);
-    }
 }
 
 fn checkIntrinsicSpecialActualRestrictionsForCallArgs(
@@ -746,45 +739,14 @@ fn intrinsicAllowsAssumedType(name: []const u8, actual_idx: usize) bool {
 
 fn intrinsicAllowsInquiryArrayActual(name: []const u8, actual_idx: usize) bool {
     if (actual_idx != 0) return false;
-    return std.ascii.eqlIgnoreCase(name, "lbound") or
+    return std.ascii.eqlIgnoreCase(name, "associated") or
+        std.ascii.eqlIgnoreCase(name, "lbound") or
         std.ascii.eqlIgnoreCase(name, "ubound") or
         std.ascii.eqlIgnoreCase(name, "shape") or
         std.ascii.eqlIgnoreCase(name, "size") or
         std.ascii.eqlIgnoreCase(name, "rank") or
         std.ascii.eqlIgnoreCase(name, "storage_size") or
         std.ascii.eqlIgnoreCase(name, "is_contiguous");
-}
-
-const LegacyKeywordActual = struct {
-    keyword: []const u8,
-    value: *ast.Expr,
-};
-
-fn decodeLegacyKeywordActual(expr_node: *ast.Expr) ?LegacyKeywordActual {
-    if (expr_node.* != .binary) return null;
-    const bin = expr_node.binary;
-    if (bin.op != .eq) return null;
-    if (bin.left.* != .identifier) return null;
-    return .{
-        .keyword = bin.left.identifier,
-        .value = bin.right,
-    };
-}
-
-fn checkAllocatedExprCallConstraints(self: *context.Context, args: []*ast.Expr) CheckError!void {
-    if (args.len != 1) return;
-    const actual = decodeLegacyKeywordActual(args[0]) orelse return;
-    if (std.ascii.eqlIgnoreCase(actual.keyword, "scalar")) {
-        if (resolve_expr.exprRank(self, actual.value) != 0) {
-            return emitIntrinsicArgDiagnostic(self, actual.value, "Scalar entity required");
-        }
-        return;
-    }
-    if (std.ascii.eqlIgnoreCase(actual.keyword, "array")) {
-        if (resolve_expr.exprRank(self, actual.value) == 0) {
-            return emitIntrinsicArgDiagnostic(self, actual.value, "Array entity required");
-        }
-    }
 }
 
 fn exprIsAssumedType(self: *context.Context, expr_node: *ast.Expr) bool {
@@ -812,16 +774,11 @@ fn rootActualSymbolIndex(self: *context.Context, expr_node: *ast.Expr) ?usize {
     };
 }
 
-fn symbolIsAssumedRank(self: *context.Context, sym: symbols.Symbol) bool {
+fn symbolIsAssumedRank(_: *context.Context, sym: symbols.Symbol) bool {
     if (sym.dims.len != 1) return false;
     const dim = sym.dims[0];
-    const dim_source = self.sourceForExpr(dim) orelse ast.SourceRef{};
-    if (std.mem.eql(u8, std.mem.trim(u8, dim_source.text, " \t"), "..")) return true;
-    // Fallback for cloned dummies where source text for "(..)" is unavailable.
-    // Keep this narrow so deferred/assumed-shape locals are not misclassified.
-    if (sym.storage != .dummy) return false;
     return switch (dim.*) {
-        .dim_range => |range| range.assumed_shape and range.lower == null and range.upper.* == .literal and range.upper.literal.kind == .assumed_size,
+        .dim_range => |range| range.from_dotdot,
         else => false,
     };
 }
@@ -1603,7 +1560,7 @@ fn checkDataActualArgCompatibility(
     actual_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
-    if (formal.pointer and isNullPointerIntrinsic(actual_expr)) return;
+    if (isNullPointerIntrinsic(actual_expr) and (formal.pointer or formal.optional)) return;
     if (actual_expr.* == .identifier and identifierIsProcedureDesignatorForDataActual(self, actual_expr.identifier)) {
         return emitProcedureActualCallDiagnostic(
             self,
@@ -1618,9 +1575,10 @@ fn checkDataActualArgCompatibility(
     if ((formal.intent == .out or formal.intent == .inout) and !exprIsVariableDefinitionActual(self, actual_expr)) {
         return emitVariableDefinitionContextDiagnostic(self, callee_name, formal.name, actual_expr);
     }
+    const skip_no_arg_check_compat = formal.no_arg_check;
     const actual_rank = procedureActualExprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
-    if (actual_spec.assumed_type and !formal.type_spec.assumed_type) {
+    if (!skip_no_arg_check_compat and actual_spec.assumed_type and !formal.type_spec.assumed_type) {
         const message = std.fmt.allocPrint(
             self.arena,
             "Assumed-type actual argument at (1) requires that dummy argument '{s}' is of assumed type",
@@ -1628,12 +1586,16 @@ fn checkDataActualArgCompatibility(
         ) catch "Assumed-type actual argument requires assumed-type dummy";
         return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
     }
-    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+    if (!skip_no_arg_check_compat and !deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
+        if (!componentActualTypeCompatibleViaMetadata(self, formal.type_spec, actual_expr, deps)) {
+            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+        }
     }
-    if (formal.pointer and formal.contiguous and exprIsDefinitelyNoncontiguous(self, actual_expr)) {
+    if (!skip_no_arg_check_compat and formal.pointer and formal.contiguous and exprIsDefinitelyNoncontiguous(self, actual_expr)) {
         return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "must be simply contiguous");
     }
+    if (skip_no_arg_check_compat) return;
+    if (formal.assumed_rank) return;
     if (formal.rank == 0 and actual_rank > 0 and calleeAllowsElementalArrayActuals(self, callee_name)) {
         return;
     }
@@ -1963,6 +1925,7 @@ fn procedureDummyDataArgMismatchMessage(
     actual: context.Context.ProcedureSig.ArgSig,
     comptime deps: anytype,
 ) ?[]const u8 {
+    if (formal.no_arg_check) return null;
     if (formal.asynchronous != actual.asynchronous) return "ASYNCHRONOUS mismatch in argument";
     if (formal.contiguous != actual.contiguous) return "CONTIGUOUS mismatch in argument";
     if (formal.value_attr != actual.value_attr) return "VALUE mismatch in argument";
@@ -2028,6 +1991,7 @@ fn checkKnownImplicitProcedureScalarActualArg(
     comptime deps: anytype,
 ) CheckError!void {
     if (formal.is_procedure) return;
+    if (formal.no_arg_check) return;
     if (actual_expr.* == .identifier and identifierIsProcedureDesignatorForDataActual(self, actual_expr.identifier)) {
         return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "not allowed as an actual argument");
     }
@@ -2685,6 +2649,53 @@ fn componentInfoForExpr(
     return resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name);
 }
 
+fn componentActualTypeCompatibleViaMetadata(
+    self: *context.Context,
+    formal_spec: symbols.TypeSpec,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) bool {
+    const comp = switch (actual_expr.*) {
+        .component => |comp_expr| comp_expr,
+        else => return false,
+    };
+    const info = componentInfoForExpr(self, comp) orelse return false;
+    return deps.dummyArgTypeCompatible(self, formal_spec, info.type_spec);
+}
+
+fn bindCallActualsToFormals(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []const ast.CallArg,
+) ![]?ast.ActualArgExpr {
+    const bound = try self.arena.alloc(?ast.ActualArgExpr, sig.args.len);
+    @memset(bound, null);
+
+    var next_formal: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        const actual = arg.expr;
+        if (actual.keyword != null) continue;
+        while (next_formal < sig.args.len and bound[next_formal] != null) : (next_formal += 1) {}
+        if (next_formal >= sig.args.len) break;
+        bound[next_formal] = actual;
+        next_formal += 1;
+    }
+
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        const actual = arg.expr;
+        const keyword = actual.keyword orelse continue;
+        for (sig.args, 0..) |formal, idx| {
+            if (!std.ascii.eqlIgnoreCase(formal.name, keyword)) continue;
+            bound[idx] = actual;
+            break;
+        }
+    }
+
+    return bound;
+}
+
 fn arrayElementCountForDims(self: *context.Context, dims: []const *ast.Expr) ?usize {
     if (dims.len == 0) return null;
     var total: usize = 1;
@@ -3047,12 +3058,10 @@ fn callActualsCouldMatchProcedureSig(
     if (got_alt_return != sig.alt_return_count) return false;
     const min_count = minimumRequiredProcedureArgs(sig);
     if (got_expr < min_count or got_expr > sig.arg_count) return false;
-    var formal_idx: usize = 0;
-    for (args) |arg| {
-        if (arg != .expr) continue;
-        if (formal_idx >= sig.args.len) break;
-        if (!(try exprActualCouldMatchFormal(self, sig, sig.args[formal_idx], arg.expr.value, deps))) return false;
-        formal_idx += 1;
+    const bound_actuals = try bindCallActualsToFormals(self, sig, args);
+    for (sig.args, 0..) |formal, idx| {
+        const actual = bound_actuals[idx] orelse continue;
+        if (!(try exprActualCouldMatchFormal(self, sig, formal, actual.value, deps))) return false;
     }
     return true;
 }
@@ -3070,6 +3079,7 @@ fn exprActualCouldMatchFormal(
     const actual_rank = procedureActualExprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) return false;
+    if (formal.assumed_rank) return true;
     if (formal.rank == 0 and actual_rank > 0 and sig.elemental) return true;
     if (formal.rank == actual_rank) return true;
     if (formal.rank == 1 and !formal.requires_descriptor) {

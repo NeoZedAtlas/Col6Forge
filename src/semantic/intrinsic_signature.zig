@@ -52,6 +52,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "LEN", .integer },
     .{ "LEN_TRIM", .integer },
     .{ "LBOUND", .integer },
+    .{ "RANK", .integer },
     .{ "LSTAT", .integer },
     .{ "RENAME", .integer },
     .{ "STAT", .integer },

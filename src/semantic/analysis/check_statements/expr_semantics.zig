@@ -44,6 +44,7 @@ pub fn checkSpecialCallConstraints(
 
 pub fn checkSpecialExprCallConstraints(
     self: *context.Context,
+    call_expr: *ast.Expr,
     name: []const u8,
     args: []*ast.Expr,
 ) CheckError!void {
@@ -73,6 +74,16 @@ pub fn checkSpecialExprCallConstraints(
         if (args.len > 0 and !exprIsAllocatableEntity(self, args[0])) {
             return emitExprConstraintDiagnostic(self, args[0], "must be ALLOCATABLE");
         }
+        if (args.len == 1) {
+            if (inferFirstKeywordFromCallSource(self, call_expr, name)) |keyword| {
+                if (std.ascii.eqlIgnoreCase(keyword, "scalar") and resolve_expr.exprRank(self, args[0]) != 0) {
+                    return emitExprConstraintDiagnostic(self, args[0], "Scalar entity required");
+                }
+                if (std.ascii.eqlIgnoreCase(keyword, "array") and resolve_expr.exprRank(self, args[0]) == 0) {
+                    return emitExprConstraintDiagnostic(self, args[0], "Array entity required");
+                }
+            }
+        }
         return;
     }
     if (std.ascii.eqlIgnoreCase(name, "associated")) {
@@ -97,6 +108,28 @@ pub fn checkSpecialExprCallConstraints(
         ) catch "Argument C_PTR_2 to C_ASSOCIATED shall have the same type as C_PTR_1.";
         return emitExprConstraintDiagnostic(self, args[1], message);
     }
+}
+
+fn inferFirstKeywordFromCallSource(self: *context.Context, call_expr: *ast.Expr, callee_name: []const u8) ?[]const u8 {
+    const source = self.sourceForExpr(call_expr) orelse return null;
+    const line = source.text;
+    const name_pos = std.ascii.indexOfIgnoreCase(line, callee_name) orelse return null;
+    var pos = name_pos + callee_name.len;
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    if (pos >= line.len or line[pos] != '(') return null;
+    pos += 1;
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    const start = pos;
+    while (pos < line.len and isIdentifierChar(line[pos])) : (pos += 1) {}
+    if (start == pos) return null;
+    const keyword = line[start..pos];
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    if (pos >= line.len or line[pos] != '=') return null;
+    return keyword;
+}
+
+fn isIdentifierChar(ch: u8) bool {
+    return std.ascii.isAlphabetic(ch) or std.ascii.isDigit(ch) or ch == '_';
 }
 
 fn checkLegacyWidecharExprCallConstraints(
@@ -481,7 +514,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                 {
                     return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "no specific function");
                 }
-                try checkSpecialExprCallConstraints(self, call.name, call.args);
+                try checkSpecialExprCallConstraints(self, expr, call.name, call.args);
                 try procedure_calls.checkIntrinsicCallConstraintsForExprArgs(self, call.name, call.args);
                 try procedure_calls.checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try procedure_calls.checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);

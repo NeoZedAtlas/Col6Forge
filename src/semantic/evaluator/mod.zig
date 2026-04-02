@@ -104,11 +104,41 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             } };
         },
         .substring => return null,
-        .component => return null,
+        .component => |comp| {
+            if (resolver) |res| {
+                if (std.ascii.eqlIgnoreCase(comp.name, "len")) {
+                    const base_spec = res.exprTypeSpec(comp.base) orelse return null;
+                    if (base_spec.lowered_kind != .character) return null;
+                    const len = switch (base_spec.char_len_kind) {
+                        .constant => base_spec.char_len orelse return null,
+                        .none => base_spec.char_len orelse 1,
+                        .assumed, .deferred => return null,
+                    };
+                    return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+                }
+                if (std.ascii.eqlIgnoreCase(comp.name, "kind")) {
+                    const base_spec = res.exprTypeSpec(comp.base) orelse return null;
+                    return .{ .integer = typeSpecKindValue(base_spec) orelse return null };
+                }
+            }
+            return null;
+        },
         .call_or_subscript => |call| return intrinsics.evalConstCall(call, resolver, evalConst, unary_binary.toReal),
         .dim_range => return null,
         .implied_do => return null,
     }
+}
+
+fn typeSpecKindValue(spec: symbols.TypeSpec) ?i64 {
+    return switch (spec.lowered_kind) {
+        .integer, .logical => spec.kind_value orelse 4,
+        .real => spec.kind_value orelse 4,
+        .double_precision => spec.kind_value orelse 8,
+        .complex => spec.kind_value orelse 4,
+        .complex_double => spec.kind_value orelse 8,
+        .character => spec.kind_value orelse 1,
+        .derived => null,
+    };
 }
 
 test {
