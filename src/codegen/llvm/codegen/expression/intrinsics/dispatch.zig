@@ -3,6 +3,7 @@ const common = @import("../../common.zig");
 const utils = @import("../../utils.zig");
 const casting = @import("../casting.zig");
 const call = @import("../call/mod.zig");
+const array_actuals = @import("../call/array_actuals.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const resolution = @import("../dispatch/resolution.zig");
 const shared = @import("shared.zig");
@@ -530,6 +531,10 @@ fn emitIntrinsicTransfer(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     if (args.len < 2 or args.len > 3) return error.InvalidIntrinsicCall;
     if (args.len == 3) return error.UnsupportedIntrinsicType;
 
+    if (try emitIntrinsicTransferCharacterResult(ctx, builder, args[0], args[1])) |char_result| {
+        return char_result;
+    }
+
     const result = try transferScalarResultInfo(ctx, args[1]);
     const dst_ptr = try allocaByteBuffer(ctx, builder, result.storage_size);
     try zeroByteBuffer(ctx, builder, dst_ptr, try ctx.constI64(@intCast(result.storage_size)));
@@ -546,6 +551,39 @@ fn emitIntrinsicTransfer(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     const tmp = try ctx.nextTemp();
     try builder.load(tmp, result.value_ty.?, dst_ptr);
     return .{ .name = tmp, .ty = result.value_ty.?, .is_ptr = false };
+}
+
+fn emitIntrinsicTransferCharacterResult(
+    ctx: *Context,
+    builder: anytype,
+    source_expr: *Expr,
+    mold_expr: *Expr,
+) EmitError!?ValueRef {
+    if (!dispatch.isCharacterExpr(ctx, mold_expr)) return null;
+    var char_len = (try dispatch.emitCharacterLenValue(ctx, builder, mold_expr)) orelse return error.UnsupportedIntrinsicType;
+    if (char_len.ty != .i64) char_len = try casting.coerce(ctx, builder, char_len, .i64);
+
+    const is_zero_name = try ctx.nextTemp();
+    try builder.compare(is_zero_name, "icmp", "eq", .i64, char_len, try ctx.constI64(0));
+    const storage_len_name = try ctx.nextTemp();
+    try builder.select(
+        storage_len_name,
+        .i64,
+        .{ .name = is_zero_name, .ty = .i1, .is_ptr = false },
+        try ctx.constI64(1),
+        char_len,
+    );
+    const storage_len = ValueRef{ .name = storage_len_name, .ty = .i64, .is_ptr = false };
+
+    const dst_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(dst_name, .i8, storage_len);
+    const dst_ptr = ValueRef{ .name = dst_name, .ty = .ptr, .is_ptr = true };
+    try zeroByteBuffer(ctx, builder, dst_ptr, char_len);
+
+    const src = try transferSourceBytes(ctx, builder, source_expr);
+    const copy_len = try emitTransferMinI64(ctx, builder, src.size, char_len);
+    try emitMemcpyBytes(ctx, builder, dst_ptr, src.ptr, copy_len);
+    return .{ .name = dst_name, .ty = .ptr, .is_ptr = false };
 }
 
 fn transferScalarResultInfo(ctx: *Context, mold: *Expr) EmitError!TransferScalarResultInfo {
@@ -600,6 +638,21 @@ fn transferScalarResultInfo(ctx: *Context, mold: *Expr) EmitError!TransferScalar
 }
 
 fn transferSourceBytes(ctx: *Context, builder: anytype, expr: *Expr) EmitError!TransferSourceBytes {
+    if (try array_actuals.resolveArrayActual(ctx, builder, expr)) |actual| {
+        const elem_count = try array_actuals.emitExtentProductI64(ctx, builder, actual.extents);
+        var total_bytes = try array_actuals.emitMulI64(ctx, builder, elem_count, try ctx.constI64(@intCast(byteSizeForIRType(actual.elem_ty))));
+        if (!array_actuals.valueRefEquals(actual.address_scale, try ctx.constI64(1))) {
+            total_bytes = try array_actuals.emitMulI64(ctx, builder, total_bytes, actual.address_scale);
+        }
+        return .{ .ptr = actual.base_ptr, .size = total_bytes };
+    }
+
+    if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_plan| {
+        var char_len = char_plan.logical_len;
+        if (char_len.ty != .i64) char_len = try casting.coerce(ctx, builder, char_len, .i64);
+        return .{ .ptr = char_plan.ptr, .size = char_len };
+    }
+
     switch (expr.*) {
         .literal => |lit| switch (lit.kind) {
             .string => {

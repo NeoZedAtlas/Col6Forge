@@ -5,6 +5,7 @@ const common = @import("../../codegen/common.zig");
 const context = @import("../../codegen/context/mod.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const complex = @import("../../codegen/expression/complex.zig");
+const array_actuals = @import("../../codegen/expression/call/array_actuals.zig");
 const utils = @import("../../codegen/utils.zig");
 
 const Context = context.Context;
@@ -23,6 +24,10 @@ const charLenForExpr = io_utils.charLenForExpr;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
+const resolveArrayActual = array_actuals.resolveArrayActual;
+const emitArrayActualElement = array_actuals.emitArrayActualElement;
+const emitArrayActualElementPtr = array_actuals.emitArrayActualElementPtr;
+const emitOwnedHeapActualFree = array_actuals.emitOwnedHeapActualFree;
 
 pub const ExpandedReadTargets = struct {
     ptrs: std.array_list.Managed(ValueRef),
@@ -76,6 +81,94 @@ fn appendWriteValue(expanded: *ExpandedWriteValues, value: ValueRef, char_len: u
     try expanded.values.append(value);
     try expanded.char_lens.append(char_len);
     try expanded.source_ptrs.append(source_ptr);
+}
+
+fn appendResolvedArrayWriteValues(
+    ctx: *Context,
+    builder: anytype,
+    expanded: *ExpandedWriteValues,
+    arg: *ast.Expr,
+) EmitError!bool {
+    const actual = (try resolveArrayActual(ctx, builder, arg)) orelse return false;
+    const elem_count = constantArrayActualElemCount(actual) orelse return false;
+    if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
+
+    if (actual.elem_ty == .i8) {
+        const char_len = constantArrayActualAddressScale(actual) orelse return false;
+        var idx: usize = 0;
+        while (idx < elem_count) : (idx += 1) {
+            const idx_val = ValueRef{ .name = try ctx.intLiteral(@intCast(idx)), .ty = .i64, .is_ptr = false };
+            const src_ptr = try emitArrayActualElementPtr(
+                ctx,
+                builder,
+                actual.base_ptr,
+                actual.elem_ty,
+                actual.extents,
+                actual.multipliers,
+                actual.address_scale,
+                actual.contiguous,
+                idx_val,
+            );
+            const buf_name = try ctx.nextTemp();
+            if (char_len <= 1) {
+                try builder.alloca(buf_name, .i8);
+            } else {
+                try builder.allocaArray(buf_name, .i8, char_len);
+            }
+            const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+            try emitIoMemcpyBytes(ctx, builder, buf_ptr, src_ptr, try ctx.constI64(@intCast(char_len)));
+            try appendWriteValue(
+                expanded,
+                .{ .name = buf_name, .ty = .ptr, .is_ptr = false },
+                char_len,
+                buf_ptr,
+            );
+        }
+    } else {
+        var idx: usize = 0;
+        while (idx < elem_count) : (idx += 1) {
+            const idx_val = ValueRef{ .name = try ctx.intLiteral(@intCast(idx)), .ty = .i64, .is_ptr = false };
+            const elem_ptr = try emitArrayActualElementPtr(
+                ctx,
+                builder,
+                actual.base_ptr,
+                actual.elem_ty,
+                actual.extents,
+                actual.multipliers,
+                actual.address_scale,
+                actual.contiguous,
+                idx_val,
+            );
+            const value = try emitArrayActualElement(ctx, builder, idx_val, actual);
+            try appendWriteValue(expanded, value, 0, elem_ptr);
+        }
+    }
+
+    try emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+    return true;
+}
+
+fn constantArrayActualElemCount(actual: anytype) ?usize {
+    var total: usize = 1;
+    for (actual.extents) |extent| {
+        if (extent.is_ptr or extent.ty != .i64) return null;
+        const parsed = std.fmt.parseInt(i64, extent.name, 10) catch return null;
+        if (parsed < 0) return null;
+        total = std.math.mul(usize, total, std.math.cast(usize, parsed) orelse return null) catch return null;
+    }
+    return total;
+}
+
+fn constantArrayActualAddressScale(actual: anytype) ?usize {
+    if (actual.address_scale.is_ptr or actual.address_scale.ty != .i64) return null;
+    const parsed = std.fmt.parseInt(i64, actual.address_scale.name, 10) catch return null;
+    if (parsed < 0) return null;
+    return std.math.cast(usize, parsed);
+}
+
+fn emitIoMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) EmitError!void {
+    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]llvm_types.IRType{ .ptr, .ptr, .i64, .i1 }, false);
+    try builder.callTyped(null, .void, memcpy_name, &.{ dst_ptr, src_ptr, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
 }
 
 pub const ExpandedIoArgs = struct {
@@ -789,6 +882,9 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
     expanded.owns_implied_finals = flat_args.owns_implied_finals;
     flat_args.owns_implied_finals = false;
     for (flat_args.items) |arg| {
+        if (try appendResolvedArrayWriteValues(ctx, builder, &expanded, arg)) {
+            continue;
+        }
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
@@ -886,6 +982,9 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
     expanded.owns_implied_finals = flat_args.owns_implied_finals;
     flat_args.owns_implied_finals = false;
     for (flat_args.items) |arg| {
+        if (try appendResolvedArrayWriteValues(ctx, builder, &expanded, arg)) {
+            continue;
+        }
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {

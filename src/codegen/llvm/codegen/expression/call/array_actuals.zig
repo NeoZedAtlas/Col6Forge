@@ -16,6 +16,7 @@ const flatten_core = @import("../../../stmts/execution/assignment/flatten/core.z
 const flatten_metadata = @import("../../../stmts/execution/assignment/flatten/metadata.zig");
 const flatten_mod = @import("../../../stmts/execution/assignment/flatten/mod.zig");
 const io_utils = @import("../../../stmts/io/utils.zig");
+const elemental_char_intrinsics = @import("elemental_char_intrinsics.zig");
 const shared = @import("shared.zig");
 
 const Expr = shared.Expr;
@@ -82,12 +83,16 @@ fn emitBinaryArrayExprActual(
     if (left_array == null and right_array == null) return null;
 
     const result_actual = left_array orelse right_array.?;
+    const scalar_operand_ty = switch (bin.op) {
+        .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => result_actual.elem_ty,
+        else => try casting.exprType(ctx, expr),
+    };
     const left_value = if (left_array == null)
-        try emitScalarArrayBinaryOperand(ctx, builder, bin.left)
+        try emitScalarArrayBinaryOperand(ctx, builder, bin.left, scalar_operand_ty)
     else
         null;
     const right_value = if (right_array == null)
-        try emitScalarArrayBinaryOperand(ctx, builder, bin.right)
+        try emitScalarArrayBinaryOperand(ctx, builder, bin.right, scalar_operand_ty)
     else
         null;
 
@@ -99,7 +104,7 @@ fn emitBinaryArrayExprActual(
     }
 
     const result_ty: IRType = switch (bin.op) {
-        .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => ctx.defaultIntegerIRType(),
+        .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => .i1,
         else => try casting.exprType(ctx, expr),
     };
     if (!isMaterializableArrayElementType(result_ty)) return null;
@@ -178,10 +183,21 @@ fn emitScalarArrayBinaryOperand(
     ctx: *Context,
     builder: anytype,
     expr: *Expr,
+    target_ty: IRType,
 ) !?ValueRef {
+    if (target_ty == .i8) {
+        if (dispatch.constantCharacterLenForExpr(ctx, expr)) |char_len| {
+            if (char_len == 1) {
+                const char_plan = (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) orelse return null;
+                const byte_name = try ctx.nextTemp();
+                try builder.load(byte_name, .i8, char_plan.ptr);
+                return .{ .name = byte_name, .ty = .i8, .is_ptr = false };
+            }
+        }
+    }
     const scalar_raw = try dispatch.emitExpr(ctx, builder, expr);
     if (scalar_raw.ty == .ptr) return null;
-    return scalar_raw;
+    return if (scalar_raw.ty == target_ty) scalar_raw else try casting.coerce(ctx, builder, scalar_raw, target_ty);
 }
 
 fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
@@ -1042,6 +1058,9 @@ fn storageIRTypeForProcedureResult(ctx: *Context, spec: ast.TypeSpec) IRType {
 pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return try validatedArrayActual(actual);
     if (expr.* == .array_constructor) {
+        if (try analyzeSingleItemArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
+            return try validatedArrayActual(actual);
+        }
         if (try analyzeStaticZeroSizedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
             return try validatedArrayActual(actual);
         }
@@ -1090,6 +1109,15 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         }
         return null;
     }
+    if (expr.* == .call_or_subscript) {
+        if (try elemental_char_intrinsics.analyzeElementalCharCodeArrayActual(ctx, builder, expr.call_or_subscript, .{
+            .resolveArrayActual = resolveArrayActual,
+            .emitArrayActualElement = emitArrayActualElement,
+            .emitOwnedHeapActualFree = emitOwnedHeapActualFree,
+        })) |actual| {
+            return try validatedArrayActual(actual);
+        }
+    }
     if (expr.* == .call_or_subscript and isIntrinsicArrayConversionArg(ctx, expr.call_or_subscript)) {
         if (try analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript)) |actual| {
             return try validatedArrayActual(actual);
@@ -1101,6 +1129,16 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         return try validatedArrayActual(actual);
     }
     return null;
+}
+
+fn analyzeSingleItemArrayConstructorActual(
+    ctx: *Context,
+    builder: anytype,
+    ctor: ast.ArrayConstructor,
+) !?ArrayActualPlan {
+    if (ctor.items.len != 1) return null;
+    if (ctor.items[0].* == .implied_do) return null;
+    return try resolveArrayActual(ctx, builder, ctor.items[0]);
 }
 
 fn analyzeRuntimeGeneratedArrayConstructorActual(
@@ -1231,9 +1269,16 @@ fn analyzeIntrinsicMergeActual(
     const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
     const multipliers = try emitContiguousMultipliers(ctx, builder, result_basis.extents);
 
-    const true_scalar = if (true_actual == null) try emitScalarMergeOperand(ctx, builder, call.args[0], elem_ty) else null;
-    const false_scalar = if (false_actual == null) try emitScalarMergeOperand(ctx, builder, call.args[1], elem_ty) else null;
     const mask_scalar = if (mask_actual == null) try emitLogicalValue(ctx, builder, call.args[2]) else null;
+    const constant_mask = if (mask_scalar) |mask_value| constantI1Value(mask_value) else null;
+    const true_scalar = if (true_actual == null and constant_mask != false)
+        try emitScalarMergeOperand(ctx, builder, call.args[0], elem_ty)
+    else
+        null;
+    const false_scalar = if (false_actual == null and constant_mask != true)
+        try emitScalarMergeOperand(ctx, builder, call.args[1], elem_ty)
+    else
+        null;
 
     try emitIntrinsicMergeLoop(
         ctx,
@@ -1270,6 +1315,16 @@ fn emitScalarMergeOperand(
     expr: *Expr,
     elem_ty: IRType,
 ) !ValueRef {
+    if (elem_ty == .i8) {
+        if (dispatch.constantCharacterLenForExpr(ctx, expr)) |char_len| {
+            if (char_len == 1) {
+                const char_plan = (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) orelse return error.UnsupportedIntrinsicType;
+                const byte_name = try ctx.nextTemp();
+                try builder.load(byte_name, .i8, char_plan.ptr);
+                return .{ .name = byte_name, .ty = .i8, .is_ptr = false };
+            }
+        }
+    }
     const value = try dispatch.emitExpr(ctx, builder, expr);
     return if (value.ty == elem_ty) value else casting.coerce(ctx, builder, value, elem_ty);
 }
@@ -1305,19 +1360,35 @@ fn emitIntrinsicMergeLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const mask_value = if (mask_actual) |actual|
-        try coerceLogicalMaskValue(ctx, builder, try emitArrayActualElement(ctx, builder, idx_val, actual))
+    const constant_mask = if (mask_actual == null and mask_scalar != null)
+        constantI1Value(mask_scalar.?)
     else
-        mask_scalar.?;
-    const true_value = if (true_actual) |actual|
-        try emitArrayActualElement(ctx, builder, idx_val, actual)
-    else
-        true_scalar.?;
-    const false_value = if (false_actual) |actual|
-        try emitArrayActualElement(ctx, builder, idx_val, actual)
-    else
-        false_scalar.?;
-    const merged_value = try emitMaskedSelectValue(ctx, builder, elem_ty, mask_value, true_value, false_value);
+        null;
+    const merged_value = if (constant_mask) |mask_const|
+        if (mask_const)
+            if (true_actual) |actual|
+                try emitArrayActualElement(ctx, builder, idx_val, actual)
+            else
+                true_scalar.?
+        else if (false_actual) |actual|
+            try emitArrayActualElement(ctx, builder, idx_val, actual)
+        else
+            false_scalar.?
+    else blk: {
+        const mask_value = if (mask_actual) |actual|
+            try coerceLogicalMaskValue(ctx, builder, try emitArrayActualElement(ctx, builder, idx_val, actual))
+        else
+            mask_scalar.?;
+        const true_value = if (true_actual) |actual|
+            try emitArrayActualElement(ctx, builder, idx_val, actual)
+        else
+            true_scalar.?;
+        const false_value = if (false_actual) |actual|
+            try emitArrayActualElement(ctx, builder, idx_val, actual)
+        else
+            false_scalar.?;
+        break :blk try emitMaskedSelectValue(ctx, builder, elem_ty, mask_value, true_value, false_value);
+    };
     const dst_elem_ptr_name = try ctx.nextTemp();
     try builder.gep(dst_elem_ptr_name, elem_ty, dst_ptr, idx_val);
     try builder.store(merged_value, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
@@ -1328,6 +1399,13 @@ fn emitIntrinsicMergeLoop(
     try builder.br(loop_preheader);
 
     try builder.label(loop_exit);
+}
+
+fn constantI1Value(value: ValueRef) ?bool {
+    if (value.ty != .i1 or value.is_ptr) return null;
+    if (std.mem.eql(u8, value.name, "1")) return true;
+    if (std.mem.eql(u8, value.name, "0")) return false;
+    return null;
 }
 
 fn analyzeIntrinsicSumDimActual(
@@ -2164,12 +2242,13 @@ fn analyzeIntrinsicTransferActual(
     call: ast.CallOrSubscript,
 ) anyerror!?ArrayActualPlan {
     if (call.args.len < 2 or call.args.len > 3) return null;
-    if (call.args.len == 3) return null;
-
-    const mold_actual = (try analyzeAddressableArrayActual(ctx, builder, call.args[1])) orelse return null;
-    const dst_elem_count = try emitExtentProductI64(ctx, builder, mold_actual.extents);
-    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, mold_actual.elem_ty, dst_elem_count);
-    const dst_bytes = try emitMulI64(ctx, builder, dst_elem_count, i64Const(ctx, @intCast(byteSizeForIRType(mold_actual.elem_ty))));
+    const result = (try resolveTransferArrayResultInfo(ctx, builder, call)) orelse return null;
+    const dst_elem_count = try emitExtentProductI64(ctx, builder, result.extents);
+    var dst_bytes = try emitMulI64(ctx, builder, dst_elem_count, i64Const(ctx, @intCast(byteSizeForIRType(result.elem_ty))));
+    if (!valueRefEquals(result.address_scale, i64Const(ctx, 1))) {
+        dst_bytes = try emitMulI64(ctx, builder, dst_bytes, result.address_scale);
+    }
+    const dst_ptr = try emitHeapAllocBytes(ctx, builder, dst_bytes);
 
     const src = try materializeTransferSourceBytes(ctx, builder, call.args[0]);
     try zeroByteBuffer(ctx, builder, dst_ptr, dst_bytes);
@@ -2177,14 +2256,89 @@ fn analyzeIntrinsicTransferActual(
 
     return try validatedArrayActual(.{
         .base_ptr = dst_ptr,
-        .elem_ty = mold_actual.elem_ty,
-        .extents = mold_actual.extents,
-        .multipliers = try emitContiguousMultipliers(ctx, builder, mold_actual.extents),
-        .address_scale = i64Const(ctx, 1),
+        .elem_ty = result.elem_ty,
+        .extents = result.extents,
+        .multipliers = try emitContiguousMultipliers(ctx, builder, result.extents),
+        .address_scale = result.address_scale,
         .storage = .materialized_temp,
         .owned_heap_ptr = dst_ptr,
         .contiguous = true,
     });
+}
+
+const TransferArrayResultInfo = struct {
+    elem_ty: IRType,
+    extents: []ValueRef,
+    address_scale: ValueRef,
+};
+
+fn resolveTransferArrayResultInfo(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) !?TransferArrayResultInfo {
+    if (call.args.len < 2 or call.args.len > 3) return null;
+    if (call.args.len == 2) {
+        const mold_actual = (try resolveArrayActual(ctx, builder, call.args[1])) orelse return null;
+        return .{
+            .elem_ty = mold_actual.elem_ty,
+            .extents = mold_actual.extents,
+            .address_scale = mold_actual.address_scale,
+        };
+    }
+
+    const extents = try ctx.allocator.alloc(ValueRef, 1);
+    extents[0] = try emitTransferSizeValue(ctx, builder, call.args[2]);
+
+    if (try resolveArrayActual(ctx, builder, call.args[1])) |mold_actual| {
+        return .{
+            .elem_ty = mold_actual.elem_ty,
+            .extents = extents,
+            .address_scale = mold_actual.address_scale,
+        };
+    }
+
+    if (dispatch.isCharacterExpr(ctx, call.args[1])) {
+        const char_len = if (dispatch.constantCharacterLenForExpr(ctx, call.args[1])) |const_len|
+            i64Const(ctx, @intCast(const_len))
+        else blk: {
+            var runtime_len = (try dispatch.emitCharacterLenValue(ctx, builder, call.args[1])) orelse return null;
+            if (runtime_len.ty != .i64) runtime_len = try casting.coerce(ctx, builder, runtime_len, .i64);
+            break :blk runtime_len;
+        };
+        return .{
+            .elem_ty = .i8,
+            .extents = extents,
+            .address_scale = char_len,
+        };
+    }
+
+    var elem_ty = casting.exprType(ctx, call.args[1]) catch return null;
+    if (elem_ty == .i1) elem_ty = ctx.defaultIntegerIRType();
+    return .{
+        .elem_ty = elem_ty,
+        .extents = extents,
+        .address_scale = i64Const(ctx, 1),
+    };
+}
+
+fn emitTransferSizeValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+    if (evalConstIntArg(ctx, expr)) |const_size| {
+        return i64Const(ctx, if (const_size < 0) 0 else const_size);
+    }
+    var size_val = try dispatch.emitExpr(ctx, builder, expr);
+    if (size_val.ty != .i64) size_val = try casting.coerce(ctx, builder, size_val, .i64);
+    const is_neg_name = try ctx.nextTemp();
+    try builder.compare(is_neg_name, "icmp", "slt", .i64, size_val, i64Const(ctx, 0));
+    const clamped_name = try ctx.nextTemp();
+    try builder.select(
+        clamped_name,
+        .i64,
+        .{ .name = is_neg_name, .ty = .i1, .is_ptr = false },
+        i64Const(ctx, 0),
+        size_val,
+    );
+    return .{ .name = clamped_name, .ty = .i64, .is_ptr = false };
 }
 
 const TransferSourceBytes = struct {
@@ -2340,7 +2494,7 @@ fn i1Const(value: bool) ValueRef {
     return .{ .name = if (value) "1" else "0", .ty = .i1, .is_ptr = false };
 }
 
-fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+pub fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
     return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
@@ -2478,7 +2632,7 @@ fn emitMaybeFreeOwnedArrayActual(
     }
 }
 
-fn emitMulI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+pub fn emitMulI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
     const tmp = try ctx.nextTemp();
     try builder.binary(tmp, "mul", .i64, lhs, rhs);
     return .{ .name = tmp, .ty = .i64, .is_ptr = false };
@@ -2742,7 +2896,7 @@ fn emitDynamicElemCountForSymbol(ctx: *Context, builder: anytype, sym: ast.sema.
     return total;
 }
 
-fn emitExtentProductI64(
+pub fn emitExtentProductI64(
     ctx: *Context,
     builder: anytype,
     extents: []const ValueRef,
@@ -2871,7 +3025,16 @@ fn emitBinaryArrayActualLoop(
         try emitArrayActualElement(ctx, builder, idx_val, actual)
     else
         right_scalar orelse return error.InvalidAbiState;
-    const result_raw = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+    const result_raw = switch (op) {
+        .and_, .or_, .eqv, .neqv => try binary.emitBinary(
+            ctx,
+            builder,
+            op,
+            try coerceLogicalMaskValue(ctx, builder, lhs),
+            try coerceLogicalMaskValue(ctx, builder, rhs),
+        ),
+        else => try binary.emitBinary(ctx, builder, op, lhs, rhs),
+    };
     const result_val = if (result_raw.ty == result_ty)
         result_raw
     else

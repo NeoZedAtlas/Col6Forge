@@ -189,13 +189,8 @@ pub fn procedureDesignatorPointer(ctx: *Context, name: []const u8) !?ValueRef {
 }
 
 fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPointerResult {
-    if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
-        return materialized;
-    }
-    if (expr.* == .array_constructor) {
-        if (try resolveArrayActual(ctx, builder, expr)) |actual| {
-            return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
-        }
+    if (try resolveArrayActual(ctx, builder, expr)) |actual| {
+        return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
     }
     if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
         return .{ .ptr = char_value.ptr };

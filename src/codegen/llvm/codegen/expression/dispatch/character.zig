@@ -283,6 +283,22 @@ pub fn emitCharacterValuePlanImpl(
                 const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
                 return try emitTrimmedCharacterPlan(ctx, builder, base_plan);
             }
+            if (std.ascii.eqlIgnoreCase(call_or_sub.name, "transfer") and
+                call_or_sub.args.len == 2 and
+                isCharacterExpr(ctx, call_or_sub.args[1]))
+            {
+                const ptr = try intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
+                const len_val = (try emitCharacterLenValueImpl(ctx, builder, call_or_sub.args[1], subst_depth)) orelse return null;
+                const const_len = constantCharacterLenForExpr(ctx, call_or_sub.args[1]);
+                return try shared.validatedCharacterValuePlan(.{
+                    .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
+                    .logical_len = len_val,
+                    .storage_len = len_val,
+                    .logical_len_const = const_len,
+                    .storage_len_const = const_len,
+                    .kind = .function_result,
+                });
+            }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
@@ -582,6 +598,12 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
                 const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
                 const trimmed = try emitTrimmedCharacterPlan(ctx, builder, base_plan);
                 return trimmed.logical_len;
+            }
+            if (std.ascii.eqlIgnoreCase(call_or_sub.name, "transfer") and
+                call_or_sub.args.len == 2 and
+                isCharacterExpr(ctx, call_or_sub.args[1]))
+            {
+                return emitCharacterLenValueImpl(ctx, builder, call_or_sub.args[1], subst_depth);
             }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
