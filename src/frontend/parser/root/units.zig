@@ -523,6 +523,7 @@ pub fn parseProgramUnitBody(
         const line = self.lines[self.index];
         root_diagnostics.noteFallbackForLine(self.diag_bag, line);
         if (spec_part_open and try consumeNoArgCheckDirectiveLine(self.arena, line, &pending_no_arg_check)) {
+            applyPendingNoArgCheckToDecls(decls.items, &pending_no_arg_check);
             self.index += 1;
             continue;
         }
@@ -725,6 +726,12 @@ fn applyPendingNoArgCheck(decl_node: *Decl, pending: *const std.StringHashMap(vo
             }
         },
         else => {},
+    }
+}
+
+fn applyPendingNoArgCheckToDecls(decls: []Decl, pending: *const std.StringHashMap(void)) void {
+    for (decls) |*decl_node| {
+        applyPendingNoArgCheck(decl_node, pending);
     }
 }
 

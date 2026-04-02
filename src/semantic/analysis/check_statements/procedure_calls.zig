@@ -623,6 +623,7 @@ pub fn checkIntrinsicCallConstraintsForCallArgs(
     name: []const u8,
     args: []const ast.CallArg,
 ) CheckError!void {
+    if (leaf_helpers.lookupIntrinsicArity(self, name) == null) return;
     try checkIntrinsicSpecialActualRestrictionsForCallArgs(self, name, args);
     if (std.ascii.eqlIgnoreCase(name, "move_alloc")) {
         try checkMoveAllocCallConstraints(self, args);
@@ -659,7 +660,11 @@ pub fn checkIntrinsicCallConstraintsForExprArgs(
     name: []const u8,
     args: []*ast.Expr,
 ) CheckError!void {
+    if (leaf_helpers.lookupIntrinsicArity(self, name) == null) return;
     try checkIntrinsicSpecialActualRestrictionsForExprArgs(self, name, args);
+    if (std.ascii.eqlIgnoreCase(name, "allocated")) {
+        try checkAllocatedExprCallConstraints(self, args);
+    }
 }
 
 fn checkIntrinsicSpecialActualRestrictionsForCallArgs(
@@ -750,6 +755,38 @@ fn intrinsicAllowsInquiryArrayActual(name: []const u8, actual_idx: usize) bool {
         std.ascii.eqlIgnoreCase(name, "is_contiguous");
 }
 
+const LegacyKeywordActual = struct {
+    keyword: []const u8,
+    value: *ast.Expr,
+};
+
+fn decodeLegacyKeywordActual(expr_node: *ast.Expr) ?LegacyKeywordActual {
+    if (expr_node.* != .binary) return null;
+    const bin = expr_node.binary;
+    if (bin.op != .eq) return null;
+    if (bin.left.* != .identifier) return null;
+    return .{
+        .keyword = bin.left.identifier,
+        .value = bin.right,
+    };
+}
+
+fn checkAllocatedExprCallConstraints(self: *context.Context, args: []*ast.Expr) CheckError!void {
+    if (args.len != 1) return;
+    const actual = decodeLegacyKeywordActual(args[0]) orelse return;
+    if (std.ascii.eqlIgnoreCase(actual.keyword, "scalar")) {
+        if (resolve_expr.exprRank(self, actual.value) != 0) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "Scalar entity required");
+        }
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(actual.keyword, "array")) {
+        if (resolve_expr.exprRank(self, actual.value) == 0) {
+            return emitIntrinsicArgDiagnostic(self, actual.value, "Array entity required");
+        }
+    }
+}
+
 fn exprIsAssumedType(self: *context.Context, expr_node: *ast.Expr) bool {
     const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
     return spec.assumed_type;
@@ -780,6 +817,9 @@ fn symbolIsAssumedRank(self: *context.Context, sym: symbols.Symbol) bool {
     const dim = sym.dims[0];
     const dim_source = self.sourceForExpr(dim) orelse ast.SourceRef{};
     if (std.mem.eql(u8, std.mem.trim(u8, dim_source.text, " \t"), "..")) return true;
+    // Fallback for cloned dummies where source text for "(..)" is unavailable.
+    // Keep this narrow so deferred/assumed-shape locals are not misclassified.
+    if (sym.storage != .dummy) return false;
     return switch (dim.*) {
         .dim_range => |range| range.assumed_shape and range.lower == null and range.upper.* == .literal and range.upper.literal.kind == .assumed_size,
         else => false,
