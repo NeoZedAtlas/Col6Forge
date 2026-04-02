@@ -107,13 +107,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
         .component => |comp| {
             if (resolver) |res| {
                 if (std.ascii.eqlIgnoreCase(comp.name, "len")) {
-                    const base_spec = res.exprTypeSpec(comp.base) orelse return null;
-                    if (base_spec.lowered_kind != .character) return null;
-                    const len = switch (base_spec.char_len_kind) {
-                        .constant => base_spec.char_len orelse return null,
-                        .none => base_spec.char_len orelse 1,
-                        .assumed, .deferred => return null,
-                    };
+                    const len = exprConstantCharacterLen(comp.base, res) orelse return null;
                     return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
                 }
                 if (std.ascii.eqlIgnoreCase(comp.name, "kind")) {
@@ -138,6 +132,106 @@ fn typeSpecKindValue(spec: symbols.TypeSpec) ?i64 {
         .complex_double => spec.kind_value orelse 8,
         .character => spec.kind_value orelse 1,
         .derived => null,
+    };
+}
+
+pub fn exprConstantCharacterLen(expr: *const ast.Expr, resolver: ConstResolver) ?usize {
+    return switch (expr.*) {
+        .literal => |lit| switch (lit.kind) {
+            .string, .hollerith => literals.literalByteLen(lit),
+            else => null,
+        },
+        .identifier => |name| blk: {
+            if (resolver.resolve(name)) |value| {
+                break :blk switch (value) {
+                    .string => |bytes| bytes.len,
+                    else => null,
+                };
+            }
+            const spec = resolver.exprTypeSpec(expr) orelse break :blk null;
+            break :blk typeSpecConstantCharacterLen(spec);
+        },
+        .binary => |bin| blk: {
+            if (bin.op != .concat) break :blk null;
+            const left_len = exprConstantCharacterLen(bin.left, resolver) orelse break :blk null;
+            const right_len = exprConstantCharacterLen(bin.right, resolver) orelse break :blk null;
+            break :blk std.math.add(usize, left_len, right_len) catch null;
+        },
+        .substring => |sub| substringConstantCharacterLen(sub, resolver),
+        .call_or_subscript => |call| blk: {
+            if (std.ascii.eqlIgnoreCase(call.name, "transfer") and call.args.len >= 2) {
+                const mold_spec = resolver.exprTypeSpec(call.args[1]) orelse break :blk null;
+                if (typeSpecConstantCharacterLen(mold_spec)) |len| break :blk len;
+            }
+            const spec = resolver.exprTypeSpec(expr) orelse break :blk null;
+            break :blk typeSpecConstantCharacterLen(spec);
+        },
+        .component => |comp| blk: {
+            if (std.ascii.eqlIgnoreCase(comp.name, "len")) {
+                break :blk null;
+            }
+            const spec = resolver.exprTypeSpec(expr) orelse resolver.exprTypeSpec(comp.base) orelse break :blk null;
+            if (std.ascii.eqlIgnoreCase(comp.name, "kind")) {
+                break :blk null;
+            }
+            if (comp.has_parens and comp.args.len != 0) {
+                const maybe_range = comp.args[comp.args.len - 1];
+                if (maybe_range.* == .dim_range) {
+                    const range = maybe_range.dim_range;
+                    const start_val = if (range.lower) |lower|
+                        constIntFromResolver(lower, resolver) orelse break :blk null
+                    else
+                        1;
+                    if (start_val < 1) break :blk 0;
+                    const end_val = constIntFromResolver(range.upper, resolver) orelse break :blk null;
+                    if (end_val < start_val) break :blk 0;
+                    break :blk std.math.cast(usize, end_val - start_val + 1);
+                }
+            }
+            break :blk typeSpecConstantCharacterLen(spec);
+        },
+        else => blk: {
+            const spec = resolver.exprTypeSpec(expr) orelse break :blk null;
+            break :blk typeSpecConstantCharacterLen(spec);
+        },
+    };
+}
+
+fn substringConstantCharacterLen(sub: ast.SubstringExpr, resolver: ConstResolver) ?usize {
+    const start_val = if (sub.start) |expr|
+        constIntFromResolver(expr, resolver) orelse return null
+    else
+        1;
+    if (start_val < 1) return 0;
+    const end_val = if (sub.end) |expr|
+        constIntFromResolver(expr, resolver) orelse return null
+    else blk: {
+        const base_spec = resolver.exprTypeSpec(&ast.Expr{ .substring = .{
+            .name = sub.name,
+            .args = sub.args,
+            .start = null,
+            .end = null,
+        } }) orelse return null;
+        break :blk @as(i64, @intCast(typeSpecConstantCharacterLen(base_spec) orelse return null));
+    };
+    if (end_val < start_val) return 0;
+    return std.math.cast(usize, end_val - start_val + 1);
+}
+
+fn constIntFromResolver(expr: *const ast.Expr, resolver: ConstResolver) ?i64 {
+    const value = evalConst(expr, resolver) catch return null;
+    return switch (value orelse return null) {
+        .integer => |int_val| int_val,
+        else => null,
+    };
+}
+
+fn typeSpecConstantCharacterLen(spec: symbols.TypeSpec) ?usize {
+    if (spec.lowered_kind != .character) return null;
+    return switch (spec.char_len_kind) {
+        .constant => spec.char_len,
+        .none => spec.char_len orelse 1,
+        .assumed, .deferred => null,
     };
 }
 

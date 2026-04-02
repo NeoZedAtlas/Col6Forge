@@ -3,6 +3,7 @@ const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const literals = @import("literals.zig");
 const evaluator = @import("../evaluator.zig");
+const eval_mod = @import("mod.zig");
 
 const ConstValue = symbols.ConstValue;
 const ExprMeasureKind = evaluator.ExprMeasureKind;
@@ -91,7 +92,8 @@ pub fn evalConstCall(
     switch (kind) {
         .len => {
             if (call.args.len != 1) return null;
-            const len = (try literals.evalConstCharLen(call.args[0], resolver, eval_const_fn)) orelse return null;
+            const len = eval_mod.exprConstantCharacterLen(call.args[0], resolver orelse return null) orelse
+                ((try literals.evalConstCharLen(call.args[0], resolver, eval_const_fn)) orelse return null);
             return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
         },
         .achar => {
@@ -302,10 +304,6 @@ pub fn evalConstCall(
         .size => {
             if (call.args.len == 0 or call.args.len > 2) return null;
             const res = resolver orelse return null;
-            const name = switch (call.args[0].*) {
-                .identifier => |ident| ident,
-                else => return null,
-            };
             const dim = if (call.args.len == 2) blk: {
                 const dim_val = (try eval_const_fn(call.args[1], resolver)) orelse return null;
                 break :blk switch (dim_val) {
@@ -313,7 +311,26 @@ pub fn evalConstCall(
                     else => return null,
                 };
             } else null;
-            return .{ .integer = res.arrayExtent(name, dim) orelse return null };
+            const extent = switch (call.args[0].*) {
+                .identifier => |ident| res.arrayExtent(ident, dim),
+                .array_constructor => |ctor| blk: {
+                    if (dim != null and dim.? != 1) break :blk null;
+                    break :blk std.math.cast(i64, ctor.items.len);
+                },
+                .call_or_subscript => |inner| blk: {
+                    if (!std.ascii.eqlIgnoreCase(inner.name, "transfer")) break :blk null;
+                    if (inner.args.len < 3) break :blk null;
+                    const size_value = (try eval_const_fn(inner.args[2], resolver)) orelse break :blk null;
+                    const elem_count = switch (size_value) {
+                        .integer => |v| v,
+                        else => break :blk null,
+                    };
+                    if (dim != null and dim.? != 1) break :blk null;
+                    break :blk elem_count;
+                },
+                else => null,
+            } orelse return null;
+            return .{ .integer = extent };
         },
         .index => {
             if (call.args.len < 2 or call.args.len > 3) return null;
@@ -561,7 +578,19 @@ fn evalConstKind(expr: *const ast.Expr, resolver: anytype, eval_const_fn: anytyp
                 .string => 1,
             };
         },
-        else => null,
+        else => blk: {
+            const res = resolver orelse break :blk null;
+            const spec = res.exprTypeSpec(expr) orelse break :blk null;
+            break :blk switch (spec.lowered_kind) {
+                .integer, .logical => spec.kind_value orelse 4,
+                .real => spec.kind_value orelse 4,
+                .double_precision => spec.kind_value orelse 8,
+                .complex => spec.kind_value orelse 4,
+                .complex_double => spec.kind_value orelse 8,
+                .character => spec.kind_value orelse 1,
+                .derived => null,
+            };
+        },
     };
 }
 
