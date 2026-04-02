@@ -58,6 +58,46 @@ test "parseProgram accepts alternate return dummies in subroutine header" {
     try testing.expectEqual(@as(usize, 2), unit.alt_return_dummy_count);
 }
 
+test "parseProgram preserves NO_ARG_CHECK on declarator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s(a)\n" ++
+        "!GCC$ ATTRIBUTES NO_ARG_CHECK :: a\n" ++
+        "integer :: a\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].decls.len);
+    try testing.expect(program.units[0].decls[0] == .type_decl);
+    try testing.expect(program.units[0].decls[0].type_decl.items[0].no_arg_check);
+}
+
+test "parseProgram preserves NO_ARG_CHECK in assumed_type_5 actual file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(allocator, "tests/gcc-tests/gfortran.dg/assumed_type_5.f90", 1024 * 1024);
+    defer allocator.free(source);
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+    try testing.expect(program.units[2].decls[1] == .type_decl);
+    try testing.expect(program.units[2].decls[1].type_decl.items[0].no_arg_check);
+}
+
 test "parseProgram expands fixed-form ENTRY RESULT into sibling function units" {
     const testing = std.testing;
     const allocator = testing.allocator;

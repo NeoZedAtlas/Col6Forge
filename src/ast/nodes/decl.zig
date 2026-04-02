@@ -210,5 +210,6 @@ pub const Declarator = struct {
     dims: []*Expr,
     char_len: ?*Expr,
     char_len_deferred: bool = false,
+    no_arg_check: bool = false,
     init: ?*Expr = null,
 };

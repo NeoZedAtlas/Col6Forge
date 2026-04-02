@@ -21,6 +21,7 @@ pub fn hasTrailingContinuation(text: []const u8) bool {
 }
 
 pub fn stripInlineComment(line: []const u8) []const u8 {
+    if (isPreservedDirectiveLine(line)) return line;
     var i: usize = 0;
     var in_single = false;
     var in_double = false;
@@ -54,6 +55,13 @@ pub fn stripInlineComment(line: []const u8) []const u8 {
         }
     }
     return line;
+}
+
+pub fn isPreservedDirectiveLine(line: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, line, " \t");
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "!gcc$")) return false;
+    return std.ascii.indexOfIgnoreCase(trimmed, "attributes") != null and
+        std.ascii.indexOfIgnoreCase(trimmed, "no_arg_check") != null;
 }
 
 pub fn compactUpper(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {

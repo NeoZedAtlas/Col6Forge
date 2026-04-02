@@ -38,6 +38,7 @@ pub const Symbol = struct {
     is_allocatable: bool = false,
     is_pointer: bool = false,
     contiguous: bool = false,
+    no_arg_check: bool = false,
     // Internal compiler-generated temporaries (e.g. intrinsic array-conversion buffers).
     // Backends may choose a dedicated storage strategy for these symbols.
     is_generated_temp: bool = false,

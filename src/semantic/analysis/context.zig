@@ -105,6 +105,7 @@ pub const Context = struct {
             contiguous: bool = false,
             value_attr: bool = false,
             volatile_attr: bool = false,
+            no_arg_check: bool = false,
             is_procedure: bool = false,
             procedure_kind: ?ast.ProgramUnitKind = null,
             procedure_has_explicit_interface: bool = false,

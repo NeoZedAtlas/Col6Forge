@@ -264,6 +264,7 @@ pub fn installDummyArgs(self: *context.Context) !void {
                 symbol.is_pointer = arg_sig.pointer;
                 symbol.is_allocatable = arg_sig.allocatable;
                 symbol.contiguous = arg_sig.contiguous;
+                symbol.no_arg_check = arg_sig.no_arg_check;
                 if (arg_sig.is_procedure) {
                     if (arg_sig.procedure_kind == .function) {
                         symbol.kind = .function;

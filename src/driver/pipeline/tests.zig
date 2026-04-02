@@ -78,6 +78,61 @@ test "runPipeline reports parse diagnostics against the original continued sourc
     try testing.expectEqual(@as(usize, 0), diag_info.secondary_spans.len);
 }
 
+test "runPipelineWithOptionsAndDiagnostics keeps NO_ARG_CHECK diagnostics for assumed_type_5" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidArgumentCount,
+        runPipelineWithOptionsAndDiagnostics(
+            allocator,
+            "tests/gcc-tests/gfortran.dg/assumed_type_5.f90",
+            .llvm,
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    const items = diag_bag.items();
+    var saw_no_arg_check = false;
+    for (items) |item| {
+        if (std.mem.indexOf(u8, item.message, "NO_ARG_CHECK") != null) saw_no_arg_check = true;
+    }
+    try testing.expect(saw_no_arg_check);
+}
+
+test "runPipelineWithOptionsAndDiagnostics keeps NO_ARG_CHECK diagnostics for assumed_type_5 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const abs_path = try std.fs.cwd().realpathAlloc(allocator, "tests/gcc-tests/gfortran.dg/assumed_type_5.f90");
+    defer allocator.free(abs_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidArgumentCount,
+        runPipelineWithOptionsAndDiagnostics(
+            allocator,
+            abs_path,
+            .llvm,
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    const items = diag_bag.items();
+    var saw_no_arg_check = false;
+    for (items) |item| {
+        if (std.mem.indexOf(u8, item.message, "NO_ARG_CHECK") != null) saw_no_arg_check = true;
+    }
+    try testing.expect(saw_no_arg_check);
+}
+
 test "runPipeline reports semantic declaration diagnostics against the original source line" {
     const testing = std.testing;
     const allocator = testing.allocator;

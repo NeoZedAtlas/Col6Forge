@@ -202,6 +202,9 @@ pub fn applyDeclarator(
         }
         sym.contiguous = true;
     }
+    if (item.no_arg_check) {
+        sym.no_arg_check = true;
+    }
     if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
         return error.InvalidUnlimitedPolymorphicEntity;
     }

@@ -482,6 +482,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                     return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "no specific function");
                 }
                 try checkSpecialExprCallConstraints(self, call.name, call.args);
+                try procedure_calls.checkIntrinsicCallConstraintsForExprArgs(self, call.name, call.args);
                 try procedure_calls.checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try procedure_calls.checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
                 try procedure_calls.checkProcedureActualArgsForExprCall(self, call.name, call.args, .{

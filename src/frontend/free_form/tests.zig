@@ -33,6 +33,21 @@ test "normalizeFreeForm strips ! comments outside strings" {
     try testing.expectEqualStrings("b = '!'", lines[1].text);
 }
 
+test "normalizeFreeForm preserves GCC NO_ARG_CHECK directive lines" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text =
+        "!GCC$ ATTRIBUTES NO_ARG_CHECK :: a\n" ++
+        "integer :: a\n";
+    const lines = try free_form.normalizeFreeForm(allocator, src_text);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("!GCC$ ATTRIBUTES NO_ARG_CHECK :: a", lines[0].text);
+    try testing.expectEqualStrings("integer :: a", lines[1].text);
+}
+
 test "normalizeFreeForm keeps USE rename arrow" {
     const testing = std.testing;
     const allocator = testing.allocator;

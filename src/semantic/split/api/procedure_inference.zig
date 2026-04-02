@@ -40,6 +40,7 @@ pub fn inferProcedureArgSigsWithKnown(
             .contiguous = decl_info.contiguous,
             .value_attr = decl_info.value_attr,
             .volatile_attr = decl_info.volatile_attr,
+            .no_arg_check = declarator != null and declarator.?.no_arg_check,
             .is_procedure = decl_info.interface_procedure != null or declarator_sig != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind

@@ -908,6 +908,172 @@ test "move_alloc intrinsic call diagnoses duplicate stat keyword instead of expl
     try testing.expect(std.mem.indexOf(u8, got.message, "Keyword 'stat'") != null);
 }
 
+test "no_arg_check dummy is preserved into intrinsic actual restrictions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s(a)\n" ++
+        "  !GCC$ ATTRIBUTES NO_ARG_CHECK :: a\n" ++
+        "  integer :: a\n" ++
+        "  print *, transfer(a, 1)\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "NO_ARG_CHECK") != null);
+}
+
+test "assumed_type_5 third unit keeps NO_ARG_CHECK on analyzed symbol" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(allocator, "tests/gcc-tests/gfortran.dg/assumed_type_5.f90", 1024 * 1024);
+    defer allocator.free(source);
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    var unit = program.units[2];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const a_idx = analyzer_instance.ctx.findSymbolIndex("a") orelse return error.TestExpectedEqual;
+    try testing.expect(analyzer_instance.ctx.symbols.items[a_idx].no_arg_check);
+}
+
+test "assumed_type_5 third unit emits NO_ARG_CHECK diagnostic in isolation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(allocator, "tests/gcc-tests/gfortran.dg/assumed_type_5.f90", 1024 * 1024);
+    defer allocator.free(source);
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    var unit = program.units[2];
+    var analyzer_instance = UnitAnalyzer.initWithDiagnostics(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+        &diag_bag,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const items = diag_bag.items();
+    try testing.expect(items.len != 0);
+    var saw_no_arg_check = false;
+    for (items) |item| {
+        if (std.mem.indexOf(u8, item.message, "NO_ARG_CHECK") != null) saw_no_arg_check = true;
+    }
+    try testing.expect(saw_no_arg_check);
+}
+
+test "assumed_type_5 full program analysis includes NO_ARG_CHECK diagnostics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(allocator, "tests/gcc-tests/gfortran.dg/assumed_type_5.f90", 1024 * 1024);
+    defer allocator.free(source);
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithKnownAndOptionsAndDiagnostics(
+        arena.allocator(),
+        program,
+        &.{},
+        &.{},
+        .{},
+        &diag_bag,
+    ) catch {};
+
+    const items = diag_bag.items();
+    var saw_no_arg_check = false;
+    for (items) |item| {
+        if (std.mem.indexOf(u8, item.message, "NO_ARG_CHECK") != null) saw_no_arg_check = true;
+    }
+    try testing.expect(saw_no_arg_check);
+}
+
 test "move_alloc intrinsic call rejects INTENT(IN) allocatable from-argument" {
     const testing = std.testing;
     const allocator = testing.allocator;

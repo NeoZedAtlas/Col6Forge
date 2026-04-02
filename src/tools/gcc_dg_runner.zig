@@ -1211,6 +1211,33 @@ fn formatPipelineFailureText(
     return fallback;
 }
 
+fn formatPipelineFailureMatchText(
+    allocator: std.mem.Allocator,
+    diag_bag: *Col6Forge.diag.Bag,
+) ![]const u8 {
+    if (!diag_bag.has()) return try allocator.dupe(u8, "");
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (diag_bag.items.items) |item| {
+        try out.appendSlice(allocator, item.message);
+        try out.append(allocator, '\n');
+        if (item.line_text.len != 0) {
+            try out.appendSlice(allocator, item.line_text);
+            try out.append(allocator, '\n');
+        }
+        for (item.notes) |note| {
+            try out.appendSlice(allocator, note.text);
+            try out.append(allocator, '\n');
+        }
+        for (item.helps) |help| {
+            try out.appendSlice(allocator, help.text);
+            try out.append(allocator, '\n');
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 fn matchExpectedErrors(
     allocator: std.mem.Allocator,
     case: TestCase,
@@ -1393,12 +1420,14 @@ fn processCase(
 
     var compile_failed = false;
     var diag_text: []const u8 = "";
+    var match_text: []const u8 = "";
     var warning_diag_text: []const u8 = "";
     var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
     defer pipeline_diag_bag.deinit();
 
     emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, case.range_check, case.fbackslash, case.allow_argument_mismatch, &pipeline_diag_bag) catch |err| {
         compile_failed = true;
+        match_text = try formatPipelineFailureMatchText(allocator, &pipeline_diag_bag);
         diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, &pipeline_diag_bag, err, !expect_failure);
     };
 
@@ -1437,34 +1466,40 @@ fn processCase(
 
     if (expect_failure) {
         defer if (diag_text.len > 0) allocator.free(diag_text);
+        defer if (match_text.len > 0) allocator.free(match_text);
         if (!compile_failed) {
             log_state.stderr("expected compile failure but succeeded: {s}\n", .{case.rel_path});
             return false;
         }
         if (case.expect_compile_error) {
-            const matched = try matchExpectedErrors(allocator, case, diag_text, log_state);
+            const candidate = if (match_text.len != 0) match_text else diag_text;
+            const matched = try matchExpectedErrors(allocator, case, candidate, log_state);
             if (!matched) return false;
         }
         if (check_warnings and case.expected_warning_patterns.len > 0) {
-            const warnings_ok = try matchExpectedWarnings(allocator, case, diag_text, log_state);
+            const candidate = if (match_text.len != 0) match_text else diag_text;
+            const warnings_ok = try matchExpectedWarnings(allocator, case, candidate, log_state);
             if (!warnings_ok) return false;
         } else if (case.expected_warning_patterns.len > 0 and options.verbose) {
             log_state.stdout("strict-level off: skipping dg-warning check for {s}\n", .{case.rel_path});
         }
         if (check_aux and case.expected_aux_patterns.len > 0) {
-            const aux_ok = try matchExpectedAux(allocator, case, diag_text, log_state);
+            const candidate = if (match_text.len != 0) match_text else diag_text;
+            const aux_ok = try matchExpectedAux(allocator, case, candidate, log_state);
             if (!aux_ok) return false;
         } else if (case.expected_aux_patterns.len > 0 and options.verbose) {
             log_state.stdout("strict-level not full: skipping dg-message/note/bogus checks for {s}\n", .{case.rel_path});
         }
         if (check_output and case.expected_output_patterns.len > 0) {
-            const out_ok = try matchExpectedOutput(allocator, case, diag_text, log_state);
+            const candidate = if (match_text.len != 0) match_text else diag_text;
+            const out_ok = try matchExpectedOutput(allocator, case, candidate, log_state);
             if (!out_ok) return false;
         } else if ((case.expected_output_patterns.len > 0 or case.prune_output_patterns.len > 0) and options.verbose) {
             log_state.stdout("strict-level not full: skipping dg-output/prune-output checks for {s}\n", .{case.rel_path});
         }
     } else {
         if (diag_text.len > 0) allocator.free(diag_text);
+        if (match_text.len > 0) allocator.free(match_text);
         if (compile_failed) return false;
         defer if (warning_diag_text.len > 0) allocator.free(warning_diag_text);
         if (case.expected_warning_patterns.len > 0) {

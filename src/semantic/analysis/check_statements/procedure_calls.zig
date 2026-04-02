@@ -623,6 +623,7 @@ pub fn checkIntrinsicCallConstraintsForCallArgs(
     name: []const u8,
     args: []const ast.CallArg,
 ) CheckError!void {
+    try checkIntrinsicSpecialActualRestrictionsForCallArgs(self, name, args);
     if (std.ascii.eqlIgnoreCase(name, "move_alloc")) {
         try checkMoveAllocCallConstraints(self, args);
         return;
@@ -651,6 +652,138 @@ pub fn checkIntrinsicCallConstraintsForCallArgs(
     if (std.ascii.eqlIgnoreCase(name, "c_f_procpointer")) {
         try checkCFProcPointerCallConstraints(self, args);
     }
+}
+
+pub fn checkIntrinsicCallConstraintsForExprArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    try checkIntrinsicSpecialActualRestrictionsForExprArgs(self, name, args);
+}
+
+fn checkIntrinsicSpecialActualRestrictionsForCallArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []const ast.CallArg,
+) CheckError!void {
+    var actual_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        try checkIntrinsicSpecialActualRestriction(self, name, arg.expr.value, actual_idx);
+        actual_idx += 1;
+    }
+}
+
+fn checkIntrinsicSpecialActualRestrictionsForExprArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    for (args, 0..) |arg, actual_idx| {
+        try checkIntrinsicSpecialActualRestriction(self, name, arg, actual_idx);
+    }
+}
+
+fn checkIntrinsicSpecialActualRestriction(
+    self: *context.Context,
+    name: []const u8,
+    expr_node: *ast.Expr,
+    actual_idx: usize,
+) CheckError!void {
+    if (exprIsNoArgCheck(self, expr_node) and !intrinsicAllowsNoArgCheck(name)) {
+        return emitIntrinsicArgDiagnostic(self, expr_node, "Variable with NO_ARG_CHECK attribute at (1) is only permitted as argument to the intrinsic functions C_LOC and PRESENT");
+    }
+    if (exprIsAssumedRank(self, expr_node)) {
+        if (intrinsicAllowsAssumedRank(name, actual_idx)) return;
+        if (std.ascii.eqlIgnoreCase(name, "ubound")) {
+            return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-rank argument at (1) is only permitted as first actual argument to the intrinsic inquiry function ubound");
+        }
+        return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-rank argument at (1) is only permitted as actual argument to intrinsic inquiry functions");
+    }
+    if (exprIsAssumedType(self, expr_node)) {
+        if (intrinsicAllowsAssumedType(name, actual_idx)) return;
+        if (std.ascii.eqlIgnoreCase(name, "ubound")) {
+            return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-type argument at (1) is only permitted as first actual argument to the intrinsic ubound");
+        }
+        if (std.ascii.eqlIgnoreCase(name, "transfer")) {
+            return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-type argument at (1) is not permitted as actual argument to the intrinsic transfer");
+        }
+        return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-type argument at (1) is only permitted as actual argument to intrinsic inquiry functions");
+    }
+}
+
+fn intrinsicAllowsNoArgCheck(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "c_loc") or std.ascii.eqlIgnoreCase(name, "present");
+}
+
+fn intrinsicAllowsAssumedRank(name: []const u8, actual_idx: usize) bool {
+    if (std.ascii.eqlIgnoreCase(name, "c_loc") or
+        std.ascii.eqlIgnoreCase(name, "present") or
+        std.ascii.eqlIgnoreCase(name, "c_sizeof") or
+        std.ascii.eqlIgnoreCase(name, "sizeof"))
+    {
+        return actual_idx == 0;
+    }
+    return intrinsicAllowsInquiryArrayActual(name, actual_idx);
+}
+
+fn intrinsicAllowsAssumedType(name: []const u8, actual_idx: usize) bool {
+    if (std.ascii.eqlIgnoreCase(name, "c_loc") or
+        std.ascii.eqlIgnoreCase(name, "present") or
+        std.ascii.eqlIgnoreCase(name, "c_sizeof") or
+        std.ascii.eqlIgnoreCase(name, "sizeof"))
+    {
+        return actual_idx == 0;
+    }
+    return intrinsicAllowsInquiryArrayActual(name, actual_idx);
+}
+
+fn intrinsicAllowsInquiryArrayActual(name: []const u8, actual_idx: usize) bool {
+    if (actual_idx != 0) return false;
+    return std.ascii.eqlIgnoreCase(name, "lbound") or
+        std.ascii.eqlIgnoreCase(name, "ubound") or
+        std.ascii.eqlIgnoreCase(name, "shape") or
+        std.ascii.eqlIgnoreCase(name, "size") or
+        std.ascii.eqlIgnoreCase(name, "rank") or
+        std.ascii.eqlIgnoreCase(name, "storage_size") or
+        std.ascii.eqlIgnoreCase(name, "is_contiguous");
+}
+
+fn exprIsAssumedType(self: *context.Context, expr_node: *ast.Expr) bool {
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return false;
+    return spec.assumed_type;
+}
+
+fn exprIsAssumedRank(self: *context.Context, expr_node: *ast.Expr) bool {
+    const idx = rootActualSymbolIndex(self, expr_node) orelse return false;
+    return symbolIsAssumedRank(self, self.symbols.items[idx]);
+}
+
+fn exprIsNoArgCheck(self: *context.Context, expr_node: *ast.Expr) bool {
+    const idx = rootActualSymbolIndex(self, expr_node) orelse return false;
+    return self.symbols.items[idx].no_arg_check;
+}
+
+fn rootActualSymbolIndex(self: *context.Context, expr_node: *ast.Expr) ?usize {
+    return switch (expr_node.*) {
+        .identifier => |name| self.ref_symbol_index.get(@intFromPtr(expr_node)) orelse resolve_symbols.findSymbolIndex(self, name),
+        .call_or_subscript => |call| self.ref_symbol_index.get(@intFromPtr(expr_node)) orelse resolve_symbols.findSymbolIndex(self, call.name),
+        .substring => |sub| resolve_symbols.findSymbolIndex(self, sub.name),
+        .component => |comp| rootActualSymbolIndex(self, comp.base),
+        else => null,
+    };
+}
+
+fn symbolIsAssumedRank(self: *context.Context, sym: symbols.Symbol) bool {
+    if (sym.dims.len != 1) return false;
+    const dim = sym.dims[0];
+    const dim_source = self.sourceForExpr(dim) orelse ast.SourceRef{};
+    if (std.mem.eql(u8, std.mem.trim(u8, dim_source.text, " \t"), "..")) return true;
+    return switch (dim.*) {
+        .dim_range => |range| range.assumed_shape and range.lower == null and range.upper.* == .literal and range.upper.literal.kind == .assumed_size,
+        else => false,
+    };
 }
 
 const IntrinsicCallActual = struct {
