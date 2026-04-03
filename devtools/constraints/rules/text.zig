@@ -106,7 +106,6 @@ pub const file_rules = [_]model.AuditRule{
         .excluded_exact_paths = &.{
             "src/codegen/llvm/codegen/expression/call/array_actuals.zig",
             "src/codegen/llvm/codegen/module/tests.zig",
-            "src/semantic/analysis/mod.zig",
         },
     },
 };
