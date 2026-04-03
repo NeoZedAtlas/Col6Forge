@@ -107,7 +107,6 @@ pub const file_rules = [_]model.AuditRule{
             "src/codegen/llvm/codegen/expression/call/array_actuals.zig",
             "src/codegen/llvm/codegen/module/tests.zig",
             "src/semantic/analysis/mod.zig",
-            "src/semantic/analysis/check_statements/procedure_calls.zig",
         },
     },
 };
