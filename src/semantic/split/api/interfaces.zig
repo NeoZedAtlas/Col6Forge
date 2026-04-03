@@ -20,12 +20,20 @@ pub fn installSingleTargetGenericInterfaces(
             if (intrinsics.isIntrinsicName(generic_name)) continue;
             const target_name = singleTargetInterfaceProcedureName(interface_block) orelse continue;
 
-            const proc_sig = lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, target_name) orelse continue;
+            const proc_sig = lookupCaseInsensitiveOrQualifiedSuffix(
+                context.Context.ProcedureSig,
+                known_procedure_sigs,
+                target_name,
+            ) orelse continue;
             const proc_key = try symbol_lookup.lowerDup(arena, generic_name);
             try known_procedure_sigs.put(proc_key, proc_sig);
 
             if (proc_sig.kind != .function) continue;
-            const type_spec = lookupCaseInsensitive(symbols.TypeSpec, known_function_type_specs, target_name) orelse continue;
+            const type_spec = lookupCaseInsensitiveOrQualifiedSuffix(
+                symbols.TypeSpec,
+                known_function_type_specs,
+                target_name,
+            ) orelse continue;
             const type_key = try symbol_lookup.lowerDup(arena, generic_name);
             try known_function_type_specs.put(type_key, type_spec);
         }
@@ -106,4 +114,23 @@ fn lookupCaseInsensitive(
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
     }
     return null;
+}
+
+fn lookupCaseInsensitiveOrQualifiedSuffix(
+    comptime T: type,
+    map: *const std.StringHashMap(T),
+    name: []const u8,
+) ?T {
+    if (lookupCaseInsensitive(T, map, name)) |exact| return exact;
+
+    var match: ?T = null;
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[sep + 2 ..], name)) continue;
+        if (match != null) return null;
+        match = entry.value_ptr.*;
+    }
+    return match;
 }
