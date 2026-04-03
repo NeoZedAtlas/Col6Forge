@@ -467,12 +467,13 @@ fn validateKnownFunctionResultDeclaration(
     prefer_length_message: bool,
 ) !void {
     if (sym.storage == .dummy) return;
+    const has_visible_explicit_interface = procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name);
     if (self.unit.kind == .function) {
         const result_name = self.unit.result_name orelse self.unit.name;
         if (std.ascii.eqlIgnoreCase(sym.name, result_name)) return;
     }
     if (self.unit.kind == .function and self.unit.owner_name == null and self.unit.prelude_decl_count == 0) return;
-    if (self.unit.kind != .function and !procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name) and !sym.is_external) return;
+    if (self.unit.kind != .function and !has_visible_explicit_interface) return;
     const known_sig = symbols_mod.lookupKnownProcedureSig(self, sym.name) orelse return;
     if (known_sig.kind != .function) return;
     const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;

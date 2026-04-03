@@ -2051,7 +2051,9 @@ fn checkKnownImplicitProcedureScalarActualArg(
     actual_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
-    if (formal.is_procedure) return;
+    if (formal.is_procedure) {
+        return checkProcedureActualArg(self, null, formal, actual_expr, deps);
+    }
     if (formal.no_arg_check) return;
     if (actual_expr.* == .identifier and identifierIsProcedureDesignatorForDataActual(self, actual_expr.identifier)) {
         return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "not allowed as an actual argument");

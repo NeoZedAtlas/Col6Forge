@@ -1347,6 +1347,14 @@ pub fn parseInterfaceBlock(self: anytype) anyerror!Decl {
                 });
                 if (!body_lp.consume(.comma)) break;
             }
+        } else if (body_lp.consumeKeyword("INTERFACE") or (body_lp.consumeKeyword("ABSTRACT") and body_lp.consumeKeyword("INTERFACE"))) {
+            self.diag_bag.set(
+                line.span.start_line,
+                1,
+                catalog.parser.unexpected_token.code,
+                "Unexpected INTERFACE statement",
+                line.text,
+            );
         } else {
             var block_data_counter: usize = 0;
             const line_has_module_prefix = lineHasModuleProcedurePrefix(line, tokens);

@@ -1641,6 +1641,34 @@ test "parseProgramWithDiagnostics reports malformed operator interface end" {
     try testing.expectEqualStrings("Unexpected end of file", third.message);
 }
 
+test "parseProgramWithDiagnostics reports nested interface inside interface body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "interface assignment (=)\n" ++
+        "  interface pseudo_scalar\n" ++
+        "  pure function double_tensor2odd (x, t2) result (xt2)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(error.UnexpectedEOF, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    try testing.expectEqual(@as(usize, 2), first.line);
+    try testing.expectEqualStrings("Unexpected INTERFACE statement", first.message);
+
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+    try testing.expectEqualStrings("Unexpected end of file", second.message);
+}
+
 test "parseProgramWithDiagnostics recovers bare call-like statement in implicit program" {
     const testing = std.testing;
     const allocator = testing.allocator;

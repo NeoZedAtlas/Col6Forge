@@ -258,6 +258,59 @@ test "ambiguous imported generic interfaces reject matching call" {
     try testing.expect(std.mem.indexOf(u8, got.message, "Ambiguous interfaces") != null);
 }
 
+test "external function declaration does not preempt procedure actual mismatch diagnostics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program memain\n" ++
+        "  implicit none\n" ++
+        "  integer subr\n" ++
+        "  external subr\n" ++
+        "  external i4\n" ++
+        "  external r4\n" ++
+        "  integer r4\n" ++
+        "  call foo(subr)\n" ++
+        "  call bar(i4)\n" ++
+        "  call baz(r4)\n" ++
+        "end program memain\n" ++
+        "subroutine foo(ifun)\n" ++
+        "  integer(kind=4) ifun\n" ++
+        "  external ifun\n" ++
+        "  integer y\n" ++
+        "  y = ifun(32)\n" ++
+        "end subroutine foo\n" ++
+        "subroutine bar(sub)\n" ++
+        "  call sub\n" ++
+        "end subroutine bar\n" ++
+        "subroutine subr(x)\n" ++
+        "  integer x\n" ++
+        "end subroutine subr\n" ++
+        "integer(kind=4) function i4()\n" ++
+        "  i4 = 42\n" ++
+        "end function i4\n" ++
+        "real(kind=4) function r4()\n" ++
+        "  r4 = 1.0\n" ++
+        "end function r4\n" ++
+        "subroutine baz(ifun)\n" ++
+        "  integer(kind=4) ifun\n" ++
+        "  external ifun\n" ++
+        "  integer y\n" ++
+        "  y = ifun(32)\n" ++
+        "end subroutine baz\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Return type mismatch of function") == null);
+}
+
 test "pure procedure rejects impure procedure component calls" {
     const testing = std.testing;
     const allocator = testing.allocator;
