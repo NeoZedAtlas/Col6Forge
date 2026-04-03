@@ -1266,7 +1266,7 @@ fn analyzeIntrinsicMergeActual(
 
     const elem_ty = result_basis.elem_ty;
     const elem_count = try emitExtentProductI64(ctx, builder, result_basis.extents);
-    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
+    const dst_ptr = try emitHeapArrayTempPointerScaled(ctx, builder, elem_ty, elem_count, result_basis.address_scale);
     const multipliers = try emitContiguousMultipliers(ctx, builder, result_basis.extents);
 
     const mask_scalar = if (mask_actual == null) try emitLogicalValue(ctx, builder, call.args[2]) else null;
@@ -1286,6 +1286,9 @@ fn analyzeIntrinsicMergeActual(
         elem_count,
         dst_ptr,
         elem_ty,
+        result_basis.address_scale,
+        call.args[0],
+        call.args[1],
         true_actual,
         true_scalar,
         false_actual,
@@ -1302,7 +1305,7 @@ fn analyzeIntrinsicMergeActual(
         .elem_ty = elem_ty,
         .extents = result_basis.extents,
         .multipliers = multipliers,
-        .address_scale = i64Const(ctx, 1),
+        .address_scale = result_basis.address_scale,
         .storage = .materialized_temp,
         .owned_heap_ptr = dst_ptr,
         .contiguous = true,
@@ -1335,6 +1338,9 @@ fn emitIntrinsicMergeLoop(
     elem_count: ValueRef,
     dst_ptr: ValueRef,
     elem_ty: IRType,
+    result_address_scale: ValueRef,
+    true_expr: *Expr,
+    false_expr: *Expr,
     true_actual: ?ArrayActualPlan,
     true_scalar: ?ValueRef,
     false_actual: ?ArrayActualPlan,
@@ -1364,6 +1370,44 @@ fn emitIntrinsicMergeLoop(
         constantI1Value(mask_scalar.?)
     else
         null;
+    if (elem_ty == .i8 and !valueRefEquals(result_address_scale, i64Const(ctx, 1))) {
+        const dst_elem_ptr = try emitContiguousCharacterElementPtr(ctx, builder, dst_ptr, result_address_scale, idx_val);
+        if (constant_mask) |mask_const| {
+            if (mask_const) {
+                try emitMergeCharacterOperandCopy(ctx, builder, dst_elem_ptr, result_address_scale, idx_val, true_actual, true_expr);
+            } else {
+                try emitMergeCharacterOperandCopy(ctx, builder, dst_elem_ptr, result_address_scale, idx_val, false_actual, false_expr);
+            }
+        } else {
+            const mask_value = if (mask_actual) |actual|
+                try coerceLogicalMaskValue(ctx, builder, try emitArrayActualElement(ctx, builder, idx_val, actual))
+            else
+                mask_scalar.?;
+            const true_label = try ctx.nextLabel("merge_char_true");
+            const false_label = try ctx.nextLabel("merge_char_false");
+            const continue_label = try ctx.nextLabel("merge_char_continue");
+            try builder.brCond(mask_value, true_label, false_label);
+
+            try builder.label(true_label);
+            try emitMergeCharacterOperandCopy(ctx, builder, dst_elem_ptr, result_address_scale, idx_val, true_actual, true_expr);
+            try builder.br(continue_label);
+
+            try builder.label(false_label);
+            try emitMergeCharacterOperandCopy(ctx, builder, dst_elem_ptr, result_address_scale, idx_val, false_actual, false_expr);
+            try builder.br(continue_label);
+
+            try builder.label(continue_label);
+        }
+
+        const next_char_name = try ctx.nextTemp();
+        try builder.binary(next_char_name, "add", .i64, idx_val, i64Const(ctx, 1));
+        try builder.store(.{ .name = next_char_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+        try builder.br(loop_preheader);
+
+        try builder.label(loop_exit);
+        return;
+    }
+
     const merged_value = if (constant_mask) |mask_const|
         if (mask_const)
             if (true_actual) |actual|
@@ -1399,6 +1443,65 @@ fn emitIntrinsicMergeLoop(
     try builder.br(loop_preheader);
 
     try builder.label(loop_exit);
+}
+
+fn emitMergeCharacterOperandCopy(
+    ctx: *Context,
+    builder: anytype,
+    dst_elem_ptr: ValueRef,
+    dst_len: ValueRef,
+    idx_val: ValueRef,
+    actual: ?ArrayActualPlan,
+    scalar_expr: *Expr,
+) !void {
+    if (actual) |resolved| {
+        const src_elem_ptr = try emitArrayActualElementPtr(
+            ctx,
+            builder,
+            resolved.base_ptr,
+            resolved.elem_ty,
+            resolved.extents,
+            resolved.multipliers,
+            resolved.address_scale,
+            resolved.contiguous,
+            idx_val,
+        );
+        try emitCopyCharacterBytesPadded(ctx, builder, dst_elem_ptr, dst_len, src_elem_ptr, resolved.address_scale);
+        return;
+    }
+
+    const plan = (try dispatch.emitCharacterValuePlan(ctx, builder, scalar_expr)) orelse return error.UnsupportedIntrinsicType;
+    var src_len = plan.logical_len;
+    if (src_len.ty != .i64) src_len = try casting.coerce(ctx, builder, src_len, .i64);
+    try emitCopyCharacterBytesPadded(ctx, builder, dst_elem_ptr, dst_len, plan.ptr, src_len);
+}
+
+fn emitContiguousCharacterElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    char_len: ValueRef,
+    idx_val: ValueRef,
+) !ValueRef {
+    const byte_offset = try emitMulI64(ctx, builder, idx_val, char_len);
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, .i8, base_ptr, byte_offset);
+    return .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+}
+
+fn emitCopyCharacterBytesPadded(
+    ctx: *Context,
+    builder: anytype,
+    dst_ptr: ValueRef,
+    dst_len: ValueRef,
+    src_ptr: ValueRef,
+    src_len: ValueRef,
+) !void {
+    if (!valueRefEquals(dst_len, src_len)) {
+        try emitMemsetByte(ctx, builder, dst_ptr, dst_len, .{ .name = "32", .ty = .i8, .is_ptr = false });
+    }
+    const copy_len = try emitMinI64(ctx, builder, dst_len, src_len);
+    try emitMemcpyBytes(ctx, builder, dst_ptr, src_ptr, copy_len);
 }
 
 fn constantI1Value(value: ValueRef) ?bool {
@@ -2088,16 +2191,35 @@ fn analyzeStaticMaterializedArrayConstructorActual(
     if (!arrayConstructorHasOnlyScalarItems(ctor)) return null;
 
     const elem_info = arrayConstructorElementInfo(ctx, ctor) orelse return null;
-    if (elem_info.elem_ty == .i8) return null;
-
-    const base_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_info.elem_ty, i64Const(ctx, @intCast(elem_count)));
+    if (elem_info.elem_ty == .i8 and elem_count == 1) return null;
+    const base_ptr = try emitHeapArrayTempPointerScaled(
+        ctx,
+        builder,
+        elem_info.elem_ty,
+        i64Const(ctx, @intCast(elem_count)),
+        elem_info.address_scale,
+    );
 
     for (ctor.items, 0..) |item, idx| {
-        const value = try dispatch.emitExpr(ctx, builder, item);
-        const coerced = try casting.coerce(ctx, builder, value, elem_info.elem_ty);
-        const elem_ptr_name = try ctx.nextTemp();
-        try builder.gep(elem_ptr_name, elem_info.elem_ty, base_ptr, i64Const(ctx, @intCast(idx)));
-        try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+        if (elem_info.elem_ty == .i8) {
+            const dst_ptr = try emitContiguousCharacterElementPtr(
+                ctx,
+                builder,
+                base_ptr,
+                elem_info.address_scale,
+                i64Const(ctx, @intCast(idx)),
+            );
+            const plan = (try dispatch.emitCharacterValuePlan(ctx, builder, item)) orelse return null;
+            var src_len = plan.logical_len;
+            if (src_len.ty != .i64) src_len = try casting.coerce(ctx, builder, src_len, .i64);
+            try emitCopyCharacterBytesPadded(ctx, builder, dst_ptr, elem_info.address_scale, plan.ptr, src_len);
+        } else {
+            const value = try dispatch.emitExpr(ctx, builder, item);
+            const coerced = try casting.coerce(ctx, builder, value, elem_info.elem_ty);
+            const elem_ptr_name = try ctx.nextTemp();
+            try builder.gep(elem_ptr_name, elem_info.elem_ty, base_ptr, i64Const(ctx, @intCast(idx)));
+            try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+        }
     }
 
     const extents = try ctx.allocator.alloc(ValueRef, 1);
@@ -2396,8 +2518,18 @@ fn materializeTransferSourceBytes(
 }
 
 fn zeroByteBuffer(ctx: *Context, builder: anytype, ptr: ValueRef, size: ValueRef) !void {
+    try emitMemsetByte(ctx, builder, ptr, size, .{ .name = "0", .ty = .i8, .is_ptr = false });
+}
+
+fn emitMemsetByte(
+    ctx: *Context,
+    builder: anytype,
+    ptr: ValueRef,
+    size: ValueRef,
+    byte_value: ValueRef,
+) !void {
     const memset_name = try ctx.ensureDeclRaw("llvm.memset.p0.i64", .void, &[_]IRType{ .ptr, .i8, .i64, .i1 }, false);
-    try builder.callTyped(null, .void, memset_name, &.{ ptr, .{ .name = "0", .ty = .i8, .is_ptr = false }, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
+    try builder.callTyped(null, .void, memset_name, &.{ ptr, byte_value, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
 }
 
 fn emitMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) !void {
@@ -2577,6 +2709,21 @@ fn emitHeapArrayTempPointer(
 ) !ValueRef {
     const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
     const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
+    return emitHeapAllocBytes(ctx, builder, total_bytes);
+}
+
+fn emitHeapArrayTempPointerScaled(
+    ctx: *Context,
+    builder: anytype,
+    elem_ty: IRType,
+    elem_count: ValueRef,
+    address_scale: ValueRef,
+) !ValueRef {
+    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
+    var total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
+    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
+        total_bytes = try emitMulI64(ctx, builder, total_bytes, address_scale);
+    }
     return emitHeapAllocBytes(ctx, builder, total_bytes);
 }
 
@@ -3026,6 +3173,10 @@ fn emitBinaryArrayActualLoop(
     else
         right_scalar orelse return error.InvalidAbiState;
     const result_raw = switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => if (lhs.ty == .i8 and rhs.ty == .i8)
+            try emitLenOneCharacterElementCompare(ctx, builder, op, lhs, rhs)
+        else
+            try binary.emitBinary(ctx, builder, op, lhs, rhs),
         .and_, .or_, .eqv, .neqv => try binary.emitBinary(
             ctx,
             builder,
@@ -3048,6 +3199,27 @@ fn emitBinaryArrayActualLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn emitLenOneCharacterElementCompare(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    lhs: ValueRef,
+    rhs: ValueRef,
+) !ValueRef {
+    const pred = switch (op) {
+        .eq => "eq",
+        .ne => "ne",
+        .lt => "slt",
+        .le => "sle",
+        .gt => "sgt",
+        .ge => "sge",
+        else => return error.UnsupportedLogicalOp,
+    };
+    const tmp = try ctx.nextTemp();
+    try builder.compare(tmp, "icmp", pred, .i8, lhs, rhs);
+    return .{ .name = tmp, .ty = .i1, .is_ptr = false };
 }
 
 pub fn emitArrayActualElement(

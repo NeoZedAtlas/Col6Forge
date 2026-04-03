@@ -103,6 +103,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "MAX", Arity{ .min = 2, .max = null } },
     .{ "MAX0", Arity{ .min = 2, .max = null } },
     .{ "MAX1", Arity{ .min = 2, .max = null } },
+    .{ "MERGE", Arity{ .min = 3, .max = 3 } },
     .{ "MIN", Arity{ .min = 2, .max = null } },
     .{ "MIN0", Arity{ .min = 2, .max = null } },
     .{ "MIN1", Arity{ .min = 2, .max = null } },

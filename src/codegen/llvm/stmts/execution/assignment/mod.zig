@@ -45,6 +45,10 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     if (try whole_array.emitWholeArrayConstructorAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitWholeArrayExprAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitProjectedComponentConstructorAssignment(ctx, builder, assign)) return;
+    if (try whole_array.emitWholeCharacterArrayActualAssignment(ctx, builder, assign)) {
+        character_mod.trackCharAssignment(ctx, assign.target, null);
+        return;
+    }
     if (try whole_array.emitWholeCharacterArrayScalarAssignment(ctx, builder, assign)) {
         character_mod.trackCharAssignment(ctx, assign.target, null);
         return;

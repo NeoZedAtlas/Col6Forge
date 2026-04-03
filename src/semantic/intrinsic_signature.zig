@@ -151,6 +151,7 @@ pub fn resultDependsOnArgs(name: []const u8) bool {
     for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
     const upper = upper_buf[0..name.len];
     if (std.mem.eql(u8, upper, "ABS")) return true;
+    if (std.mem.eql(u8, upper, "MERGE")) return true;
     if (std.mem.eql(u8, upper, "REPEAT")) return true;
     if (std.mem.eql(u8, upper, "TRANSFER")) return true;
     if (IntrinsicSameArgMap.has(upper)) return true;
@@ -178,6 +179,11 @@ pub fn inferResultType(
     }
 
     if (std.mem.eql(u8, upper, "SUM")) {
+        if (args.len == 0) return current;
+        return args[0];
+    }
+
+    if (std.mem.eql(u8, upper, "MERGE")) {
         if (args.len == 0) return current;
         return args[0];
     }
@@ -367,4 +373,15 @@ test "inferResultType keeps SUM element type and type inquiry intrinsics return 
 
     const extends_result = try inferResultType("EXTENDS_TYPE_OF", fixedTypeSpec(.real), &.{ derived_arg, derived_arg });
     try testing.expectEqual(ast.TypeKind.logical, extends_result.lowered_kind);
+}
+
+test "inferResultType uses first argument type for MERGE" {
+    const testing = std.testing;
+
+    const char_arg = symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 2);
+    const logical_arg = symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
+
+    const inferred = try inferResultType("MERGE", fixedTypeSpec(.real), &.{ char_arg, char_arg, logical_arg });
+    try testing.expectEqual(ast.TypeKind.character, inferred.lowered_kind);
+    try testing.expectEqual(@as(?usize, 2), inferred.char_len);
 }

@@ -346,6 +346,9 @@ fn intrinsicResultRank(
         if (reshapeResultRank(self, args[1], deps)) |rank| return rank;
         return 1;
     }
+    if (std.mem.eql(u8, upper, "MERGE")) {
+        return elementalActualRank(self, args, deps);
+    }
     return null;
 }
 
