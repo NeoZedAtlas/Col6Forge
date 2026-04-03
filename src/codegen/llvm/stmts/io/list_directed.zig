@@ -35,6 +35,10 @@ const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
 const impliedStrideForDim = implied_helpers.impliedStrideForSymbolDim;
+const resolveArrayActual = @import("../../codegen/expression/call/array_actuals.zig").resolveArrayActual;
+const emitExtentProductI64 = @import("../../codegen/expression/call/array_actuals.zig").emitExtentProductI64;
+const emitOwnedHeapActualFree = @import("../../codegen/expression/call/array_actuals.zig").emitOwnedHeapActualFree;
+const valueRefEquals = @import("../../codegen/expression/call/array_actuals.zig").valueRefEquals;
 
 const PackedWriteArgs = struct {
     ptr_array: ValueRef,
@@ -244,6 +248,7 @@ const ListBlockTransfer = struct {
     count: ValueRef,
     stride: ValueRef,
     base_ptr: ValueRef,
+    owned_heap_ptr: ?ValueRef = null,
 };
 
 fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?u8 {
@@ -256,6 +261,18 @@ fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?u8 {
         .logical => 'l',
         .character => null,
         .derived => null,
+    };
+}
+
+fn blockTransferKindForIRType(ctx: *Context, ty: utils.IRType) ?u8 {
+    return switch (ty) {
+        .i32, .i64 => defaultIntegerKind(ctx),
+        .f32 => 'f',
+        .f64 => 'd',
+        .complex_f32 => 'c',
+        .complex_f64 => 'z',
+        .i1 => 'l',
+        else => null,
     };
 }
 
@@ -336,7 +353,27 @@ fn emitWholeArrayTransfer(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitE
     };
 }
 
+fn emitResolvedArrayActualTransfer(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    const actual = (try resolveArrayActual(ctx, builder, arg)) orelse return null;
+    errdefer emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr) catch {};
+
+    if (!actual.contiguous) return null;
+    if (!valueRefEquals(actual.address_scale, try ctx.constI64(1))) return null;
+
+    const kind = blockTransferKindForIRType(ctx, actual.elem_ty) orelse return null;
+    var count = try emitExtentProductI64(ctx, builder, actual.extents);
+    if (count.ty != .i32) count = try coerceRuntimeI32(ctx, builder, count);
+    return .{
+        .kind = kind,
+        .count = count,
+        .stride = try ctx.constI32(1),
+        .base_ptr = actual.base_ptr,
+        .owned_heap_ptr = actual.owned_heap_ptr,
+    };
+}
+
 fn emitBlockTransferIfPossible(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    if (try emitResolvedArrayActualTransfer(ctx, builder, arg)) |transfer| return transfer;
     if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| return transfer;
     if (try emitRangeSectionTransfer(ctx, builder, arg)) |transfer| return transfer;
     return emitDynamicImpliedDoTransfer(ctx, builder, arg);
@@ -366,6 +403,7 @@ fn emitListReadTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args
 fn emitListWriteBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: ListBlockTransfer) EmitError!void {
     const decl = try ctx.ensureDeclRaw("col6forge_write_list_stream_n", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .i32, .ptr }, false);
     try builder.callTyped(null, .i32, decl, &.{ state, try ctx.constI32(transfer.kind), transfer.count, transfer.stride, transfer.base_ptr });
+    try emitOwnedHeapActualFree(ctx, builder, transfer.owned_heap_ptr);
 }
 
 fn emitListReadBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: ListBlockTransfer) EmitError!void {
@@ -416,6 +454,10 @@ fn shouldStreamList(ctx: *Context, args: []*ast.Expr) bool {
             },
             .call_or_subscript => |call| {
                 const sym = ctx.findSymbol(call.name) orelse continue;
+                if (sym.kind == .function) {
+                    const sig = ctx.lookupKnownProcedureSig(call.name) orelse continue;
+                    if (sig.result_rank != 0) return true;
+                }
                 if (sym.dims.len == 0 or sym.isCharacter()) continue;
                 for (call.args) |sub_arg| {
                     if (sub_arg.* == .dim_range and args.len > 1) return true;
