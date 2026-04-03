@@ -1074,6 +1074,17 @@ fn exprCanonicalText(arena: std.mem.Allocator, expr_node: *ast.Expr) ![]const u8
     return switch (expr_node.*) {
         .identifier => |name| std.ascii.allocLowerString(arena, name),
         .literal => |lit| try arena.dupe(u8, lit.text),
+        .component => |comp| blk: {
+            const base = try exprCanonicalText(arena, comp.base);
+            const name = try std.ascii.allocLowerString(arena, comp.name);
+            if (comp.args.len == 0) {
+                break :blk try std.fmt.allocPrint(arena, "{s}%{s}", .{ base, name });
+            }
+            var args = std.array_list.Managed([]const u8).init(arena);
+            defer args.deinit();
+            for (comp.args) |arg| try args.append(try exprCanonicalText(arena, arg));
+            break :blk try std.fmt.allocPrint(arena, "{s}%{s}({s})", .{ base, name, try std.mem.join(arena, ",", args.items) });
+        },
         .unary => |un| try std.fmt.allocPrint(arena, "{s}{s}", .{
             switch (un.op) {
                 .plus => "+",

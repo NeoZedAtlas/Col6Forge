@@ -5,6 +5,7 @@ const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const api = @import("../split/api/mod.zig");
 const diagnostic = @import("../diagnostic.zig");
+const function_type = @import("../split/function_type.zig");
 
 test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
     const testing = std.testing;
@@ -321,6 +322,45 @@ test "inferProcedureArgSigs preserves derived dummy type names" {
     try testing.expectEqual(@as(usize, 1), arg_sigs.len);
     try testing.expectEqual(ast.TypeKind.derived, arg_sigs[0].type_spec.lowered_kind);
     try testing.expectEqualStrings("varying_string", arg_sigs[0].type_spec.derived_type_name.?);
+}
+
+test "inferFunctionResultShapeSignature preserves component-based specification expressions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module elements\n" ++
+        "  implicit none\n" ++
+        "  type element_type\n" ++
+        "     type(ele_numbering_type), pointer :: numbering\n" ++
+        "  end type element_type\n" ++
+        "  type ele_numbering_type\n" ++
+        "     integer, dimension(:,:), pointer :: number2count\n" ++
+        "  end type ele_numbering_type\n" ++
+        "end module elements\n" ++
+        "module global_numbering\n" ++
+        "  use elements\n" ++
+        "  implicit none\n" ++
+        "contains\n" ++
+        "  function element_local_coords(element) result(coords)\n" ++
+        "    type(element_type), intent(in) :: element\n" ++
+        "    real, dimension(size(element%numbering%number2count, 1)) :: coords\n" ++
+        "    coords = 0.0\n" ++
+        "  end function element_local_coords\n" ++
+        "end module global_numbering\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    const shape = try function_type.inferFunctionResultShapeSignature(arena.allocator(), program.units[1].contains[0]);
+    try testing.expectEqual(@as(usize, 1), shape.len);
+    try testing.expectEqualStrings("size(element%numbering%number2count,1)", shape[0]);
 }
 
 test "inferProcedureArgSigs infers subroutine dummy kind from CALL usage" {

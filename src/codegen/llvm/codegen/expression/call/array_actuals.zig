@@ -981,16 +981,18 @@ fn materializeKnownArrayResultExtents(
             continue;
         } else |_| {}
 
-        const size_ref = parseSizeShapeRef(shape) orelse return null;
-        const actual_idx = procedureArgIndex(sig, size_ref.name) orelse return null;
-        if (actual_idx >= args.len) return null;
-        extents[idx] = try emitKnownActualDimExtent(ctx, builder, args[actual_idx], size_ref.dim_index);
+        if (parseSizeShapeRef(shape)) |size_ref| {
+            extents[idx] = (try emitKnownShapeDesignatorDimExtent(ctx, builder, sig, args, size_ref.designator, size_ref.dim_index)) orelse return null;
+            continue;
+        }
+
+        extents[idx] = (try emitKnownShapeExprExtent(ctx, builder, sig, args, shape)) orelse return null;
     }
     return extents;
 }
 
 const SizeShapeRef = struct {
-    name: []const u8,
+    designator: []const u8,
     dim_index: usize,
 };
 
@@ -1000,11 +1002,11 @@ fn parseSizeShapeRef(shape: []const u8) ?SizeShapeRef {
     if (trimmed[trimmed.len - 1] != ')') return null;
     const inner = trimmed[5 .. trimmed.len - 1];
     const comma = std.mem.lastIndexOfScalar(u8, inner, ',') orelse return null;
-    const name = std.mem.trim(u8, inner[0..comma], " \t");
+    const designator = std.mem.trim(u8, inner[0..comma], " \t");
     const dim_text = std.mem.trim(u8, inner[comma + 1 ..], " \t");
     const dim = std.fmt.parseInt(usize, dim_text, 10) catch return null;
-    if (name.len == 0 or dim == 0) return null;
-    return .{ .name = name, .dim_index = dim - 1 };
+    if (designator.len == 0 or dim == 0) return null;
+    return .{ .designator = designator, .dim_index = dim - 1 };
 }
 
 fn procedureArgIndex(sig: ast.sema.KnownProcedureSig, name: []const u8) ?usize {
@@ -1024,6 +1026,230 @@ fn emitKnownActualDimExtent(
     try actual.validate();
     if (dim_index >= actual.extents.len) return error.InvalidIntrinsicCall;
     return actual.extents[dim_index];
+}
+
+fn emitKnownShapeDesignatorDimExtent(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    designator: []const u8,
+    dim_index: usize,
+) anyerror!?ValueRef {
+    const actual_expr = (try buildKnownShapeDesignatorExpr(ctx, sig, args, designator)) orelse return null;
+    return try emitKnownActualDimExtent(ctx, builder, actual_expr, dim_index);
+}
+
+fn buildKnownShapeDesignatorExpr(
+    ctx: *Context,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    designator: []const u8,
+) !?*Expr {
+    var parts = std.mem.splitScalar(u8, designator, '%');
+    const root_raw = parts.next() orelse return null;
+    const root = std.mem.trim(u8, root_raw, " \t");
+    if (root.len == 0) return null;
+
+    var current: *Expr = blk: {
+        if (procedureArgIndex(sig, root)) |actual_idx| {
+            if (actual_idx >= args.len) return null;
+            break :blk args[actual_idx];
+        }
+        if (ctx.findSymbol(root) == null) return null;
+        const ident = try ctx.allocator.create(ast.Expr);
+        ident.* = .{ .identifier = root };
+        break :blk ident;
+    };
+
+    while (parts.next()) |part_raw| {
+        const part = std.mem.trim(u8, part_raw, " \t");
+        if (part.len == 0) return null;
+        const node = try ctx.allocator.create(ast.Expr);
+        node.* = .{ .component = .{
+            .base = current,
+            .name = part,
+            .args = &.{},
+            .has_parens = false,
+        } };
+        current = node;
+    }
+
+    return current;
+}
+
+const ShapeExprParser = struct {
+    text: []const u8,
+    index: usize = 0,
+
+    fn skipSpaces(self: *ShapeExprParser) void {
+        while (self.index < self.text.len and std.ascii.isWhitespace(self.text[self.index])) : (self.index += 1) {}
+    }
+
+    fn consume(self: *ShapeExprParser, ch: u8) bool {
+        self.skipSpaces();
+        if (self.index >= self.text.len or self.text[self.index] != ch) return false;
+        self.index += 1;
+        return true;
+    }
+
+    fn parseIdentifier(self: *ShapeExprParser) ?[]const u8 {
+        self.skipSpaces();
+        if (self.index >= self.text.len) return null;
+        const start = self.index;
+        const first = self.text[self.index];
+        if (!std.ascii.isAlphabetic(first) and first != '_') return null;
+        self.index += 1;
+        while (self.index < self.text.len) : (self.index += 1) {
+            const ch = self.text[self.index];
+            if (!std.ascii.isAlphanumeric(ch) and ch != '_') break;
+        }
+        return self.text[start..self.index];
+    }
+
+    fn parseInteger(self: *ShapeExprParser) ?i64 {
+        self.skipSpaces();
+        if (self.index >= self.text.len) return null;
+        const start = self.index;
+        if (self.text[self.index] == '+' or self.text[self.index] == '-') self.index += 1;
+        const digits_start = self.index;
+        while (self.index < self.text.len and std.ascii.isDigit(self.text[self.index])) : (self.index += 1) {}
+        if (digits_start == self.index) {
+            self.index = start;
+            return null;
+        }
+        return std.fmt.parseInt(i64, self.text[start..self.index], 10) catch null;
+    }
+};
+
+fn emitKnownShapeExprExtent(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    shape: []const u8,
+) anyerror!?ValueRef {
+    var parser: ShapeExprParser = .{ .text = shape };
+    const value = (try parseKnownShapeExpr(ctx, builder, sig, args, &parser)) orelse return null;
+    parser.skipSpaces();
+    if (parser.index != parser.text.len) return null;
+    return value;
+}
+
+fn parseKnownShapeExpr(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+) anyerror!?ValueRef {
+    var value = (try parseKnownShapeTerm(ctx, builder, sig, args, parser)) orelse return null;
+    while (true) {
+        if (parser.consume('+')) {
+            const rhs = (try parseKnownShapeTerm(ctx, builder, sig, args, parser)) orelse return null;
+            value = try emitAddI64(ctx, builder, value, rhs);
+            continue;
+        }
+        if (parser.consume('-')) {
+            const rhs = (try parseKnownShapeTerm(ctx, builder, sig, args, parser)) orelse return null;
+            value = try emitSubI64(ctx, builder, value, rhs);
+            continue;
+        }
+        break;
+    }
+    return value;
+}
+
+fn parseKnownShapeTerm(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+) anyerror!?ValueRef {
+    var value = (try parseKnownShapeFactor(ctx, builder, sig, args, parser)) orelse return null;
+    while (true) {
+        if (parser.consume('*')) {
+            const rhs = (try parseKnownShapeFactor(ctx, builder, sig, args, parser)) orelse return null;
+            value = try emitMulI64(ctx, builder, value, rhs);
+            continue;
+        }
+        if (parser.consume('/')) {
+            const rhs = (try parseKnownShapeFactor(ctx, builder, sig, args, parser)) orelse return null;
+            const div_name = try ctx.nextTemp();
+            try builder.binary(div_name, "sdiv", .i64, value, rhs);
+            value = .{ .name = div_name, .ty = .i64, .is_ptr = false };
+            continue;
+        }
+        break;
+    }
+    return value;
+}
+
+fn parseKnownShapeFactor(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+) anyerror!?ValueRef {
+    if (parser.consume('+')) return parseKnownShapeFactor(ctx, builder, sig, args, parser);
+    if (parser.consume('-')) {
+        const inner = (try parseKnownShapeFactor(ctx, builder, sig, args, parser)) orelse return null;
+        return try emitSubI64(ctx, builder, i64Const(ctx, 0), inner);
+    }
+    if (parser.consume('(')) {
+        const inner = (try parseKnownShapeExpr(ctx, builder, sig, args, parser)) orelse return null;
+        if (!parser.consume(')')) return null;
+        return inner;
+    }
+    if (parser.parseInteger()) |value| return i64Const(ctx, value);
+    const ident = parser.parseIdentifier() orelse return null;
+    if (std.ascii.eqlIgnoreCase(ident, "size")) {
+        if (!parser.consume('(')) return null;
+        const size_name = parser.parseIdentifier() orelse return null;
+        if (!parser.consume(',')) return null;
+        const dim_value = parser.parseInteger() orelse return null;
+        if (dim_value <= 0 or !parser.consume(')')) return null;
+        const actual_idx = procedureArgIndex(sig, size_name) orelse return null;
+        if (actual_idx >= args.len) return null;
+        return try emitKnownActualDimExtent(ctx, builder, args[actual_idx], @intCast(dim_value - 1));
+    }
+    return emitKnownShapeIdentifierValue(ctx, builder, sig, args, ident);
+}
+
+fn emitKnownShapeIdentifierValue(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    name: []const u8,
+) anyerror!?ValueRef {
+    if (procedureArgIndex(sig, name)) |actual_idx| {
+        if (actual_idx >= args.len) return null;
+        if (try resolveArrayActual(ctx, builder, args[actual_idx])) |_| return null;
+        var value = try dispatch.emitExpr(ctx, builder, args[actual_idx]);
+        if (value.ty == .ptr) return null;
+        if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
+        return value;
+    }
+
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.dims.len != 0 or sym.loweredKind() != .integer or sym.is_pointer or sym.isCharacter()) return null;
+    if (sym.kind == .parameter) {
+        if (sym.const_value) |cv| {
+            const raw = casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
+            return if (raw.ty == .i64) raw else try casting.coerce(ctx, builder, raw, .i64);
+        }
+    }
+
+    const ptr = try ctx.getPointer(name);
+    const load_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, load_ty, ptr);
+    var value = ValueRef{ .name = tmp, .ty = load_ty, .is_ptr = false };
+    if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
+    return value;
 }
 
 fn buildProcedureComponentArrayActuals(
@@ -2548,16 +2774,37 @@ fn emitMinI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !Va
 
 fn emitSymbolDimExtents(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {
     const extents = try ctx.allocator.alloc(ValueRef, sym.dims.len);
-    for (sym.dims, 0..) |_, idx| {
-        extents[idx] = try memory.emitSymbolDimExtent(ctx, builder, sym, idx);
+    for (sym.dims, 0..) |dim, idx| {
+        extents[idx] = memory.emitSymbolDimExtent(ctx, builder, sym, idx) catch |err| switch (err) {
+            error.UnknownSymbol => memory.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
+                error.UnknownSymbol => i64Const(ctx, 1),
+                else => return inner,
+            },
+            else => return err,
+        };
+        if (extents[idx].ty != .i64) {
+            extents[idx] = try casting.coerce(ctx, builder, extents[idx], .i64);
+        }
     }
     return extents;
 }
 
 fn emitSymbolDimMultipliers(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {
     const multipliers = try ctx.allocator.alloc(ValueRef, sym.dims.len);
-    for (sym.dims, 0..) |_, idx| {
-        multipliers[idx] = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
+    var stride = i64Const(ctx, 1);
+    for (sym.dims, 0..) |dim, idx| {
+        multipliers[idx] = stride;
+        var extent = memory.emitSymbolDimExtent(ctx, builder, sym, idx) catch |err| switch (err) {
+            error.UnknownSymbol => memory.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
+                error.UnknownSymbol => i64Const(ctx, 1),
+                else => return inner,
+            },
+            else => return err,
+        };
+        if (extent.ty != .i64) {
+            extent = try casting.coerce(ctx, builder, extent, .i64);
+        }
+        stride = try emitMulI64(ctx, builder, stride, extent);
     }
     return multipliers;
 }
