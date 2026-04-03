@@ -4,6 +4,7 @@ const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
+const procedure_inference = @import("../../split/api/procedure_inference.zig");
 
 pub fn callHasDerivedActuals(self: *context.Context, args: []const ast.CallArg) bool {
     for (args) |arg| {
@@ -87,6 +88,35 @@ pub fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?
     return null;
 }
 
+pub fn hasVisibleProcedureReference(self: *context.Context, name: []const u8) bool {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return true;
+    if (visibleSingleTargetGenericSig(self, name) != null) return true;
+    if (findVisibleProcedureSource(self, name) != null) return true;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (std.ascii.eqlIgnoreCase(interface_name, name)) return true;
+    }
+    return false;
+}
+
+pub fn visibleSpecificInterfaceSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var matched: ?context.Context.ProcedureSig = null;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_block = decl.interface_block;
+        if (interface_block.name != null) continue;
+
+        for (interface_block.procedure_headers) |proc_header| {
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, name)) continue;
+            const sig = interfaceProcedureSig(self, proc_header) orelse return null;
+            if (matched != null) return null;
+            matched = sig;
+        }
+    }
+    return matched;
+}
+
 pub fn matchedVisibleGenericSigForExprArgs(
     self: *context.Context,
     name: []const u8,
@@ -115,6 +145,10 @@ pub fn matchedVisibleGenericSigForExprArgs(
         return null;
     }
 
+    var direct_match: ?context.Context.ProcedureSig = null;
+    var direct_match_count: usize = 0;
+    var fallback_match: ?context.Context.ProcedureSig = null;
+    var fallback_match_count: usize = 0;
     var decl_idx: usize = self.unit.decls.len;
     while (decl_idx > 0) {
         decl_idx -= 1;
@@ -123,20 +157,23 @@ pub fn matchedVisibleGenericSigForExprArgs(
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        const from_direct_use = preludeInterfaceDeclFromDirectUse(self, decl_idx);
 
-        var matched: ?context.Context.ProcedureSig = null;
-        var match_count: usize = 0;
         var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
         appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
         for (specifics.items) |specific| {
             if (!exprArgsMatchGenericSig(self, specific.sig, args)) continue;
-            match_count += 1;
-            if (match_count == 1) matched = specific.sig;
+            if (from_direct_use) {
+                direct_match_count += 1;
+                if (direct_match_count == 1) direct_match = specific.sig;
+            } else {
+                fallback_match_count += 1;
+                if (fallback_match_count == 1) fallback_match = specific.sig;
+            }
         }
-        if (match_count == 1) return matched;
-        if (match_count > 1) return null;
     }
-    return null;
+    if (direct_match_count != 0) return if (direct_match_count == 1) direct_match else null;
+    return if (fallback_match_count == 1) fallback_match else null;
 }
 
 pub fn matchedVisibleGenericSigForCallArgs(
@@ -167,6 +204,10 @@ pub fn matchedVisibleGenericSigForCallArgs(
         return null;
     }
 
+    var direct_match: ?context.Context.ProcedureSig = null;
+    var direct_match_count: usize = 0;
+    var fallback_match: ?context.Context.ProcedureSig = null;
+    var fallback_match_count: usize = 0;
     var decl_idx: usize = self.unit.decls.len;
     while (decl_idx > 0) {
         decl_idx -= 1;
@@ -175,20 +216,33 @@ pub fn matchedVisibleGenericSigForCallArgs(
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        const from_direct_use = preludeInterfaceDeclFromDirectUse(self, decl_idx);
 
-        var matched: ?context.Context.ProcedureSig = null;
-        var match_count: usize = 0;
         var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
         appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
         for (specifics.items) |specific| {
             if (!callArgsMatchGenericSig(self, specific.sig, args)) continue;
-            match_count += 1;
-            if (match_count == 1) matched = specific.sig;
+            if (from_direct_use) {
+                direct_match_count += 1;
+                if (direct_match_count == 1) direct_match = specific.sig;
+            } else {
+                fallback_match_count += 1;
+                if (fallback_match_count == 1) fallback_match = specific.sig;
+            }
         }
-        if (match_count == 1) return matched;
-        if (match_count > 1) return null;
     }
-    return null;
+    if (direct_match_count != 0) return if (direct_match_count == 1) direct_match else null;
+    return if (fallback_match_count == 1) fallback_match else null;
+}
+
+fn preludeInterfaceDeclFromDirectUse(self: *context.Context, decl_idx: usize) bool {
+    if (decl_idx >= self.unit.decl_sources.len) return false;
+    const owner_name = self.unit.decl_sources[decl_idx].owner_name orelse return false;
+    for (self.unit.stmts) |stmt_node| {
+        if (stmt_node.node != .use_stmt) continue;
+        if (std.ascii.eqlIgnoreCase(stmt_node.node.use_stmt.module_name, owner_name)) return true;
+    }
+    return false;
 }
 
 pub fn findAmbiguousVisibleGenericSpecificSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
@@ -315,8 +369,16 @@ pub fn calleeRequiresExplicitInterface(self: *context.Context, name: []const u8)
 }
 
 pub fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
+    if (explicitInterfaceRestrictionMessageForActual(self, expr) != null) return true;
     const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
     return spec.lowered_kind == .derived and spec.polymorphic and !spec.assumed_type;
+}
+
+pub fn explicitInterfaceRestrictionMessageForActual(self: *context.Context, expr: *ast.Expr) ?[]const u8 {
+    if (actualExprIsAssumedRank(self, expr)) return "Assumed-rank argument";
+    const spec = resolve_expr.exprTypeSpec(self, expr) catch return null;
+    if (spec.assumed_type) return "Assumed-type argument";
+    return null;
 }
 
 pub fn isProcedureActualExpr(self: *context.Context, expr: *ast.Expr) bool {
@@ -337,6 +399,24 @@ pub fn isProcedureActualExpr(self: *context.Context, expr: *ast.Expr) bool {
             const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
             break :blk component.procedure;
         },
+        else => false,
+    };
+}
+
+fn actualExprIsAssumedRank(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            break :blk dimsRepresentAssumedRank(self.symbols.items[idx].dims);
+        },
+        else => false,
+    };
+}
+
+fn dimsRepresentAssumedRank(dims: []const *ast.Expr) bool {
+    if (dims.len != 1) return false;
+    return switch (dims[0].*) {
+        .dim_range => |range| range.from_dotdot,
         else => false,
     };
 }
@@ -386,6 +466,30 @@ fn lookupQualifiedProcedureSigBySuffix(self: *context.Context, proc_name: []cons
         matched = entry.value_ptr.*;
     }
     return matched;
+}
+
+fn interfaceProcedureSig(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+) ?context.Context.ProcedureSig {
+    const args = procedure_inference.inferInterfaceProcedureArgSigs(self.arena, self.unit, proc_header) catch return null;
+    return .{
+        .kind = proc_header.kind,
+        .arg_count = proc_header.args.len,
+        .alt_return_count = proc_header.alt_return_dummy_count,
+        .args = args,
+        .pure = proc_header.pure,
+        .elemental = proc_header.elemental,
+        .is_pointer = false,
+        .result_rank = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultRank(proc_header) else 0,
+        .result_type_spec = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultTypeSpec(self.unit, proc_header) else null,
+        .result_shape_signature = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultShapeSignature(self.arena, proc_header) catch return null else &.{},
+        .result_allocatable = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultAttrs(proc_header).allocatable else false,
+        .result_contiguous = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultAttrs(proc_header).contiguous else false,
+        .result_procedure_pointer = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultAttrs(proc_header).procedure_pointer else false,
+        .actual_requires_explicit_interface = true,
+        .definition_known_from_current_program = false,
+    };
 }
 
 fn findInterfaceProcedureDeclSource(

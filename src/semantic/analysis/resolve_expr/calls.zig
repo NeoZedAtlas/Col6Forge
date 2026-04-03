@@ -5,6 +5,7 @@ const procedure_pass = @import("../../../common/procedure_pass.zig");
 const symbols = @import("../../symbol/mod.zig");
 const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
+const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
@@ -693,7 +694,8 @@ fn effectiveVisibleGenericSig(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) !?context.Context.ProcedureSig {
-    const sig = visibleSingleTargetGenericSig(self, name) orelse return null;
+    const sig = procedure_interfaces.visibleSpecificInterfaceSig(self, name) orelse
+        visibleSingleTargetGenericSig(self, name) orelse return null;
     if (!symbols_mod.isIntrinsicName(name)) return sig;
     if (symbols_mod.lookupKnownProcedureSig(self, name) == null) return sig;
     if (try exprActualsCouldMatchProcedureSig(self, sig, args, deps)) return sig;
@@ -750,7 +752,9 @@ fn resolvedProcedureSig(
     visible_generic_sig: ?context.Context.ProcedureSig,
 ) ?context.Context.ProcedureSig {
     if (intrinsic_override) return null;
-    return visible_generic_sig orelse symbols_mod.lookupKnownProcedureSig(self, name);
+    return visible_generic_sig orelse
+        procedure_interfaces.visibleSpecificInterfaceSig(self, name) orelse
+        symbols_mod.lookupKnownProcedureSig(self, name);
 }
 
 fn isImplicitExternalFunctionReference(sym: symbols.Symbol) bool {

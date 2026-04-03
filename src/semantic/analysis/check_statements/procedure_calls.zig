@@ -576,6 +576,9 @@ pub fn checkExplicitInterfaceRequirementForCallArgs(
         }
         if (procedure_interfaces.requiresExplicitInterfaceForActual(self, arg.expr.value)) {
             self.setCurrentSource(self.sourceForExpr(arg.expr.value));
+            if (procedure_interfaces.explicitInterfaceRestrictionMessageForActual(self, arg.expr.value)) |message| {
+                return emitProcedureActualDiagnostic(self, arg.expr.value, error.InvalidArgumentCount, message);
+            }
             return error.ExplicitInterfaceRequired;
         }
     }
@@ -612,6 +615,9 @@ pub fn checkExplicitInterfaceRequirementForExprArgs(
             self.setCurrentSource(self.sourceForExpr(arg));
             if (procedure_interfaces.isProcedureActualExpr(self, arg)) {
                 return emitProcedureActualDiagnostic(self, arg, error.InvalidArgumentCount, "Interface mismatch in dummy procedure");
+            }
+            if (procedure_interfaces.explicitInterfaceRestrictionMessageForActual(self, arg)) |message| {
+                return emitProcedureActualDiagnostic(self, arg, error.InvalidArgumentCount, message);
             }
             return error.ExplicitInterfaceRequired;
         }
@@ -870,6 +876,50 @@ fn typeStringForCharacterActual(self: *context.Context, expr_node: *ast.Expr) []
         "*";
     const kind_value = spec.kind_value orelse 1;
     return std.fmt.allocPrint(self.arena, "CHARACTER({s},{d})", .{ len_text, kind_value }) catch "CHARACTER(*)";
+}
+
+fn typeStringForProcedureTypeSpec(self: *context.Context, type_spec: symbols.TypeSpec) []const u8 {
+    return switch (type_spec.lowered_kind) {
+        .integer => std.fmt.allocPrint(self.arena, "INTEGER({d})", .{type_spec.kind_value orelse self.target_layout.default_integer_bits}) catch "INTEGER(4)",
+        .real => std.fmt.allocPrint(self.arena, "REAL({d})", .{type_spec.kind_value orelse 4}) catch "REAL(4)",
+        .double_precision => std.fmt.allocPrint(self.arena, "REAL({d})", .{type_spec.kind_value orelse 8}) catch "REAL(8)",
+        .complex => std.fmt.allocPrint(self.arena, "COMPLEX({d})", .{type_spec.kind_value orelse 4}) catch "COMPLEX(4)",
+        .complex_double => std.fmt.allocPrint(self.arena, "COMPLEX({d})", .{type_spec.kind_value orelse 8}) catch "COMPLEX(8)",
+        .logical => std.fmt.allocPrint(self.arena, "LOGICAL({d})", .{type_spec.kind_value orelse self.target_layout.default_integer_bits}) catch "LOGICAL(4)",
+        .character => blk: {
+            const len_text = switch (type_spec.char_len_kind) {
+                .assumed, .deferred => "*",
+                .constant => std.fmt.allocPrint(self.arena, "{d}", .{type_spec.char_len orelse 1}) catch "1",
+                .none => "1",
+            };
+            const kind_value = type_spec.kind_value orelse 1;
+            break :blk if (kind_value == 1)
+                std.fmt.allocPrint(self.arena, "CHARACTER({s})", .{len_text}) catch "CHARACTER(*)"
+            else
+                std.fmt.allocPrint(self.arena, "CHARACTER({s},{d})", .{ len_text, kind_value }) catch "CHARACTER(*)";
+        },
+        .derived => blk: {
+            if (type_spec.assumed_type) break :blk "TYPE(*)";
+            if (type_spec.polymorphic) {
+                if (type_spec.derived_type_name) |name| {
+                    break :blk std.fmt.allocPrint(self.arena, "CLASS({s})", .{name}) catch "CLASS(*)";
+                }
+                break :blk "CLASS(*)";
+            }
+            if (type_spec.derived_type_name) |name| {
+                break :blk std.fmt.allocPrint(self.arena, "TYPE({s})", .{name}) catch "TYPE(*)";
+            }
+            break :blk "TYPE(*)";
+        },
+    };
+}
+
+fn typeMismatchArgumentMessage(self: *context.Context, actual: symbols.TypeSpec, formal: symbols.TypeSpec) []const u8 {
+    return std.fmt.allocPrint(
+        self.arena,
+        "passed {s} to {s}",
+        .{ typeStringForProcedureTypeSpec(self, actual), typeStringForProcedureTypeSpec(self, formal) },
+    ) catch "Type mismatch in argument";
 }
 
 fn emitCharacterKindOneIntrinsicDiagnostic(
@@ -1592,7 +1642,14 @@ fn checkDataActualArgCompatibility(
     }
     if (!skip_no_arg_check_compat and !deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         if (!componentActualTypeCompatibleViaMetadata(self, formal.type_spec, actual_expr, deps)) {
-            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+            return emitProcedureActualCallDiagnostic(
+                self,
+                callee_name,
+                formal.name,
+                actual_expr,
+                error.InvalidArgumentCount,
+                typeMismatchArgumentMessage(self, actual_spec, formal.type_spec),
+            );
         }
     }
     if (!skip_no_arg_check_compat and formal.pointer and formal.contiguous and exprIsDefinitelyNoncontiguous(self, actual_expr)) {
@@ -1940,7 +1997,7 @@ fn procedureDummyDataArgMismatchMessage(
     if (formal.pointer != actual.pointer) return "POINTER attribute mismatch in argument";
     if (formal.allocatable != actual.allocatable) return "ALLOCATABLE attribute mismatch in argument";
     if (formal.type_spec.assumed_type) return null;
-    if (actual.type_spec.assumed_type) return "Type mismatch in argument";
+    if (actual.type_spec.assumed_type) return typeMismatchArgumentMessage(self, actual.type_spec, formal.type_spec);
     if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Polymorphic mismatch in argument";
     if (formal.type_spec.lowered_kind == .character and actual.type_spec.lowered_kind == .character) {
         if (formal.type_spec.char_len_kind != actual.type_spec.char_len_kind or formal.type_spec.char_len != actual.type_spec.char_len) {
@@ -1948,11 +2005,11 @@ fn procedureDummyDataArgMismatchMessage(
         }
     }
     if (formal.type_spec.lowered_kind == .derived or actual.type_spec.lowered_kind == .derived) {
-        if (formal.type_spec.lowered_kind != actual.type_spec.lowered_kind) return "Type mismatch in argument";
+        if (formal.type_spec.lowered_kind != actual.type_spec.lowered_kind) return typeMismatchArgumentMessage(self, actual.type_spec, formal.type_spec);
         if (formal.type_spec.derived_type_name == null or actual.type_spec.derived_type_name == null) return "Derived type mismatch in argument";
         if (!std.ascii.eqlIgnoreCase(formal.type_spec.derived_type_name.?, actual.type_spec.derived_type_name.?)) return "Derived type mismatch in argument";
     }
-    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return "Type mismatch in argument";
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return typeMismatchArgumentMessage(self, actual.type_spec, formal.type_spec);
     return null;
 }
 
@@ -2007,7 +2064,7 @@ fn checkKnownImplicitProcedureScalarActualArg(
     if (resolve_expr.exprRank(self, actual_expr) != 0) return;
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
-        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, typeMismatchArgumentMessage(self, actual_spec, formal.type_spec));
     }
 }
 
@@ -2696,7 +2753,8 @@ fn resolvedProcedureSigForExprActuals(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) !?context.Context.ProcedureSig {
-    const visible_generic_sig = procedure_interfaces.matchedVisibleGenericSigForExprArgs(self, name, args) orelse
+    const visible_generic_sig = procedure_interfaces.visibleSpecificInterfaceSig(self, name) orelse
+        procedure_interfaces.matchedVisibleGenericSigForExprArgs(self, name, args) orelse
         procedure_interfaces.visibleSingleTargetGenericSig(self, name);
     if (try shouldFallbackVisibleGenericToIntrinsicForExprActuals(self, name, visible_generic_sig, args, deps)) {
         return resolve_symbols.lookupKnownProcedureSig(self, name);
@@ -2710,7 +2768,8 @@ fn resolvedProcedureSigForCallActuals(
     args: []const ast.CallArg,
     comptime deps: anytype,
 ) !?context.Context.ProcedureSig {
-    const visible_generic_sig = procedure_interfaces.matchedVisibleGenericSigForCallArgs(self, name, args) orelse
+    const visible_generic_sig = procedure_interfaces.visibleSpecificInterfaceSig(self, name) orelse
+        procedure_interfaces.matchedVisibleGenericSigForCallArgs(self, name, args) orelse
         procedure_interfaces.visibleSingleTargetGenericSig(self, name);
     if (try shouldFallbackVisibleGenericToIntrinsicForCallActuals(self, name, visible_generic_sig, args, deps)) {
         return resolve_symbols.lookupKnownProcedureSig(self, name);
@@ -2719,7 +2778,8 @@ fn resolvedProcedureSigForCallActuals(
 }
 
 fn resolvedProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    return procedure_interfaces.visibleSingleTargetGenericSig(self, name) orelse
+    return procedure_interfaces.visibleSpecificInterfaceSig(self, name) orelse
+        procedure_interfaces.visibleSingleTargetGenericSig(self, name) orelse
         resolve_symbols.lookupKnownProcedureSig(self, name);
 }
 

@@ -1006,6 +1006,45 @@ test "parseProgram handles interface blocks inside procedure bodies" {
     try testing.expectEqualStrings("f1", unit.decls[0].interface_block.procedures[0]);
 }
 
+test "parseProgram handles interface CHARACTER(*,kind) declarations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine h4\n" ++
+        "  interface\n" ++
+        "    subroutine f4(a, b)\n" ++
+        "      integer :: a\n" ++
+        "      character(*,4) :: b\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine h4\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqual(@as(usize, 1), interface_block.procedure_headers.len);
+    const proc_header = interface_block.procedure_headers[0];
+    try testing.expectEqual(@as(usize, 2), proc_header.decls.len);
+    try testing.expectEqual(ast.Decl, @TypeOf(proc_header.decls[1]));
+    try testing.expect(proc_header.decls[1] == .type_decl);
+    try testing.expectEqual(ast.TypeKind.character, proc_header.decls[1].type_decl.type_kind);
+    try testing.expect(proc_header.decls[1].type_decl.kind_selector != null);
+    switch (proc_header.decls[1].type_decl.kind_selector.?.*) {
+        .literal => |lit| try testing.expectEqualStrings("4", lit.text),
+        else => return error.UnexpectedToken,
+    }
+    switch (proc_header.decls[1].type_decl.items[0].char_len.?.*) {
+        .literal => |lit| try testing.expectEqual(ast.LiteralKind.assumed_size, lit.kind),
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseProgram preserves module interface blocks in contained procedures" {
     const testing = std.testing;
     const allocator = testing.allocator;

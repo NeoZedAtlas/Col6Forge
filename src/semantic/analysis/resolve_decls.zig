@@ -639,7 +639,7 @@ pub fn resolvedDeclTypeSpec(
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
     switch (kind_selector.?.*) {
         .call_or_subscript => |call| {
-            if (!symbols_mod.isIntrinsicName(call.name) and symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
+            if (!symbols_mod.isIntrinsicName(call.name) and procedure_interfaces.hasVisibleProcedureReference(self, call.name)) {
                 const current_source = self.current_decl_source orelse ast.DeclSource{};
                 if (procedure_interfaces.findVisibleProcedureSource(self, call.name)) |proc_source| {
                     const related = [_]common_diag.DiagnosticSpan{

@@ -259,10 +259,6 @@ pub fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default
 
 pub fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedCharacterLen {
     if (lp.consume(.l_paren)) {
-        if (lp.consume(.star)) {
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            return .{ .expr = try makeAssumedCharLenExpr(arena) };
-        }
         var parsed: ParsedCharacterLen = .{};
         while (!lp.peekIs(.r_paren)) {
             if (lp.peek()) |tok| {

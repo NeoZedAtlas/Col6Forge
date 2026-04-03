@@ -844,7 +844,7 @@ fn kindSelectorMustBeIntrinsic(self: *context.Context, kind_selector: ?*ast.Expr
     switch (selector.*) {
         .call_or_subscript => |call| {
             if (symbols_mod.isIntrinsicName(call.name)) return;
-            if (symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
+            if (procedure_interfaces.hasVisibleProcedureReference(self, call.name)) {
                 setKindSelectorMustBeIntrinsicDiagnostic(self, call.name);
                 return error.UnexpectedTypeDecl;
             }
@@ -920,7 +920,7 @@ fn setStructuredSourceDiagnostic(
 }
 
 fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {
-    const known_sig = symbols_mod.lookupKnownProcedureSig(self, proc_header.name) orelse return null;
+    const known_sig = lookupKnownProcedureSigForInterfaceValidation(self, proc_header.name) orelse return null;
     if (known_sig.kind != proc_header.kind) {
         setKnownProcedureCompatibilityDiagnostic(
             self,
@@ -929,6 +929,35 @@ fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.
             "explicit interface kind conflicts here",
             "the explicit INTERFACE body disagrees with the visible known procedure kind",
             "match the INTERFACE header to the visible procedure kind, or rename one of the procedures",
+        );
+        return error.InvalidArgumentCount;
+    }
+    const expected_args = split_api.inferInterfaceProcedureArgSigs(self.arena, self.unit, proc_header) catch return error.OutOfMemory;
+    if (expected_args.len != known_sig.args.len or proc_header.alt_return_dummy_count != known_sig.alt_return_count) {
+        setKnownProcedureCompatibilityDiagnostic(
+            self,
+            proc_header,
+            "Interface mismatch in dummy procedure",
+            "explicit interface dummy list conflicts here",
+            "the explicit INTERFACE body disagrees with the visible known procedure dummy argument list",
+            "match the dummy argument list between the INTERFACE body and the visible procedure",
+        );
+        return error.InvalidArgumentCount;
+    }
+    for (expected_args, known_sig.args) |expected_arg, known_arg| {
+        if (knownProcedureDummyArgCompatible(expected_arg, known_arg)) continue;
+        const message = std.fmt.allocPrint(
+            self.arena,
+            "Interface mismatch in dummy procedure ({s}/{s})",
+            .{ formatProcedureDummyArgSig(self, expected_arg), formatProcedureDummyArgSig(self, known_arg) },
+        ) catch "Interface mismatch in dummy procedure";
+        setKnownProcedureCompatibilityDiagnostic(
+            self,
+            proc_header,
+            message,
+            "explicit interface dummy declaration conflicts here",
+            "the explicit INTERFACE body disagrees with the visible known procedure dummy argument type",
+            "match the dummy argument type between the INTERFACE body and the visible procedure",
         );
         return error.InvalidArgumentCount;
     }
@@ -948,7 +977,7 @@ fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.
     }
 
     const expected_type = interfaceProcedureResultTypeSpecForValidation(self, proc_header) orelse return null;
-    const actual_type = symbols_mod.lookupKnownFunctionResolvedSpec(self, proc_header.name) orelse return null;
+    const actual_type = known_sig.result_type_spec orelse symbols_mod.lookupKnownFunctionResolvedSpec(self, proc_header.name) orelse return null;
     if (expected_type.lowered_kind != actual_type.lowered_kind) {
         setKnownProcedureCompatibilityDiagnostic(
             self,
@@ -976,6 +1005,106 @@ fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.
         }
     }
     return null;
+}
+
+fn lookupKnownProcedureSigForInterfaceValidation(
+    self: *context.Context,
+    name: []const u8,
+) ?context.Context.ProcedureSig {
+    var match: ?context.Context.ProcedureSig = null;
+    var it = self.known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        const sig = entry.value_ptr.*;
+        if (!sig.definition_known_from_current_program) continue;
+        const key = entry.key_ptr.*;
+        const base_name = if (std.mem.lastIndexOf(u8, key, "::")) |sep| key[sep + 2 ..] else key;
+        if (!std.ascii.eqlIgnoreCase(base_name, name)) continue;
+        if (match != null) return null;
+        match = sig;
+    }
+    return match orelse symbols_mod.lookupKnownProcedureSig(self, name);
+}
+
+fn knownProcedureDummyArgCompatible(
+    expected: context.Context.ProcedureSig.ArgSig,
+    known: context.Context.ProcedureSig.ArgSig,
+) bool {
+    if (expected.is_procedure != known.is_procedure) return false;
+    if (expected.is_procedure) {
+        return expected.procedure_kind == known.procedure_kind and
+            expected.procedure_arg_count == known.procedure_arg_count and
+            expected.procedure_alt_return_count == known.procedure_alt_return_count;
+    }
+    if (expected.rank != known.rank) return false;
+    if (expected.assumed_rank != known.assumed_rank) return false;
+    if (expected.pointer != known.pointer) return false;
+    if (expected.allocatable != known.allocatable) return false;
+    return typeSpecsMatchForKnownProcedure(expected.type_spec, known.type_spec);
+}
+
+fn typeSpecsMatchForKnownProcedure(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
+    if (a.lowered_kind != b.lowered_kind) return false;
+    if (a.kind_value != null and b.kind_value != null and a.kind_value.? != b.kind_value.?) return false;
+    if (a.lowered_kind == .character) {
+        if (a.char_len_kind != b.char_len_kind) return false;
+        if (a.char_len != b.char_len) return false;
+    }
+    if (a.lowered_kind == .derived) {
+        if (a.polymorphic != b.polymorphic) return false;
+        if (a.assumed_type != b.assumed_type) return false;
+        if (a.derived_type_name == null or b.derived_type_name == null) {
+            return a.derived_type_name == null and b.derived_type_name == null;
+        }
+        if (!std.ascii.eqlIgnoreCase(a.derived_type_name.?, b.derived_type_name.?)) return false;
+    }
+    return true;
+}
+
+fn formatProcedureDummyArgSig(self: *context.Context, arg: context.Context.ProcedureSig.ArgSig) []const u8 {
+    if (arg.is_procedure) {
+        return switch (arg.procedure_kind orelse .subroutine) {
+            .function => "FUNCTION",
+            .subroutine => "SUBROUTINE",
+            else => "PROCEDURE",
+        };
+    }
+    return formatTypeSpecForKnownProcedure(self, arg.type_spec);
+}
+
+fn formatTypeSpecForKnownProcedure(self: *context.Context, type_spec: symbols.TypeSpec) []const u8 {
+    return switch (type_spec.lowered_kind) {
+        .integer => std.fmt.allocPrint(self.arena, "INTEGER({d})", .{type_spec.kind_value orelse self.target_layout.default_integer_bits}) catch "INTEGER(4)",
+        .real => std.fmt.allocPrint(self.arena, "REAL({d})", .{type_spec.kind_value orelse 4}) catch "REAL(4)",
+        .double_precision => std.fmt.allocPrint(self.arena, "REAL({d})", .{type_spec.kind_value orelse 8}) catch "REAL(8)",
+        .complex => std.fmt.allocPrint(self.arena, "COMPLEX({d})", .{type_spec.kind_value orelse 4}) catch "COMPLEX(4)",
+        .complex_double => std.fmt.allocPrint(self.arena, "COMPLEX({d})", .{type_spec.kind_value orelse 8}) catch "COMPLEX(8)",
+        .logical => std.fmt.allocPrint(self.arena, "LOGICAL({d})", .{type_spec.kind_value orelse self.target_layout.default_integer_bits}) catch "LOGICAL(4)",
+        .character => blk: {
+            const len_text = switch (type_spec.char_len_kind) {
+                .assumed, .deferred => "*",
+                .constant => std.fmt.allocPrint(self.arena, "{d}", .{type_spec.char_len orelse 1}) catch "1",
+                .none => "1",
+            };
+            const kind_value = type_spec.kind_value orelse 1;
+            break :blk if (kind_value == 1)
+                std.fmt.allocPrint(self.arena, "CHARACTER({s})", .{len_text}) catch "CHARACTER(*)"
+            else
+                std.fmt.allocPrint(self.arena, "CHARACTER({s},{d})", .{ len_text, kind_value }) catch "CHARACTER(*)";
+        },
+        .derived => blk: {
+            if (type_spec.assumed_type) break :blk "TYPE(*)";
+            if (type_spec.polymorphic) {
+                if (type_spec.derived_type_name) |name| {
+                    break :blk std.fmt.allocPrint(self.arena, "CLASS({s})", .{name}) catch "CLASS(*)";
+                }
+                break :blk "CLASS(*)";
+            }
+            if (type_spec.derived_type_name) |name| {
+                break :blk std.fmt.allocPrint(self.arena, "TYPE({s})", .{name}) catch "TYPE(*)";
+            }
+            break :blk "TYPE(*)";
+        },
+    };
 }
 
 fn setKnownProcedureCompatibilityDiagnostic(

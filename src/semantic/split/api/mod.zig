@@ -54,6 +54,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
 }
 
 pub const inferProcedureArgSigs = procedure_inference.inferProcedureArgSigs;
+pub const inferInterfaceProcedureArgSigs = procedure_inference.inferInterfaceProcedureArgSigs;
 pub const interfaceProcedureResultRank = procedure_inference.interfaceProcedureResultRank;
 
 test {

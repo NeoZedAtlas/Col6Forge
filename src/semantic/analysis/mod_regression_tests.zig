@@ -112,6 +112,152 @@ test "procedure component actual argument keeps imported explicit interface meta
     try testing.expect(std.mem.indexOf(u8, got.message, "Interface mismatch in dummy procedure") != null);
 }
 
+test "explicit interface compares CHARACTER(*,kind) dummy against known procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine f4(a, b)\n" ++
+        "  integer :: a\n" ++
+        "  real :: b\n" ++
+        "end subroutine\n" ++
+        "subroutine h4\n" ++
+        "  interface\n" ++
+        "    subroutine f4(a, b)\n" ++
+        "      integer :: a\n" ++
+        "      character(*,4) :: b\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine h4\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Interface mismatch in dummy procedure") != null);
+    try testing.expect(std.mem.indexOf(u8, got.message, "(CHARACTER(*,4)/REAL(4))") != null);
+}
+
+test "explicit diagnostic bag preserves interface dummy mismatch details" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine f4(a, b)\n" ++
+        "  integer :: a\n" ++
+        "  real :: b\n" ++
+        "end subroutine\n" ++
+        "subroutine h4\n" ++
+        "  interface\n" ++
+        "    subroutine f4(a, b)\n" ++
+        "      integer :: a\n" ++
+        "      character(*,4) :: b\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine h4\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena.allocator(), program, &.{}, &.{}, .{}, &diag_bag) catch {};
+    try testing.expect(diag_bag.count() != 0);
+    var saw_interface_mismatch = false;
+    for (diag_bag.items.items) |item| {
+        if (std.mem.indexOf(u8, item.message, "(CHARACTER(*,4)/REAL(4))") == null) continue;
+        saw_interface_mismatch = true;
+        break;
+    }
+    try testing.expect(saw_interface_mismatch);
+}
+
+test "character kind selector rejects visible generic interface reference" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface gkind\n" ++
+        "    procedure g\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine f(x)\n" ++
+        "    character(kind=gkind()) :: x\n" ++
+        "  end subroutine\n" ++
+        "  integer function g()\n" ++
+        "    g = 1\n" ++
+        "  end function\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "must be an intrinsic") != null);
+}
+
+test "ambiguous imported generic interfaces reject matching call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine recopy(n, c)\n" ++
+        "  real, intent(in) :: n\n" ++
+        "  character(6) :: c\n" ++
+        "end subroutine recopy\n" ++
+        "module f77_blas_extra\n" ++
+        "  public :: bl_copy\n" ++
+        "  interface bl_copy\n" ++
+        "    module procedure sdcopy\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine sdcopy(n, c)\n" ++
+        "    real, intent(in) :: n\n" ++
+        "    character(6) :: c\n" ++
+        "  end subroutine sdcopy\n" ++
+        "end module f77_blas_extra\n" ++
+        "module f77_blas_generic\n" ++
+        "  interface bl_copy\n" ++
+        "    subroutine recopy(n, c)\n" ++
+        "      real, intent(in) :: n\n" ++
+        "      character(6) :: c\n" ++
+        "    end subroutine recopy\n" ++
+        "  end interface\n" ++
+        "end module f77_blas_generic\n" ++
+        "program main\n" ++
+        "  use f77_blas_extra\n" ++
+        "  use f77_blas_generic\n" ++
+        "  character(6) :: chr\n" ++
+        "  call bl_copy(1.0, chr)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Ambiguous interfaces") != null);
+}
+
 test "pure procedure rejects impure procedure component calls" {
     const testing = std.testing;
     const allocator = testing.allocator;

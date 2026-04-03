@@ -7,6 +7,7 @@ const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 const constants = @import("../resolve_const.zig");
 const decls = @import("../resolve_decls.zig");
+const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
 
 pub fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) void {
@@ -150,7 +151,7 @@ fn kindSelectorMustBeIntrinsic(self: *context.Context, kind_selector: ?*ast.Expr
     switch (selector.*) {
         .call_or_subscript => |call| {
             if (symbols_mod.isIntrinsicName(call.name)) return;
-            if (symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
+            if (procedure_interfaces.hasVisibleProcedureReference(self, call.name)) {
                 setAttributeConflictDiagnostic(self, "must be an intrinsic");
                 return error.UnexpectedTypeDecl;
             }

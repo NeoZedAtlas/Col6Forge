@@ -49,6 +49,11 @@ pub fn installExplicitInterfaceProcedures(
                 {
                     continue;
                 }
+                if (lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, proc_header.name)) |existing_sig| {
+                    if (existing_sig.definition_known_from_current_program) {
+                        continue;
+                    }
+                }
                 const proc_key = try symbol_lookup.lowerDup(arena, proc_header.name);
                 try known_procedure_sigs.put(proc_key, .{
                     .kind = proc_header.kind,
