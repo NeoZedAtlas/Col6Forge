@@ -101,6 +101,7 @@ pub fn emitLlvmModule(
         return err;
     };
     if (profile) |p| p.semantic_ns = profile_mod.elapsedNs(semantic_start);
+    _ = diagnostics.appendSemanticDiagnostics(diag_bag, &semantic_diag_bag, input_path, contents);
     omp_declare_variant.validateDeclareVariantCompatibility(arena.allocator(), program, input_path, contents, diag_bag) catch |err| {
         if (profile) |p| p.markFailure(.semantic);
         return err;
@@ -235,6 +236,7 @@ pub fn emitLlvmModuleToWriter(
         return err;
     };
     if (profile) |p| p.semantic_ns = profile_mod.elapsedNs(semantic_start);
+    _ = diagnostics.appendSemanticDiagnostics(diag_bag, &semantic_diag_bag, input_path, contents);
     omp_declare_variant.validateDeclareVariantCompatibility(arena.allocator(), program, input_path, contents, diag_bag) catch |err| {
         if (profile) |p| p.markFailure(.semantic);
         return err;

@@ -218,6 +218,7 @@ pub const Context = struct {
     known_host_abstract_interfaces: *const std.StringHashMap(void),
     known_host_owner: ?[]const u8,
     known_host_implicit_call_sigs: ?*std.StringHashMap(ImplicitCallSig),
+    known_program_implicit_call_sigs: ?*std.StringHashMap(ImplicitCallSig),
     target_layout: TargetLayout,
     range_check: bool,
     fbackslash: bool,
@@ -319,6 +320,7 @@ pub const Context = struct {
             .known_host_abstract_interfaces = known_host_abstract_interfaces,
             .known_host_owner = known_host_owner,
             .known_host_implicit_call_sigs = null,
+            .known_program_implicit_call_sigs = null,
             .target_layout = target_layout,
             .range_check = range_check,
             .fbackslash = false,
@@ -361,7 +363,7 @@ pub const Context = struct {
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
     ) void {
-        self.setDiagnosticStructured(line, column, code, message, line_text, "", notes, helps, &.{});
+        self.setDiagnosticStructuredWithSeverity(line, column, code, message, line_text, .@"error", "", notes, helps, &.{});
     }
 
     pub fn setDiagnosticStructured(
@@ -376,11 +378,41 @@ pub const Context = struct {
         helps: []const common_diag.DiagnosticMessage,
         secondary_spans: []const common_diag.DiagnosticSpan,
     ) void {
+        self.setDiagnosticStructuredWithSeverity(line, column, code, message, line_text, .@"error", primary_label, notes, helps, secondary_spans);
+    }
+
+    pub fn setDiagnosticDetailedWithSeverity(
+        self: *Context,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        severity: common_diag.DiagnosticSeverity,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+    ) void {
+        self.setDiagnosticStructuredWithSeverity(line, column, code, message, line_text, severity, "", notes, helps, &.{});
+    }
+
+    pub fn setDiagnosticStructuredWithSeverity(
+        self: *Context,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        severity: common_diag.DiagnosticSeverity,
+        primary_label: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+        secondary_spans: []const common_diag.DiagnosticSpan,
+    ) void {
         if (self.diag_bag) |bag| {
-            bag.setStructured(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans);
+            bag.setStructuredWithSeverity(line, column, code, message, line_text, severity, primary_label, notes, helps, secondary_spans);
             return;
         }
-        diag.setStructured(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans);
+        diag.setStructuredWithSeverity(line, column, code, message, line_text, severity, primary_label, notes, helps, secondary_spans);
     }
 
     pub fn noteFallbackSource(self: *Context, line: usize, column: usize, line_text: []const u8) void {

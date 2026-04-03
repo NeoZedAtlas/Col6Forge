@@ -10,6 +10,7 @@ pub const SemanticDiagnostic = struct {
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    severity: common_diag.DiagnosticSeverity = .@"error",
     primary_label: []const u8 = "",
     notes: []const common_diag.DiagnosticMessage = &.{},
     helps: []const common_diag.DiagnosticMessage = &.{},
@@ -29,6 +30,7 @@ const CompatStorage = struct {
     code: ?[]u8 = null,
     message: ?[]u8 = null,
     line_text: ?[]u8 = null,
+    severity: common_diag.DiagnosticSeverity = .@"error",
     primary_label: ?[]u8 = null,
     notes: []common_diag.DiagnosticMessage = &.{},
     helps: []common_diag.DiagnosticMessage = &.{},
@@ -52,6 +54,7 @@ fn makeCompatStorage(
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    severity: common_diag.DiagnosticSeverity,
     primary_label: []const u8,
     notes: []const common_diag.DiagnosticMessage,
     helps: []const common_diag.DiagnosticMessage,
@@ -60,6 +63,7 @@ fn makeCompatStorage(
     var next: CompatStorage = .{
         .line = if (line == 0) 1 else line,
         .column = if (column == 0) 1 else column,
+        .severity = severity,
     };
     errdefer next.clear();
     next.code = try compat.allocator.dupe(u8, code);
@@ -103,8 +107,23 @@ pub fn setStructured(
     helps: []const common_diag.DiagnosticMessage,
     secondary_spans: []const common_diag.DiagnosticSpan,
 ) void {
+    setStructuredWithSeverity(line, column, code, message, line_text, .@"error", primary_label, notes, helps, secondary_spans);
+}
+
+pub fn setStructuredWithSeverity(
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+    severity: common_diag.DiagnosticSeverity,
+    primary_label: []const u8,
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+    secondary_spans: []const common_diag.DiagnosticSpan,
+) void {
     const refined_code = refineSemanticCode(code, message, line_text);
-    const next = makeCompatStorage(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+    const next = makeCompatStorage(line, column, refined_code, message, line_text, severity, primary_label, notes, helps, secondary_spans) catch return;
     storage.clear();
     storage = next;
     has_diag = true;
@@ -119,7 +138,20 @@ pub fn setDetailed(
     notes: []const common_diag.DiagnosticMessage,
     helps: []const common_diag.DiagnosticMessage,
 ) void {
-    setStructured(line, column, code, message, line_text, "", notes, helps, &.{});
+    setDetailedWithSeverity(line, column, code, message, line_text, .@"error", notes, helps);
+}
+
+pub fn setDetailedWithSeverity(
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+    severity: common_diag.DiagnosticSeverity,
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+) void {
+    setStructuredWithSeverity(line, column, code, message, line_text, severity, "", notes, helps, &.{});
 }
 
 pub fn take() ?SemanticDiagnostic {
@@ -131,6 +163,7 @@ pub fn take() ?SemanticDiagnostic {
         .code = storage.code orelse "",
         .message = storage.message orelse "",
         .line_text = storage.line_text orelse "",
+        .severity = storage.severity,
         .primary_label = storage.primary_label orelse "",
         .notes = storage.notes,
         .helps = storage.helps,

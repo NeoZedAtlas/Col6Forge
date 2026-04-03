@@ -62,7 +62,7 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
             notes: []const common_diag.DiagnosticMessage,
             helps: []const common_diag.DiagnosticMessage,
         ) void {
-            self.setStructured(line, column, code, message, line_text, "", notes, helps, &.{});
+            self.setStructuredWithSeverity(line, column, code, message, line_text, .@"error", "", notes, helps, &.{});
         }
 
         pub fn setStructured(
@@ -77,11 +77,41 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
             helps: []const common_diag.DiagnosticMessage,
             secondary_spans: []const common_diag.DiagnosticSpan,
         ) void {
+            self.setStructuredWithSeverity(line, column, code, message, line_text, .@"error", primary_label, notes, helps, secondary_spans);
+        }
+
+        pub fn setDetailedWithSeverity(
+            self: *Self,
+            line: usize,
+            column: usize,
+            code: []const u8,
+            message: []const u8,
+            line_text: []const u8,
+            severity: common_diag.DiagnosticSeverity,
+            notes: []const common_diag.DiagnosticMessage,
+            helps: []const common_diag.DiagnosticMessage,
+        ) void {
+            self.setStructuredWithSeverity(line, column, code, message, line_text, severity, "", notes, helps, &.{});
+        }
+
+        pub fn setStructuredWithSeverity(
+            self: *Self,
+            line: usize,
+            column: usize,
+            code: []const u8,
+            message: []const u8,
+            line_text: []const u8,
+            severity: common_diag.DiagnosticSeverity,
+            primary_label: []const u8,
+            notes: []const common_diag.DiagnosticMessage,
+            helps: []const common_diag.DiagnosticMessage,
+            secondary_spans: []const common_diag.DiagnosticSpan,
+        ) void {
             const refined_code = if (options.refine_code_fn) |func|
                 func(code, message, line_text)
             else
                 code;
-            const owned = self.makeOwned(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+            const owned = self.makeOwned(line, column, refined_code, message, line_text, severity, primary_label, notes, helps, secondary_spans) catch return;
             if (options.dedupe_latest and self.items.items.len != 0 and diagnosticEqual(self.items.items[self.items.items.len - 1], owned)) {
                 self.freeOwned(owned);
                 return;
@@ -129,6 +159,7 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
             code: []const u8,
             message: []const u8,
             line_text: []const u8,
+            severity: common_diag.DiagnosticSeverity,
             primary_label: []const u8,
             notes: []const common_diag.DiagnosticMessage,
             helps: []const common_diag.DiagnosticMessage,
@@ -140,7 +171,7 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
             errdefer freeMessages(self.allocator, owned_helps);
             const owned_spans = try dupeSpans(self.allocator, secondary_spans, options.normalize_secondary_spans);
             errdefer freeSpans(self.allocator, owned_spans);
-            return .{
+            var owned: Diag = .{
                 .line = if (line == 0) 1 else line,
                 .column = if (column == 0) 1 else column,
                 .code = try self.allocator.dupe(u8, code),
@@ -151,6 +182,8 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
                 .helps = owned_helps,
                 .secondary_spans = owned_spans,
             };
+            if (@hasField(Diag, "severity")) owned.severity = severity;
+            return owned;
         }
 
         fn freeOwned(self: *Self, diag: Diag) void {
@@ -172,6 +205,7 @@ pub fn Bag(comptime Diag: type, comptime options: Options) type {
 fn diagnosticEqual(a: anytype, b: @TypeOf(a)) bool {
     return a.line == b.line and
         a.column == b.column and
+        (!@hasField(@TypeOf(a), "severity") or a.severity == b.severity) and
         std.mem.eql(u8, a.code, b.code) and
         std.mem.eql(u8, a.message, b.message) and
         std.mem.eql(u8, a.line_text, b.line_text) and

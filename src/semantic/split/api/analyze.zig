@@ -76,6 +76,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena);
     var known_host_abstract_interfaces = std.StringHashMap(void).init(arena);
     var known_host_implicit_call_sigs = std.StringHashMap(context.Context.ImplicitCallSig).init(arena);
+    var known_program_implicit_call_sigs = std.StringHashMap(context.Context.ImplicitCallSig).init(arena);
     var host_symbols_active = false;
     var active_host_owner: ?[]const u8 = null;
 
@@ -118,6 +119,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
         unit_analyzer.ctx.dialect = options.dialect;
         unit_analyzer.ctx.declare_variant_adjust_args = options.declare_variant_adjust_args;
         unit_analyzer.ctx.known_host_implicit_call_sigs = &known_host_implicit_call_sigs;
+        unit_analyzer.ctx.known_program_implicit_call_sigs = &known_program_implicit_call_sigs;
         const sem_unit = unit_analyzer.analyze() catch |err| {
             if (first_error == null) first_error = err;
             try units.append(.{
@@ -141,6 +143,11 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 &host_symbols_active,
                 &active_host_owner,
             );
+            try mergeProgramImplicitCallSigs(
+                arena,
+                &known_program_implicit_call_sigs,
+                &unit_analyzer.ctx.implicit_call_sigs,
+            );
             continue;
         };
         try units.append(sem_unit);
@@ -158,10 +165,28 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &host_symbols_active,
             &active_host_owner,
         );
+        try mergeProgramImplicitCallSigs(
+            arena,
+            &known_program_implicit_call_sigs,
+            &unit_analyzer.ctx.implicit_call_sigs,
+        );
     }
     if (first_error) |err| return err;
     try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn mergeProgramImplicitCallSigs(
+    arena: std.mem.Allocator,
+    program_sigs: *std.StringHashMap(context.Context.ImplicitCallSig),
+    unit_sigs: *const std.StringHashMap(context.Context.ImplicitCallSig),
+) !void {
+    var it = unit_sigs.iterator();
+    while (it.next()) |entry| {
+        if (program_sigs.contains(entry.key_ptr.*)) continue;
+        const key = try symbol_lookup.lowerDup(arena, entry.key_ptr.*);
+        try program_sigs.put(key, entry.value_ptr.*);
+    }
 }
 
 fn seedKnownProcedures(

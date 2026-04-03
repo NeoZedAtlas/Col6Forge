@@ -56,10 +56,12 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
             }
         }
         if (!imported_prelude_decl and self.unit.kind != .module) {
-            if (validateKnownProcedureCompatibility(self, proc_header)) |err| {
-                if (!self.usesExplicitDiagnosticBag()) return err;
-                if (first_error == null) first_error = err;
-                continue;
+            if (!interfaceProcedureDeclaresCurrentDummy(self, proc_header.name)) {
+                if (validateKnownProcedureCompatibility(self, proc_header)) |err| {
+                    if (!self.usesExplicitDiagnosticBag()) return err;
+                    if (first_error == null) first_error = err;
+                    continue;
+                }
             }
         }
         if (proc_header.kind != .function) continue;
@@ -88,6 +90,13 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
         if (first_error == null) first_error = err;
     }
     if (first_error) |err| return err;
+}
+
+fn interfaceProcedureDeclaresCurrentDummy(self: *context.Context, name: []const u8) bool {
+    for (self.unit.args) |arg_name| {
+        if (std.ascii.eqlIgnoreCase(arg_name, name)) return true;
+    }
+    return false;
 }
 
 fn setAbstractInterfaceModuleProcedureDiagnostic(self: *context.Context, source: ast.DeclSource) void {
@@ -258,6 +267,7 @@ fn setAbstractInterfaceBindNameDiagnostic(
 ) void {
     const notes = [_]common_diag.DiagnosticMessage{
         .{ .text = "ABSTRACT INTERFACE procedure headers may use BIND(C), but they may not specify an explicit NAME= binding label" },
+        .{ .text = "Expecting END INTERFACE statement" },
     };
     const helps = [_]common_diag.DiagnosticMessage{
         .{ .text = "remove NAME= from the ABSTRACT INTERFACE header, or make this a concrete interface if a binding label is required" },

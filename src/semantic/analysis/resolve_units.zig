@@ -120,7 +120,10 @@ pub const Resolver = struct {
                             "procedure defined in interface body; PROCEDURE attribute conflicts with PROCEDURE attribute",
                             decl_source.text,
                             "explicit interface definition conflicts here",
-                            &.{.{ .text = "A procedure body nested in an INTERFACE block already provides the explicit interface for that name." }},
+                            &.{
+                                .{ .text = "(1) explicit interface definition is here" },
+                                .{ .text = "A procedure body nested in an INTERFACE block already provides the explicit interface for that name." },
+                            },
                             &.{.{ .text = "Remove the separate PROCEDURE-style declaration or move the implementation out of the INTERFACE body." }},
                             &.{},
                         );
@@ -281,7 +284,10 @@ fn maybeSetFunctionTypeDeclDiagnostic(ctx: *context.Context, type_decl: ast.Type
                 "invalid type for function result",
                 decl_source.text,
                 "function result declaration conflicts here",
-                &.{.{ .text = "The local function result declaration does not match the visible explicit interface." }},
+                &.{
+                    .{ .text = "The local function result declaration does not match the visible explicit interface." },
+                    .{ .text = "Type mismatch" },
+                },
                 &.{.{ .text = "Make the function result declaration agree with the explicit interface, or remove the conflicting declaration." }},
                 related[0..],
             );
@@ -292,7 +298,10 @@ fn maybeSetFunctionTypeDeclDiagnostic(ctx: *context.Context, type_decl: ast.Type
                 catalog.semantic.unexpected_type_decl.code,
                 "invalid type for function result",
                 decl_source.text,
-                &.{.{ .text = "The local function result declaration does not match the visible explicit interface." }},
+                &.{
+                    .{ .text = "The local function result declaration does not match the visible explicit interface." },
+                    .{ .text = "Type mismatch" },
+                },
                 &.{.{ .text = "Make the function result declaration agree with the explicit interface, or remove the conflicting declaration." }},
             );
         }

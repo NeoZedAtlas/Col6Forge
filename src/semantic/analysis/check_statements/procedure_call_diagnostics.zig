@@ -106,6 +106,63 @@ pub fn emitProcedureActualCallDiagnostic(
     return err;
 }
 
+pub fn emitProcedureActualCallWarning(
+    self: *context.Context,
+    callee_name: ?[]const u8,
+    formal_name: ?[]const u8,
+    expr: *ast.Expr,
+    message: []const u8,
+) void {
+    const source = self.sourceForExpr(expr);
+    const advice = invalidArgumentAdvice();
+    if (source) |src| {
+        const line = if (src.line == 0) 1 else src.line;
+        const column = if (src.column == 0) 1 else src.column;
+        var related = std.array_list.Managed(common_diag.DiagnosticSpan).init(self.arena);
+        if (callee_name) |name| {
+            const formal_source = if (formal_name) |dummy_name|
+                procedure_interfaces.findVisibleProcedureFormalSource(self, name, dummy_name)
+            else
+                null;
+            const related_source = formal_source orelse procedure_interfaces.findVisibleProcedureSource(self, name);
+            if (related_source) |decl_source| {
+                appendDiagnosticSpan(
+                    &related,
+                    decl_source,
+                    if (formal_source != null) "visible dummy declaration here" else "visible interface here",
+                ) catch {};
+            }
+        }
+        appendActualProcedureExprRelatedSpans(self, &related, expr) catch {};
+        if (related.items.len != 0) {
+            self.setDiagnosticStructuredWithSeverity(
+                line,
+                column,
+                catalog.semantic.invalid_argument_count.code,
+                message,
+                src.text,
+                .warning,
+                "actual argument conflicts here",
+                advice.notes,
+                advice.helps,
+                related.items,
+            );
+        } else {
+            self.setDiagnosticDetailedWithSeverity(
+                line,
+                column,
+                catalog.semantic.invalid_argument_count.code,
+                message,
+                src.text,
+                .warning,
+                advice.notes,
+                advice.helps,
+            );
+        }
+        self.setCurrentSource(src);
+    }
+}
+
 pub fn emitStructuredProcedureDiagnostic(
     self: *context.Context,
     primary: DiagnosticSource,

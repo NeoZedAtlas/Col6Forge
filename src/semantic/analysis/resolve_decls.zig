@@ -206,7 +206,18 @@ pub fn applyDeclarator(
         sym.no_arg_check = true;
     }
     if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
-        return error.InvalidUnlimitedPolymorphicEntity;
+        const decl_source = self.current_decl_source orelse ast.DeclSource{};
+        self.setDiagnosticDetailed(
+            if (decl_source.line == 0) 1 else decl_source.line,
+            if (decl_source.column == 0) 1 else decl_source.column,
+            catalog.semantic.invalid_unlimited_polymorphic_entity.code,
+            catalog.semantic.invalid_unlimited_polymorphic_entity.message,
+            decl_source.text,
+            &.{.{ .text = "Unlimited polymorphic entities must be dummy arguments, POINTERs, or ALLOCATABLE objects." }},
+            &.{.{ .text = "Make this CLASS(*) entity a dummy, POINTER, or ALLOCATABLE object." }},
+        );
+        if (!self.usesExplicitDiagnosticBag()) return error.InvalidUnlimitedPolymorphicEntity;
+        return;
     }
 
     // Use the resolved symbol type after declaration merge. Non-type declarations

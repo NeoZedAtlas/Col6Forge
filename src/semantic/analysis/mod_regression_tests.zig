@@ -143,6 +143,125 @@ test "explicit interface compares CHARACTER(*,kind) dummy against known procedur
     try testing.expect(std.mem.indexOf(u8, got.message, "(CHARACTER(*,4)/REAL(4))") != null);
 }
 
+test "dummy procedure interface still validates deferred-shape function result" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "pure function runge_kutta_step(t, r_, dr, h) result(res)\n" ++
+        "    real, intent(in) :: t, r_(:), h\n" ++
+        "    real, dimension(:), allocatable :: res\n" ++
+        "    interface\n" ++
+        "        pure function dr(t, r_)\n" ++
+        "            real, intent(in) :: t, r_(:)\n" ++
+        "            real :: dr(:)\n" ++
+        "        end function\n" ++
+        "    end interface\n" ++
+        "    allocate(res(size(r_)))\n" ++
+        "end function\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "deferred shape") != null);
+}
+
+test "polymorphic actual in function reference requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  class(*), allocatable :: x\n" ++
+        "  print *, f(x)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Explicit interface required") != null);
+}
+
+test "invalid class star declaration does not suppress later explicit-interface diagnostic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  class(*) :: x\n" ++
+        "  print *, f(x)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    try testing.expect(diag_bag.count() >= 2);
+
+    var saw_class_star = false;
+    var saw_explicit_interface = false;
+    for (diag_bag.items.items) |item| {
+        if (std.mem.indexOf(u8, item.message, "CLASS(*) entity must be dummy, allocatable or pointer") != null) {
+            saw_class_star = true;
+        }
+        if (std.mem.indexOf(u8, item.message, "Explicit interface required") != null) {
+            saw_explicit_interface = true;
+        }
+    }
+    try testing.expect(saw_class_star);
+    try testing.expect(saw_explicit_interface);
+}
+
+test "implicit external mismatch is shared across top-level program units" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "integer function left()\n" ++
+        "  call sub(left)\n" ++
+        "end function left\n" ++
+        "\n" ++
+        "function right(arg)\n" ++
+        "  call sub(arg)\n" ++
+        "end function right\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    var saw_type_mismatch = false;
+    for (diag_bag.items.items) |item| {
+        if (std.mem.indexOf(u8, item.message, "Type mismatch in argument") == null) continue;
+        saw_type_mismatch = true;
+        break;
+    }
+    try testing.expect(saw_type_mismatch);
+}
+
 test "explicit diagnostic bag preserves interface dummy mismatch details" {
     const testing = std.testing;
     const allocator = testing.allocator;

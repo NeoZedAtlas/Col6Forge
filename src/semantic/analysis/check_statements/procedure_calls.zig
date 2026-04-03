@@ -24,6 +24,7 @@ const appendUniqueDeclSource = procedure_call_diagnostics.appendUniqueDeclSource
 const emitStructuredProcedureDiagnostic = procedure_call_diagnostics.emitStructuredProcedureDiagnostic;
 const emitProcedureActualDiagnostic = procedure_call_diagnostics.emitProcedureActualDiagnostic;
 const emitProcedureActualCallDiagnostic = procedure_call_diagnostics.emitProcedureActualCallDiagnostic;
+const emitProcedureActualCallWarning = procedure_call_diagnostics.emitProcedureActualCallWarning;
 const emitVariableDefinitionContextDiagnostic = procedure_call_diagnostics.emitVariableDefinitionContextDiagnostic;
 const exprIsVariableDefinitionActual = procedure_call_diagnostics.exprIsVariableDefinitionActual;
 
@@ -1642,6 +1643,16 @@ fn checkDataActualArgCompatibility(
     }
     if (!skip_no_arg_check_compat and !deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         if (!componentActualTypeCompatibleViaMetadata(self, formal.type_spec, actual_expr, deps)) {
+            if (shouldWarnExternalExplicitInterfaceActualTypeMismatch(self, callee_name)) {
+                emitProcedureActualCallWarning(
+                    self,
+                    callee_name,
+                    formal.name,
+                    actual_expr,
+                    typeMismatchArgumentMessage(self, actual_spec, formal.type_spec),
+                );
+                return;
+            }
             return emitProcedureActualCallDiagnostic(
                 self,
                 callee_name,
@@ -1675,6 +1686,17 @@ fn checkDataActualArgCompatibility(
         }
     }
     return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
+}
+
+fn shouldWarnExternalExplicitInterfaceActualTypeMismatch(
+    self: *context.Context,
+    callee_name: ?[]const u8,
+) bool {
+    const name = callee_name orelse return false;
+    if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return false;
+    const idx = resolve_symbols.findSymbolIndex(self, name) orelse return false;
+    const sym = self.symbols.items[idx];
+    return sym.is_external;
 }
 
 fn identifierIsProcedureDesignatorForDataActual(self: *context.Context, name: []const u8) bool {
@@ -2223,8 +2245,11 @@ fn implicitActualArgSig(
 
 fn findImplicitCallSigPtr(self: *context.Context, name: []const u8) ?*context.Context.ImplicitCallSig {
     if (getLowercaseMapPtr(context.Context.ImplicitCallSig, &self.implicit_call_sigs, name)) |sig| return sig;
-    const host = self.known_host_implicit_call_sigs orelse return null;
-    return getLowercaseMapPtr(context.Context.ImplicitCallSig, host, name);
+    if (self.known_host_implicit_call_sigs) |host| {
+        if (getLowercaseMapPtr(context.Context.ImplicitCallSig, host, name)) |sig| return sig;
+    }
+    const program = self.known_program_implicit_call_sigs orelse return null;
+    return getLowercaseMapPtr(context.Context.ImplicitCallSig, program, name);
 }
 
 fn recordImplicitCallSig(

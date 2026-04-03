@@ -850,12 +850,13 @@ fn requiresExplicitInterfaceForActuals(
     sym: symbols.Symbol,
     comptime deps: anytype,
 ) bool {
-    if (sym.is_intrinsic or sym.is_external) return false;
+    if (sym.is_intrinsic) return false;
     if (symbols_mod.lookupKnownProcedureSig(self, name) != null) return false;
     for (args) |arg| {
         const spec = deps.exprTypeSpecCached(self, arg) catch continue;
         if (spec.lowered_kind == .derived and spec.polymorphic) return true;
     }
+    if (sym.is_external) return false;
     return false;
 }
 

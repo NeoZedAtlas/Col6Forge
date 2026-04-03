@@ -172,6 +172,7 @@ pub fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semant
         const normalized_spans = normalizeSemanticSpans(diag_bag.allocator, sem_info.secondary_spans, input_path, contents) catch &.{};
         defer if (normalized_spans.len > 0) diag_bag.allocator.free(normalized_spans);
         diag_bag.addDetailed(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text, .{
+            .severity = sem_info.severity,
             .stage = .semantic,
             .primary_label = sem_info.primary_label,
             .notes = sem_info.notes,
