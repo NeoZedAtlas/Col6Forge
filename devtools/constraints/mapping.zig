@@ -41,6 +41,15 @@ pub const Entry = struct {
 
 pub const entries = [_]Entry{
     .{
+        .id = "DC-A-001",
+        .summary = "Source files must stay under the megafile line budget unless explicitly grandfathered.",
+        .rationale = "Large files stop being reviewable and cause unrelated feature work to pile onto the same hotspot. The budget must be enforced mechanically so structure does not depend on memory or discipline alone.",
+        .class = .a_static_forbidden,
+        .primary = &.{.architecture_audit},
+        .secondary = &.{.review_checklist},
+        .blocking = .blocking,
+    },
+    .{
         .id = "DC-B-001",
         .summary = "Do not reuse assignment, actual-argument, and ABI rules across semantic layers.",
         .rationale = "These checks may all look like compatibility decisions, but they protect different invariants. Reusing a neighboring rule across layers silently weakens the compiler model and creates broad regressions.",

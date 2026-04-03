@@ -113,6 +113,14 @@ fn applyFileRule(
                 failures.* += 1;
             }
         },
+        .max_line_count => {
+            const max_count = rule.max_count orelse return error.AuditRuleMissingMaxCount;
+            const line_count = countLines(text);
+            if (line_count > max_count) {
+                reportLineBudgetViolation(rel_path, rule.id, rule.title, line_count, max_count);
+                failures.* += 1;
+            }
+        },
         .owned_symbol_definition => {
             const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
             const owner_path = rule.owner_exact_path orelse return error.AuditRuleMissingOwnerPath;
@@ -223,4 +231,31 @@ fn reportViolation(
 ) void {
     const line = 1 + std.mem.count(u8, text[0..idx], "\n");
     std.log.err("{s}:{d}: [{s}] forbidden {s}: `{s}`", .{ rel_path, line, rule_id, title, detail });
+}
+
+fn reportLineBudgetViolation(
+    rel_path: []const u8,
+    rule_id: []const u8,
+    title: []const u8,
+    line_count: usize,
+    max_count: usize,
+) void {
+    std.log.err(
+        "{s}: [{s}] forbidden {s}: {d} lines exceeds budget {d}",
+        .{ rel_path, rule_id, title, line_count, max_count },
+    );
+}
+
+fn countLines(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    const newline_count = std.mem.count(u8, text, "\n");
+    return if (text[text.len - 1] == '\n') newline_count else newline_count + 1;
+}
+
+test "countLines matches line-oriented expectations" {
+    try std.testing.expectEqual(@as(usize, 0), countLines(""));
+    try std.testing.expectEqual(@as(usize, 1), countLines("a"));
+    try std.testing.expectEqual(@as(usize, 1), countLines("a\n"));
+    try std.testing.expectEqual(@as(usize, 2), countLines("a\nb"));
+    try std.testing.expectEqual(@as(usize, 2), countLines("a\nb\n"));
 }

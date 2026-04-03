@@ -98,4 +98,16 @@ pub const file_rules = [_]model.AuditRule{
         .exclude_tests = true,
         .excluded_exact_paths = &.{"src/common/error_catalog.zig"},
     },
+    .{
+        .id = "AR-TXT-030",
+        .title = "megafile line budget",
+        .kind = .max_line_count,
+        .max_count = 3000,
+        .excluded_exact_paths = &.{
+            "src/codegen/llvm/codegen/expression/call/array_actuals.zig",
+            "src/codegen/llvm/codegen/module/tests.zig",
+            "src/semantic/analysis/mod.zig",
+            "src/semantic/analysis/check_statements/procedure_calls.zig",
+        },
+    },
 };
