@@ -1,4 +1,4 @@
-error[CF3139]: Type mismatch in argument
+error[CF3139]: passed REAL(4) to INTEGER(32)
   --> tests/diagnostic_golden/semantic_actual_type_mismatch.f90:7:12
    = stage: semantic
    = help: see docs/errors.md#CF3139

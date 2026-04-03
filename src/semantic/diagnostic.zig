@@ -279,6 +279,9 @@ fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     if (std.mem.indexOf(u8, message, "Polymorphic mismatch in argument") != null) return catalog.semantic.invalid_argument_polymorphic.code;
     if (std.mem.indexOf(u8, message, "Derived type mismatch in argument") != null) return catalog.semantic.invalid_argument_derived_type.code;
     if (std.mem.indexOf(u8, message, "Type mismatch in argument") != null) return catalog.semantic.invalid_argument_type.code;
+    if (std.mem.startsWith(u8, message, "passed ") and std.mem.indexOf(u8, message, " to ") != null) {
+        return catalog.semantic.invalid_argument_type.code;
+    }
     return codeForFallback(catalog.semantic.invalid_argument_count.code);
 }
 
@@ -706,4 +709,15 @@ test "semantic diagnostic refines generic intrinsic assignment mismatch" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.semantic.assignment_intrinsic_result_mismatch.code, diag.code);
+}
+
+test "semantic diagnostic refines passed actual/formal type mismatch text" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(35, 3, catalog.semantic.invalid_argument_count.code, "passed REAL(4) to INTEGER(32)", "      call s(1.0)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_type.code, diag.code);
 }

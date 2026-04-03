@@ -1021,6 +1021,8 @@ fn lookupKnownProcedureSigForInterfaceValidation(
     self: *context.Context,
     name: []const u8,
 ) ?context.Context.ProcedureSig {
+    if (visiblePreludeInterfaceProcedureSig(self, name)) |sig| return sig;
+
     var match: ?context.Context.ProcedureSig = null;
     var it = self.known_procedure_sigs.iterator();
     while (it.next()) |entry| {
@@ -1033,6 +1035,41 @@ fn lookupKnownProcedureSigForInterfaceValidation(
         match = sig;
     }
     return match orelse symbols_mod.lookupKnownProcedureSig(self, name);
+}
+
+fn visiblePreludeInterfaceProcedureSig(
+    self: *context.Context,
+    name: []const u8,
+) ?context.Context.ProcedureSig {
+    var decl_idx: usize = 0;
+    while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, name)) continue;
+            return .{
+                .kind = proc_header.kind,
+                .arg_count = proc_header.args.len,
+                .alt_return_count = proc_header.alt_return_dummy_count,
+                .args = split_api.inferInterfaceProcedureArgSigs(self.arena, self.unit, proc_header) catch return null,
+                .pure = proc_header.pure,
+                .elemental = proc_header.elemental,
+                .is_pointer = false,
+                .result_rank = split_api.interfaceProcedureResultRank(proc_header),
+                .result_type_spec = if (proc_header.kind == .function)
+                    interfaceProcedureResultTypeSpecForValidation(self, proc_header)
+                else
+                    null,
+                .result_shape_signature = &.{},
+                .result_allocatable = if (proc_header.kind == .function) interfaceProcedureResultAttrs(proc_header).allocatable else false,
+                .result_contiguous = false,
+                .result_procedure_pointer = false,
+                .actual_requires_explicit_interface = true,
+                .definition_known_from_current_program = false,
+            };
+        }
+    }
+    return null;
 }
 
 fn knownProcedureDummyArgCompatible(

@@ -1696,7 +1696,27 @@ fn shouldWarnExternalExplicitInterfaceActualTypeMismatch(
     if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return false;
     const idx = resolve_symbols.findSymbolIndex(self, name) orelse return false;
     const sym = self.symbols.items[idx];
-    return sym.is_external;
+    return sym.is_external and currentUnitDeclaresExternalProcedure(self, name);
+}
+
+fn currentUnitDeclaresExternalProcedure(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        switch (decl) {
+            .external => |external_decl| {
+                for (external_decl.names) |decl_name| {
+                    if (std.ascii.eqlIgnoreCase(decl_name, name)) return true;
+                }
+            },
+            .type_decl => |type_decl| {
+                if (!type_decl.external) continue;
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn identifierIsProcedureDesignatorForDataActual(self: *context.Context, name: []const u8) bool {

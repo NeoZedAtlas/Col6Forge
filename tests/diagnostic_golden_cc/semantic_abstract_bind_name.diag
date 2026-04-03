@@ -10,4 +10,5 @@ error[CF3116]: NAME not allowed on BIND.C. for ABSTRACT INTERFACE
 4 |     end subroutine
   | ~ END INTERFACE expected here
    = note: ABSTRACT INTERFACE procedure headers may use BIND(C), but they may not specify an explicit NAME= binding label
+   = note: Expecting END INTERFACE statement
    = help: remove NAME= from the ABSTRACT INTERFACE header, or make this a concrete interface if a binding label is required
