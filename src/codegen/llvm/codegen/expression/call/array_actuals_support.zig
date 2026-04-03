@@ -7,6 +7,7 @@ const binary = @import("../binary.zig");
 const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
 const casting = @import("../casting.zig");
+const runtime_fail = @import("../../runtime_fail.zig");
 const shared = @import("shared.zig");
 
 const Expr = shared.Expr;
@@ -25,12 +26,117 @@ fn charSymbolLengthValueI64(
     return dispatch.emitCharacterSymbolLenValueI64(ctx, builder, name, ctx.findSymbol(name) orelse return error.UnknownSymbol);
 }
 
-fn i64Const(ctx: *Context, value: i64) ValueRef {
+pub fn i64Const(ctx: *Context, value: i64) ValueRef {
     return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
 }
 
-fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+pub fn i1Const(value: bool) ValueRef {
+    return .{ .name = if (value) "1" else "0", .ty = .i1, .is_ptr = false };
+}
+
+pub fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
     return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
+}
+
+pub fn byteSizeForIRType(ty: IRType) usize {
+    return switch (ty) {
+        .i1 => 1,
+        .i8 => 1,
+        .i32 => 4,
+        .i64 => 8,
+        .f32 => 4,
+        .f64 => 8,
+        .v2f32 => 8,
+        .complex_f32 => 8,
+        .complex_f64 => 16,
+        .ptr => @sizeOf(usize),
+        .void => 1,
+    };
+}
+
+pub fn emitHeapArrayTempPointer(
+    ctx: *Context,
+    builder: anytype,
+    elem_ty: IRType,
+    elem_count: ValueRef,
+) !ValueRef {
+    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
+    const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
+    return emitHeapAllocBytes(ctx, builder, total_bytes);
+}
+
+pub fn emitHeapArrayTempPointerScaled(
+    ctx: *Context,
+    builder: anytype,
+    elem_ty: IRType,
+    elem_count: ValueRef,
+    address_scale: ValueRef,
+) !ValueRef {
+    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
+    var total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
+    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
+        total_bytes = try emitMulI64(ctx, builder, total_bytes, address_scale);
+    }
+    return emitHeapAllocBytes(ctx, builder, total_bytes);
+}
+
+pub fn emitHeapAllocBytes(
+    ctx: *Context,
+    builder: anytype,
+    requested_bytes: ValueRef,
+) !ValueRef {
+    const needs_min_name = try ctx.nextTemp();
+    try builder.compare(needs_min_name, "icmp", "eq", .i64, requested_bytes, i64Const(ctx, 0));
+    const safe_bytes_name = try ctx.nextTemp();
+    try builder.select(
+        safe_bytes_name,
+        .i64,
+        .{ .name = needs_min_name, .ty = .i1, .is_ptr = false },
+        i64Const(ctx, 1),
+        requested_bytes,
+    );
+    const safe_bytes = ValueRef{ .name = safe_bytes_name, .ty = .i64, .is_ptr = false };
+
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]IRType{.i64}, false);
+    const heap_ptr_name = try ctx.nextTemp();
+    try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{safe_bytes});
+    const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
+
+    const is_null_name = try ctx.nextTemp();
+    try builder.compare(
+        is_null_name,
+        "icmp",
+        "eq",
+        .ptr,
+        heap_ptr,
+        .{ .name = "null", .ty = .ptr, .is_ptr = false },
+    );
+    const alloc_ok = try ctx.nextLabel("array_alloc_ok");
+    const alloc_fail = try ctx.nextLabel("array_alloc_fail");
+    try builder.brCond(.{ .name = is_null_name, .ty = .i1, .is_ptr = false }, alloc_fail, alloc_ok);
+
+    try builder.label(alloc_fail);
+    try runtime_fail.emitRuntimeCheckFailureTrap(ctx, builder, "array temporary allocation failed");
+
+    try builder.label(alloc_ok);
+    return heap_ptr;
+}
+
+pub fn emitMaybeFreeOwnedArrayActual(
+    ctx: *Context,
+    builder: anytype,
+    actual: ?ArrayActualPlan,
+) !void {
+    if (actual) |resolved| {
+        try emitOwnedHeapActualFree(ctx, builder, resolved.owned_heap_ptr);
+    }
+}
+
+pub fn emitOwnedHeapActualFree(ctx: *Context, builder: anytype, owned_heap_ptr: ?ValueRef) !void {
+    if (owned_heap_ptr) |ptr| {
+        const free_name = try ctx.ensureDeclRaw("free", .void, &[_]IRType{.ptr}, false);
+        try builder.callTyped(null, .void, free_name, &.{ptr});
+    }
 }
 
 fn coerceLogicalMaskValue(ctx: *Context, builder: anytype, value: ValueRef) !ValueRef {

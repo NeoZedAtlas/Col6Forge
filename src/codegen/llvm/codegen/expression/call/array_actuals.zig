@@ -10,7 +10,6 @@ const binary = @import("../binary.zig");
 const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
 const casting = @import("../casting.zig");
-const runtime_fail = @import("../../runtime_fail.zig");
 const procedure_pass = @import("../../../../../common/procedure_pass.zig");
 const flatten_core = @import("../../../stmts/execution/assignment/flatten/core.zig");
 const flatten_metadata = @import("../../../stmts/execution/assignment/flatten/metadata.zig");
@@ -18,6 +17,7 @@ const flatten_mod = @import("../../../stmts/execution/assignment/flatten/mod.zig
 const io_utils = @import("../../../stmts/io/utils.zig");
 const elemental_char_intrinsics = @import("elemental_char_intrinsics.zig");
 const shared = @import("shared.zig");
+const array_actuals_support = @import("array_actuals_support.zig");
 
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -2831,12 +2831,6 @@ pub fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: [
     }
 }
 
-pub fn emitOwnedHeapActualFree(ctx: *Context, builder: anytype, owned_heap_ptr: ?ValueRef) !void {
-    if (owned_heap_ptr) |ptr| {
-        try emitOwnedHeapArgFrees(ctx, builder, &.{ptr});
-    }
-}
-
 pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
     return dispatch.isCharacterExpr(ctx, expr);
 }
@@ -2863,18 +2857,6 @@ fn charSymbolLengthValueI64(
 ) !ValueRef {
     _ = sym;
     return dispatch.emitCharacterSymbolLenValueI64(ctx, builder, name, ctx.findSymbol(name) orelse return error.UnknownSymbol);
-}
-
-fn i64Const(ctx: *Context, value: i64) ValueRef {
-    return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
-}
-
-fn i1Const(value: bool) ValueRef {
-    return .{ .name = if (value) "1" else "0", .ty = .i1, .is_ptr = false };
-}
-
-pub fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
-    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
 pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
@@ -2932,102 +2914,6 @@ fn intrinsicArrayConversionType(name: []const u8) ?IRType {
         null;
 }
 
-fn byteSizeForIRType(ty: IRType) usize {
-    return switch (ty) {
-        .i1 => 1,
-        .i8 => 1,
-        .i32 => 4,
-        .i64 => 8,
-        .f32 => 4,
-        .f64 => 8,
-        .v2f32 => 8,
-        .complex_f32 => 8,
-        .complex_f64 => 16,
-        .ptr => @sizeOf(usize),
-        .void => 1,
-    };
-}
-
-fn emitHeapArrayTempPointer(
-    ctx: *Context,
-    builder: anytype,
-    elem_ty: IRType,
-    elem_count: ValueRef,
-) !ValueRef {
-    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
-    const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
-    return emitHeapAllocBytes(ctx, builder, total_bytes);
-}
-
-fn emitHeapArrayTempPointerScaled(
-    ctx: *Context,
-    builder: anytype,
-    elem_ty: IRType,
-    elem_count: ValueRef,
-    address_scale: ValueRef,
-) !ValueRef {
-    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
-    var total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
-    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
-        total_bytes = try emitMulI64(ctx, builder, total_bytes, address_scale);
-    }
-    return emitHeapAllocBytes(ctx, builder, total_bytes);
-}
-
-fn emitHeapAllocBytes(
-    ctx: *Context,
-    builder: anytype,
-    requested_bytes: ValueRef,
-) !ValueRef {
-    const needs_min_name = try ctx.nextTemp();
-    try builder.compare(needs_min_name, "icmp", "eq", .i64, requested_bytes, i64Const(ctx, 0));
-    const safe_bytes_name = try ctx.nextTemp();
-    try builder.select(
-        safe_bytes_name,
-        .i64,
-        .{ .name = needs_min_name, .ty = .i1, .is_ptr = false },
-        i64Const(ctx, 1),
-        requested_bytes,
-    );
-    const safe_bytes = ValueRef{ .name = safe_bytes_name, .ty = .i64, .is_ptr = false };
-
-    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]IRType{.i64}, false);
-    const heap_ptr_name = try ctx.nextTemp();
-    try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{safe_bytes});
-    const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
-
-    const is_null_name = try ctx.nextTemp();
-    try builder.compare(
-        is_null_name,
-        "icmp",
-        "eq",
-        .ptr,
-        heap_ptr,
-        .{ .name = "null", .ty = .ptr, .is_ptr = false },
-    );
-    const alloc_ok = try ctx.nextLabel("array_alloc_ok");
-    const alloc_fail = try ctx.nextLabel("array_alloc_fail");
-    try builder.brCond(.{ .name = is_null_name, .ty = .i1, .is_ptr = false }, alloc_fail, alloc_ok);
-
-    try builder.label(alloc_fail);
-    try runtime_fail.emitRuntimeCheckFailureTrap(ctx, builder, "array temporary allocation failed");
-
-    try builder.label(alloc_ok);
-    return heap_ptr;
-}
-
-fn emitMaybeFreeOwnedArrayActual(
-    ctx: *Context,
-    builder: anytype,
-    actual: ?ArrayActualPlan,
-) !void {
-    if (actual) |resolved| {
-        try emitOwnedHeapActualFree(ctx, builder, resolved.owned_heap_ptr);
-    }
-}
-
-
-const array_actuals_support = @import("array_actuals_support.zig");
 pub const emitMulI64 = array_actuals_support.emitMulI64;
 const emitAddI64 = array_actuals_support.emitAddI64;
 const emitSubI64 = array_actuals_support.emitSubI64;
@@ -3052,3 +2938,12 @@ pub const isIntrinsicArrayConversionArg = array_actuals_support.isIntrinsicArray
 pub const unpackComplexF32Return = array_actuals_support.unpackComplexF32Return;
 const emitIndexI64 = array_actuals_support.emitIndexI64;
 const isArrayValuedExpr = array_actuals_support.isArrayValuedExpr;
+const i64Const = array_actuals_support.i64Const;
+const i1Const = array_actuals_support.i1Const;
+pub const valueRefEquals = array_actuals_support.valueRefEquals;
+const byteSizeForIRType = array_actuals_support.byteSizeForIRType;
+const emitHeapArrayTempPointer = array_actuals_support.emitHeapArrayTempPointer;
+const emitHeapArrayTempPointerScaled = array_actuals_support.emitHeapArrayTempPointerScaled;
+const emitHeapAllocBytes = array_actuals_support.emitHeapAllocBytes;
+const emitMaybeFreeOwnedArrayActual = array_actuals_support.emitMaybeFreeOwnedArrayActual;
+pub const emitOwnedHeapActualFree = array_actuals_support.emitOwnedHeapActualFree;
