@@ -15,6 +15,7 @@ pub const FunctionFingerprint = struct {
 };
 
 pub const Cluster = struct {
+    body_hash: u64,
     normalized_len: usize,
     members: []FunctionFingerprint,
 
@@ -63,6 +64,7 @@ pub fn findDuplicateClusters(
                 };
             }
             try clusters.append(allocator, .{
+                .body_hash = bodyHash(group[0].normalized_body),
                 .normalized_len = group[0].normalized_body.len,
                 .members = members,
             });
@@ -415,7 +417,12 @@ fn lessThanFunctionFingerprint(_: void, lhs: FunctionFingerprint, rhs: FunctionF
 fn lessThanCluster(_: void, lhs: Cluster, rhs: Cluster) bool {
     if (lhs.members.len != rhs.members.len) return lhs.members.len > rhs.members.len;
     if (lhs.normalized_len != rhs.normalized_len) return lhs.normalized_len > rhs.normalized_len;
+    if (lhs.body_hash != rhs.body_hash) return lhs.body_hash < rhs.body_hash;
     return std.mem.order(u8, lhs.members[0].path, rhs.members[0].path) == .lt;
+}
+
+pub fn bodyHash(normalized_body: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, normalized_body);
 }
 
 test "normalizes renamed duplicate bodies to the same fingerprint" {

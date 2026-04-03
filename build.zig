@@ -313,6 +313,30 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const duplicate_baseline_write = b.addExecutable(.{
+        .name = "duplicate_baseline_write",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("devtools/constraints/duplicate_baseline_write.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "constraints_devtools", .module = constraints_devtools },
+            },
+        }),
+    });
+
+    const duplicate_check = b.addExecutable(.{
+        .name = "duplicate_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("devtools/constraints/duplicate_check.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "constraints_devtools", .module = constraints_devtools },
+            },
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -343,6 +367,8 @@ pub fn build(b: *std.Build) void {
     const install_constraints_docgen = b.addInstallArtifact(constraints_docgen, .{});
     const install_architecture_audit = b.addInstallArtifact(architecture_audit, .{});
     const install_duplicate_candidates = b.addInstallArtifact(duplicate_candidates, .{});
+    const install_duplicate_baseline_write = b.addInstallArtifact(duplicate_baseline_write, .{});
+    const install_duplicate_check = b.addInstallArtifact(duplicate_check, .{});
 
     const tools_step = b.step("tools", "Install all developer runner tools");
     tools_step.dependOn(&install_golden_runner.step);
@@ -360,6 +386,8 @@ pub fn build(b: *std.Build) void {
     tools_step.dependOn(&install_constraints_docgen.step);
     tools_step.dependOn(&install_architecture_audit.step);
     tools_step.dependOn(&install_duplicate_candidates.step);
+    tools_step.dependOn(&install_duplicate_baseline_write.step);
+    tools_step.dependOn(&install_duplicate_check.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -457,9 +485,13 @@ pub fn build(b: *std.Build) void {
     tools_check_step.dependOn(&constraints_docgen.step);
     tools_check_step.dependOn(&architecture_audit.step);
     tools_check_step.dependOn(&duplicate_candidates.step);
+    tools_check_step.dependOn(&duplicate_baseline_write.step);
+    tools_check_step.dependOn(&duplicate_check.step);
 
     const architecture_audit_step = b.step("architecture-audit", "Run architecture guardrail audit");
     const duplicate_candidates_step = b.step("constraints-duplicate-scan", "Report duplicate function-body clusters as advisory findings");
+    const duplicate_baseline_step = b.step("constraints-duplicate-baseline", "Refresh the code-native duplicate cluster baseline");
+    const duplicate_check_step = b.step("constraints-duplicate-check", "Fail when new duplicate function-body clusters enter the tree");
     const errors_docs_check_step = b.step("errors-docs-check", "Verify docs/errors.md matches the source error catalog");
     const constraints_check_step = b.step("constraints-check", "Validate the code-native constraints registry");
     const constraints_docs_check_step = b.step("constraints-docs-check", "Verify docs/constraints.md matches the code-native constraints registry");
@@ -488,6 +520,8 @@ pub fn build(b: *std.Build) void {
     architecture_audit_step.dependOn(&run_errors_docs_check.step);
     architecture_audit_step.dependOn(&run_constraints_check.step);
     architecture_audit_step.dependOn(&run_constraints_docs_check.step);
+    const run_duplicate_check = b.addRunArtifact(duplicate_check);
+    architecture_audit_step.dependOn(&run_duplicate_check.step);
     architecture_audit_step.dependOn(&run_architecture_audit.step);
 
     const run_duplicate_candidates = b.addRunArtifact(duplicate_candidates);
@@ -495,6 +529,15 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_duplicate_candidates.addArgs(args);
     }
+
+    const run_duplicate_baseline = b.addRunArtifact(duplicate_baseline_write);
+    run_duplicate_baseline.addArg("--write");
+    duplicate_baseline_step.dependOn(&run_duplicate_baseline.step);
+    if (b.args) |args| {
+        run_duplicate_baseline.addArgs(args);
+    }
+
+    duplicate_check_step.dependOn(&run_duplicate_check.step);
 
     const golden_step = b.step("golden", "Run golden file tests");
     const run_golden = b.addRunArtifact(golden_runner);

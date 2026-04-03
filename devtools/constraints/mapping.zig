@@ -50,6 +50,15 @@ pub const entries = [_]Entry{
         .blocking = .blocking,
     },
     .{
+        .id = "DC-A-002",
+        .summary = "New duplicate function-body clusters must not enter the mainline.",
+        .rationale = "Known legacy duplication may temporarily exist behind a code-native baseline, but new clusters or cluster growth must fail mechanically so convergence does not rely on reviewer memory.",
+        .class = .a_static_forbidden,
+        .primary = &.{.architecture_audit},
+        .secondary = &.{ .review_checklist, .path_based_ci },
+        .blocking = .blocking,
+    },
+    .{
         .id = "DC-B-001",
         .summary = "Do not reuse assignment, actual-argument, and ABI rules across semantic layers.",
         .rationale = "These checks may all look like compatibility decisions, but they protect different invariants. Reusing a neighboring rule across layers silently weakens the compiler model and creates broad regressions.",

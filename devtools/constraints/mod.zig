@@ -9,5 +9,7 @@ pub const audit_symbols = @import("audit/symbols.zig");
 pub const audit_engine = @import("audit/engine.zig");
 pub const architecture_audit = @import("architecture_audit.zig");
 pub const duplicate_candidates = @import("duplicate_candidates.zig");
+pub const duplicate_baseline_write = @import("duplicate_baseline_write.zig");
+pub const duplicate_check = @import("duplicate_check.zig");
 pub const mapping = @import("mapping.zig");
 pub const constraints_docgen = @import("constraints_docgen.zig");

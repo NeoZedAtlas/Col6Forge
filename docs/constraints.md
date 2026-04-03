@@ -15,6 +15,14 @@ This document is a public English reference for the currently registered constra
 - Secondary Enforcers: review checklist
 - Rationale: Large files stop being reviewable and cause unrelated feature work to pile onto the same hotspot. The budget must be enforced mechanically so structure does not depend on memory or discipline alone.
 
+### DC-A-002: New duplicate function-body clusters must not enter the mainline.
+
+- Class: A: Static Forbidden Pattern
+- Blocking: blocking
+- Primary Enforcers: architecture-audit
+- Secondary Enforcers: review checklist, path-based CI
+- Rationale: Known legacy duplication may temporarily exist behind a code-native baseline, but new clusters or cluster growth must fail mechanically so convergence does not rely on reviewer memory.
+
 ### DC-B-001: Do not reuse assignment, actual-argument, and ABI rules across semantic layers.
 
 - Class: B: Unified Model Entry
