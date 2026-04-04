@@ -7,6 +7,7 @@ const expr_memory = @import("../../../codegen/expression/memory.zig");
 const expr_dispatch = @import("../../../codegen/expression/dispatch/mod.zig");
 const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
 const call_shared = @import("../../../codegen/expression/call/shared.zig");
+const character_buffers = @import("../../../shared/character_buffers.zig");
 const io_utils = @import("../../io/utils.zig");
 const ir = @import("../../../../ir.zig");
 const llvm_types = @import("../../../types.zig");
@@ -565,7 +566,7 @@ pub fn emitWholeCharacterArrayActualAssignment(ctx: *Context, builder: anytype, 
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const dst_ptr = try emitContiguousCharacterElementPtr(ctx, builder, base_ptr, target_len, idx_val);
+    const dst_ptr = try character_buffers.emitContiguousCharacterElementPtr(ctx, builder, base_ptr, target_len, idx_val);
     const src_ptr = try array_actuals.emitArrayActualElementPtr(
         ctx,
         builder,
@@ -1289,19 +1290,6 @@ fn emitMemSetByte(
         false,
     );
     try builder.callTyped(null, .void, memset_name, &.{ dst_ptr, byte_value, byte_count, .{ .name = "false", .ty = .i1, .is_ptr = false } });
-}
-
-fn emitContiguousCharacterElementPtr(
-    ctx: *Context,
-    builder: anytype,
-    base_ptr: ValueRef,
-    char_len: ValueRef,
-    idx_val: ValueRef,
-) EmitError!ValueRef {
-    const byte_offset = try expr.emitMul(ctx, builder, idx_val, char_len);
-    const elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(elem_ptr_name, .i8, base_ptr, byte_offset);
-    return .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
 }
 
 fn emitPaddedCharacterElementCopy(
