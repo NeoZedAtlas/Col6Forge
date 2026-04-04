@@ -15,8 +15,10 @@ const expansion = @import("../expansion.zig");
 const formatted_context = @import("context.zig");
 const stream_common = @import("stream_common.zig");
 const stream_runtime = @import("stream_runtime.zig");
+const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
 
 const expandWriteArgs = expansion.expandWriteArgs;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
 const StreamFormatSource = formatted_context.StreamFormatSource;
 const emitSharedRuntimeImpliedDo = stream_common.emitRuntimeImpliedDo;
@@ -25,6 +27,11 @@ const BeginDeclNames = stream_runtime.BeginDeclNames;
 const BeginOptions = stream_runtime.BeginOptions;
 const emitSharedStreamBegin = stream_runtime.emitStreamBegin;
 const emitSharedStreamFinishStatus = stream_runtime.emitStreamFinishStatus;
+const emitArrayActualElement = array_actuals.emitArrayActualElement;
+const emitArrayActualElementPtr = array_actuals.emitArrayActualElementPtr;
+const emitExtentProductI64 = array_actuals.emitExtentProductI64;
+const emitOwnedHeapActualFree = array_actuals.emitOwnedHeapActualFree;
+const resolveArrayActual = array_actuals.resolveArrayActual;
 
 fn appendEscapedLiteral(buf: *std.array_list.Managed(u8), text: []const u8) !void {
     for (text) |ch| {
@@ -186,21 +193,33 @@ fn emitStreamArg(
 }
 
 fn emitStreamNextValue(ctx: *Context, builder: anytype, state: ValueRef, arg: StreamArg) EmitError!void {
+    return emitStreamNextPointer(ctx, builder, state, arg.ptr, arg.kind, try ctx.constI32(@intCast(arg.len)));
+}
+
+fn emitStreamNextPointer(
+    ctx: *Context,
+    builder: anytype,
+    state: ValueRef,
+    ptr: ValueRef,
+    kind: u8,
+    len: ValueRef,
+) EmitError!void {
     const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_next", .i32, &[_]llvm_types.IRType{ .ptr, .ptr, .i32, .i32 }, false);
+    const len_i32 = if (len.ty == .i32) len else try coerceRuntimeI32(ctx, builder, len);
     try builder.callTyped(
         null,
         .i32,
         decl,
         &.{
             state,
-            arg.ptr,
-            try ctx.constI32(@intCast(arg.kind)),
-            try ctx.constI32(@intCast(arg.len)),
+            ptr,
+            try ctx.constI32(@intCast(kind)),
+            len_i32,
         },
     );
 }
 
-fn emitStreamSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+fn emitScalarStreamSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
     if (args.len == 0) return;
     var expanded = try expandWriteArgs(ctx, builder, args);
     defer expanded.deinit();
@@ -208,6 +227,70 @@ fn emitStreamSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*as
         const arg = try emitStreamArg(ctx, builder, value, expanded.char_lens.items[idx]);
         try emitStreamNextValue(ctx, builder, state, arg);
     }
+}
+
+fn emitResolvedArrayActualStream(ctx: *Context, builder: anytype, state: ValueRef, actual: anytype) EmitError!void {
+    errdefer emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr) catch {};
+
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(try ctx.constI64(0), idx_ptr);
+
+    const count = try emitExtentProductI64(ctx, builder, actual.extents);
+    const loop_head = try ctx.nextLabel("fmt_write_arr_head");
+    const loop_body = try ctx.nextLabel("fmt_write_arr_body");
+    const loop_exit = try ctx.nextLabel("fmt_write_arr_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, count);
+    try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    if (actual.elem_ty == .i8) {
+        const elem_ptr = try emitArrayActualElementPtr(
+            ctx,
+            builder,
+            actual.base_ptr,
+            actual.elem_ty,
+            actual.extents,
+            actual.multipliers,
+            actual.address_scale,
+            actual.contiguous,
+            idx_val,
+        );
+        try emitStreamNextPointer(ctx, builder, state, elem_ptr, 's', actual.address_scale);
+    } else {
+        const value = try emitArrayActualElement(ctx, builder, idx_val, actual);
+        const arg = try emitStreamArg(ctx, builder, value, 0);
+        try emitStreamNextValue(ctx, builder, state, arg);
+    }
+
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i64, idx_val, try ctx.constI64(1));
+    try builder.store(.{ .name = next_tmp, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    try emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+}
+
+fn emitStreamSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    if (args.len == 0) return;
+
+    var chunk_start: usize = 0;
+    for (args, 0..) |arg, idx| {
+        const actual = (try resolveArrayActual(ctx, builder, arg)) orelse continue;
+        try emitScalarStreamSlice(ctx, builder, state, args[chunk_start..idx]);
+        try emitResolvedArrayActualStream(ctx, builder, state, actual);
+        chunk_start = idx + 1;
+    }
+    try emitScalarStreamSlice(ctx, builder, state, args[chunk_start..]);
 }
 
 fn emitRuntimeImpliedDo(

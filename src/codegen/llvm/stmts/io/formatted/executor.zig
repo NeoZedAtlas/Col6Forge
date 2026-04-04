@@ -70,6 +70,9 @@ pub fn emitPreparedWrite(
 ) EmitError!void {
     switch (executor.mode) {
         .classic => {
+            if (hasArrayValuedWriteArgs(ctx, write.args)) {
+                return emitStreamPreparedWrite(ctx, builder, write, prepared, executor.plan);
+            }
             if (executor.plan == .static_ops) {
                 if (try emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, executor.plan.static_ops)) {
                     return;
@@ -355,6 +358,13 @@ fn hasRuntimeImpliedDoArgs(ctx: *Context, args: []*ast.Expr) bool {
     return false;
 }
 
+fn hasArrayValuedWriteArgs(ctx: *Context, args: []*ast.Expr) bool {
+    for (args) |arg| {
+        if (hasArrayValuedWriteExpr(ctx, arg)) return true;
+    }
+    return false;
+}
+
 fn planHasStreamOnlyPositioning(plan: PreparedExecutionFormatPlan) bool {
     return switch (plan) {
         .static_ops => |ops| blk: {
@@ -417,4 +427,69 @@ fn hasRuntimeImpliedDoExpr(ctx: *Context, node: *ast.Expr) bool {
 
 fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
     return (evalConstIntSem(ctx, node) catch null) != null or intLiteralValue(node) != null;
+}
+
+fn hasArrayValuedWriteExpr(ctx: *Context, node: *ast.Expr) bool {
+    return switch (node.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk false;
+            break :blk sym.dims.len != 0;
+        },
+        .unary => |un| hasArrayValuedWriteExpr(ctx, un.expr),
+        .binary => |bin| hasArrayValuedWriteExpr(ctx, bin.left) or hasArrayValuedWriteExpr(ctx, bin.right),
+        .complex_literal => |lit| hasArrayValuedWriteExpr(ctx, lit.real) or hasArrayValuedWriteExpr(ctx, lit.imag),
+        .array_constructor => true,
+        .call_or_subscript => |call| blk: {
+            if (ctx.lookupKnownProcedureSig(call.name)) |sig| {
+                _ = sig;
+                break :blk true;
+            }
+            if (ctx.findSymbol(call.name)) |sym| {
+                if (sym.kind == .function or sym.is_external or sym.is_intrinsic) break :blk true;
+                if (sym.dims.len != 0) {
+                    for (call.args) |arg| {
+                        if (arg.* == .dim_range) break :blk true;
+                    }
+                }
+            }
+            for (call.args) |arg| {
+                if (hasArrayValuedWriteExpr(ctx, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (hasArrayValuedWriteExpr(ctx, arg)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (hasArrayValuedWriteExpr(ctx, start_expr)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (hasArrayValuedWriteExpr(ctx, end_expr)) break :blk true;
+            }
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (hasArrayValuedWriteExpr(ctx, lower)) break :blk true;
+            }
+            if (hasArrayValuedWriteExpr(ctx, range.upper)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (hasArrayValuedWriteExpr(ctx, stride_expr)) break :blk true;
+            }
+            break :blk false;
+        },
+        .implied_do => |implied| blk: {
+            if (hasArrayValuedWriteExpr(ctx, implied.start)) break :blk true;
+            if (hasArrayValuedWriteExpr(ctx, implied.end)) break :blk true;
+            if (implied.step) |step_expr| {
+                if (hasArrayValuedWriteExpr(ctx, step_expr)) break :blk true;
+            }
+            for (implied.items) |item| {
+                if (hasArrayValuedWriteExpr(ctx, item)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }

@@ -7,13 +7,13 @@ This document is a public English reference for the currently registered constra
 
 ## Registered Constraints
 
-### DC-A-001: Source files must stay under the megafile line budget unless explicitly grandfathered.
+### DC-A-001: Single code files must not exceed the hard line budget.
 
 - Class: A: Static Forbidden Pattern
 - Blocking: blocking
 - Primary Enforcers: architecture-audit
 - Secondary Enforcers: review checklist
-- Rationale: Large files stop being reviewable and cause unrelated feature work to pile onto the same hotspot. The budget must be enforced mechanically so structure does not depend on memory or discipline alone.
+- Rationale: Large files stop being reviewable and invite unrelated work to accumulate in the same hotspot. The limit must fail mechanically instead of relying on grandfather lists or reviewer memory.
 
 ### DC-A-002: New duplicate function-body clusters must not enter the mainline.
 

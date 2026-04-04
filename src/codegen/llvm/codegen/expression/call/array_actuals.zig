@@ -1107,6 +1107,21 @@ const ShapeExprParser = struct {
         return self.text[start..self.index];
     }
 
+    fn parseDesignator(self: *ShapeExprParser) ?[]const u8 {
+        self.skipSpaces();
+        const start = self.index;
+        _ = self.parseIdentifier() orelse return null;
+        while (true) {
+            const saved = self.index;
+            if (!self.consume('%')) break;
+            _ = self.parseIdentifier() orelse {
+                self.index = saved;
+                return null;
+            };
+        }
+        return self.text[start..self.index];
+    }
+
     fn parseInteger(self: *ShapeExprParser) ?i64 {
         self.skipSpaces();
         if (self.index >= self.text.len) return null;
@@ -1204,18 +1219,21 @@ fn parseKnownShapeFactor(
         return inner;
     }
     if (parser.parseInteger()) |value| return i64Const(ctx, value);
-    const ident = parser.parseIdentifier() orelse return null;
-    if (std.ascii.eqlIgnoreCase(ident, "size")) {
+    const designator = parser.parseDesignator() orelse return null;
+    if (std.ascii.eqlIgnoreCase(designator, "size")) {
         if (!parser.consume('(')) return null;
-        const size_name = parser.parseIdentifier() orelse return null;
+        const size_name = parser.parseDesignator() orelse return null;
         if (!parser.consume(',')) return null;
         const dim_value = parser.parseInteger() orelse return null;
         if (dim_value <= 0 or !parser.consume(')')) return null;
-        const actual_idx = procedureArgIndex(sig, size_name) orelse return null;
-        if (actual_idx >= args.len) return null;
-        return try emitKnownActualDimExtent(ctx, builder, args[actual_idx], @intCast(dim_value - 1));
+        const actual_expr = (try buildKnownShapeDesignatorExpr(ctx, sig, args, size_name)) orelse return null;
+        return try emitKnownActualDimExtent(ctx, builder, actual_expr, @intCast(dim_value - 1));
     }
-    return emitKnownShapeIdentifierValue(ctx, builder, sig, args, ident);
+    if (parser.consume('(')) {
+        if (!parser.consume(')')) return null;
+        return emitKnownShapeZeroArgCallValue(ctx, builder, designator);
+    }
+    return emitKnownShapeDesignatorValue(ctx, builder, sig, args, designator);
 }
 
 fn emitKnownShapeIdentifierValue(
@@ -1248,6 +1266,52 @@ fn emitKnownShapeIdentifierValue(
     const tmp = try ctx.nextTemp();
     try builder.load(tmp, load_ty, ptr);
     var value = ValueRef{ .name = tmp, .ty = load_ty, .is_ptr = false };
+    if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
+    return value;
+}
+
+fn emitKnownShapeDesignatorValue(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    designator: []const u8,
+) anyerror!?ValueRef {
+    if (std.mem.indexOfScalar(u8, designator, '%') == null) {
+        return emitKnownShapeIdentifierValue(ctx, builder, sig, args, designator);
+    }
+    const expr_node = (try buildKnownShapeDesignatorExpr(ctx, sig, args, designator)) orelse return null;
+    if (try resolveArrayActual(ctx, builder, expr_node)) |_| return null;
+    var value = try dispatch.emitExpr(ctx, builder, expr_node);
+    if (value.ty == .ptr) return null;
+    if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
+    return value;
+}
+
+fn emitKnownShapeZeroArgCallValue(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+) anyerror!?ValueRef {
+    if (ctx.findSymbol(name) == null and ctx.lookupKnownProcedureSig(name) == null) {
+        const ret_ty = ctx.defaultIntegerIRType();
+        const callee = if (try ctx.ensureIntrinsicWrapper(name)) |wrapper|
+            wrapper
+        else
+            try ctx.ensureDecl(name, ret_ty);
+        const tmp = try ctx.nextTemp();
+        try builder.callTyped(tmp, ret_ty, callee, &.{});
+        var value = ValueRef{ .name = tmp, .ty = ret_ty, .is_ptr = false };
+        if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
+        return value;
+    }
+    const call_expr = try ctx.allocator.create(ast.Expr);
+    call_expr.* = .{ .call_or_subscript = .{
+        .name = name,
+        .args = @constCast(&[_]*Expr{}),
+    } };
+    var value = try dispatch.emitExpr(ctx, builder, call_expr);
+    if (value.ty == .ptr) return null;
     if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
     return value;
 }
