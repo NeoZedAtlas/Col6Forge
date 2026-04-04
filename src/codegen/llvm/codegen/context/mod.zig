@@ -12,10 +12,14 @@ const utils = @import("../utils.zig");
 const common = @import("../common.zig");
 const types = @import("types.zig");
 const abi = @import("abi.zig");
+const derived_layouts = @import("support/derived_layouts.zig");
+const derived_queries = @import("support/derived_queries.zig");
+const pure_helpers = @import("support/pure_helpers.zig");
 
 const ProgramUnit = input.ProgramUnit;
 const TypeKind = input.TypeKind;
 const IRType = ir.IRType;
+const SizeAlign = pure_helpers.SizeAlign;
 
 pub const CaseInsensitiveStringContext = types.CaseInsensitiveStringContext;
 pub const CaseInsensitiveStringHashMap = types.CaseInsensitiveStringHashMap;
@@ -40,6 +44,22 @@ pub const fortranAbiUsesHiddenResultPtrForTarget = abi.fortranAbiUsesHiddenResul
 pub const fortranAbiReturnType = abi.fortranAbiReturnType;
 pub const fortranAbiUsesHiddenResultPtr = abi.fortranAbiUsesHiddenResultPtr;
 const targetIsWindows = abi.targetIsWindows;
+const buildDerivedTypeLayoutsImpl = derived_layouts.buildDerivedTypeLayouts;
+const buildSingleDerivedTypeLayoutImpl = derived_layouts.buildSingleDerivedTypeLayout;
+const componentIRTypeImpl = derived_queries.componentIRType;
+const derivedTypeNameForExprImpl = derived_queries.derivedTypeNameForExpr;
+const lookupDerivedBindingImpl = derived_queries.lookupDerivedBinding;
+const alignForward = pure_helpers.alignForward;
+const arrayValuedExprElemCount = pure_helpers.arrayValuedExprElemCount;
+const builtinDerivedTypeLayout = pure_helpers.builtinDerivedTypeLayout;
+const componentDescriptorBytes = pure_helpers.componentDescriptorBytes;
+const implicitTypeSpecForName = pure_helpers.implicitTypeSpecForName;
+const inferredParameterArrayElemCount = pure_helpers.inferredParameterArrayElemCount;
+const procedureTypeSpec = pure_helpers.procedureTypeSpec;
+const shapeProductForExpr = pure_helpers.shapeProductForExpr;
+const sizeAlignForIRType = pure_helpers.sizeAlignForIRType;
+const stmtCanFallthroughInBlock = pure_helpers.stmtCanFallthroughInBlock;
+const writeUnsignedDecimal = pure_helpers.writeUnsignedDecimal;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -388,58 +408,15 @@ pub const Context = struct {
     }
 
     pub fn lookupDerivedBinding(self: *const Context, type_name: []const u8, binding_name: []const u8) ?DerivedBindingInfo {
-        var current_name: ?[]const u8 = type_name;
-        while (current_name) |name| {
-            const derived = self.findDerivedTypeDef(name) orelse return null;
-            for (derived.bindings) |binding| {
-                if (std.ascii.eqlIgnoreCase(binding.name, binding_name)) {
-                    return .{
-                        .name = binding.name,
-                        .owner_name = binding.owner_name,
-                        .owner_kind = binding.owner_kind,
-                        .interface_name = binding.interface_name,
-                        .implementation_name = binding.implementation_name,
-                        .deferred = binding.deferred,
-                        .nopass = binding.nopass,
-                        .pass_name = binding.pass_name,
-                        .non_overridable = binding.non_overridable,
-                    };
-                }
-            }
-            current_name = derived.parent_name;
-        }
-        return null;
+        return lookupDerivedBindingImpl(self, type_name, binding_name);
     }
 
     pub fn derivedTypeNameForExpr(self: *const Context, expr: *const input.Expr) ?[]const u8 {
-        return switch (expr.*) {
-            .identifier => |name| blk: {
-                const sym = self.findSymbol(name) orelse break :blk null;
-                if (sym.loweredKind() != .derived) break :blk null;
-                break :blk sym.type_spec.derived_type_name;
-            },
-            .call_or_subscript => |call| blk: {
-                const sym = self.findSymbol(call.name) orelse break :blk null;
-                if (sym.loweredKind() != .derived) break :blk null;
-                break :blk sym.type_spec.derived_type_name;
-            },
-            .component => |comp| blk: {
-                const base_name = self.derivedTypeNameForExpr(comp.base) orelse break :blk null;
-                const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk null;
-                if (component.type_spec.lowered_kind != .derived) break :blk null;
-                break :blk component.type_spec.derived_type_name;
-            },
-            else => null,
-        };
+        return derivedTypeNameForExprImpl(self, expr);
     }
 
     pub fn componentIRType(self: *const Context, comp: input.ComponentExpr) !IRType {
-        const base_name = self.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
-        const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
-        return if (component.procedure or component.pointer or component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
-            .ptr
-        else
-            llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, self.options.target_layout);
+        return componentIRTypeImpl(self, comp);
     }
 
     pub fn arrayElemCountForSymbol(self: *Context, sym: input.sema.Symbol) !usize {
@@ -738,31 +715,7 @@ pub const Context = struct {
     }
 
     fn buildDerivedTypeLayouts(self: *Context) !void {
-        const pending = try self.allocator.alloc(bool, self.unit.decls.len);
-        @memset(pending, false);
-
-        var remaining: usize = 0;
-        for (self.unit.decls, 0..) |decl, idx| {
-            if (decl != .derived_type_def) continue;
-            pending[idx] = true;
-            remaining += 1;
-        }
-
-        while (remaining != 0) {
-            var progressed = false;
-            for (self.unit.decls, 0..) |decl, idx| {
-                if (!pending[idx]) continue;
-                const layout = self.buildSingleDerivedTypeLayout(decl.derived_type_def) catch |err| switch (err) {
-                    error.UnknownSymbol => continue,
-                    else => return err,
-                };
-                try self.derived_type_layouts.put(decl.derived_type_def.name, layout);
-                pending[idx] = false;
-                remaining -= 1;
-                progressed = true;
-            }
-            if (!progressed) return error.UnknownSymbol;
-        }
+        return buildDerivedTypeLayoutsImpl(self);
     }
 
     fn findDerivedTypeDef(self: *const Context, name: []const u8) ?input.DerivedTypeDef {
@@ -774,73 +727,7 @@ pub const Context = struct {
     }
 
     fn buildSingleDerivedTypeLayout(self: *Context, derived: input.DerivedTypeDef) !DerivedTypeLayout {
-        var components = std.array_list.Managed(DerivedComponentLayout).init(self.allocator);
-        var size: usize = 0;
-        var alignment: usize = 1;
-        if (derived.parent_name) |parent_name| {
-            const parent_layout = self.findDerivedTypeLayout(parent_name) orelse return error.UnknownSymbol;
-            try components.appendSlice(parent_layout.components);
-            size = parent_layout.size;
-            alignment = parent_layout.alignment;
-        }
-        for (derived.components) |type_decl| {
-            for (type_decl.items) |item| {
-                const elem = try self.componentElemSizeAlign(type_decl, item);
-                const count = if (type_decl.pointer or type_decl.allocatable)
-                    @as(usize, 1)
-                else
-                    self.codegenArrayElementCount(item.dims) catch |err| switch (err) {
-                        error.ArrayDimNotConstant => return error.ArraysUnsupported,
-                        else => return err,
-                    };
-                const offset = alignForward(size, elem.alignment);
-                const total_size = elem.storage_size * count;
-                try components.append(.{
-                    .name = item.name,
-                    .type_spec = elem.type_spec,
-                    .dims = item.dims,
-                    .pointer = type_decl.pointer,
-                    .allocatable = type_decl.allocatable,
-                    .offset = offset,
-                    .elem_size = elem.element_size,
-                    .size = total_size,
-                    .alignment = elem.alignment,
-                });
-                size = offset + total_size;
-                alignment = @max(alignment, elem.alignment);
-            }
-        }
-        for (derived.procedure_components) |procedure_decl| {
-            for (procedure_decl.items) |item| {
-                const elem = try self.procedureComponentElemInfo(procedure_decl, item.name);
-                const offset = alignForward(size, elem.alignment);
-                try components.append(.{
-                    .name = item.name,
-                    .type_spec = elem.type_spec,
-                    .dims = &.{},
-                    .pointer = procedure_decl.pointer,
-                    .allocatable = false,
-                    .procedure = true,
-                    .procedure_sig = elem.sig,
-                    .procedure_nopass = procedure_decl.nopass,
-                    .procedure_pass_name = procedure_decl.pass_name,
-                    .offset = offset,
-                    .elem_size = elem.element_size,
-                    .size = elem.storage_size,
-                    .alignment = elem.alignment,
-                });
-                size = offset + elem.storage_size;
-                alignment = @max(alignment, elem.alignment);
-            }
-        }
-        size = alignForward(size, alignment);
-        return .{
-            .name = derived.name,
-            .parent_name = derived.parent_name,
-            .components = try components.toOwnedSlice(),
-            .size = size,
-            .alignment = alignment,
-        };
+        return buildSingleDerivedTypeLayoutImpl(self, derived);
     }
 
     const ComponentElemInfo = struct {
@@ -851,7 +738,7 @@ pub const Context = struct {
         alignment: usize,
     };
 
-    fn procedureComponentElemInfo(
+    pub fn procedureComponentElemInfo(
         self: *Context,
         procedure_decl: input.ProcedureDecl,
         item_name: []const u8,
@@ -867,7 +754,7 @@ pub const Context = struct {
         };
     }
 
-    fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
+    pub fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         const direct = try self.componentDirectElemSizeAlign(type_decl, item);
         if (!(type_decl.pointer or type_decl.allocatable)) return direct;
         const descriptor_bytes = componentDescriptorBytes(
@@ -987,7 +874,7 @@ pub const Context = struct {
         };
     }
 
-    fn codegenArrayElementCount(self: *Context, dims: []*input.Expr) !usize {
+    pub fn codegenArrayElementCount(self: *Context, dims: []*input.Expr) !usize {
         if (dims.len == 0) return 1;
         var total: usize = 1;
         for (dims) |dim| {
@@ -1050,39 +937,6 @@ pub const Context = struct {
     }
 };
 
-fn componentDescriptorBytes(rank: usize, has_char_len_slot: bool) usize {
-    var bytes: usize = if (has_char_len_slot) @sizeOf(i64) else 0;
-    if (rank == 0) return bytes;
-    bytes += rank * 3 * @sizeOf(i64);
-    return bytes;
-}
-
-const SizeAlign = struct {
-    size: usize,
-    alignment: usize,
-};
-
-fn sizeAlignForIRType(ty: IRType) SizeAlign {
-    return switch (ty) {
-        .i1 => .{ .size = 1, .alignment = 1 },
-        .i8 => .{ .size = 1, .alignment = 1 },
-        .i32 => .{ .size = 4, .alignment = 4 },
-        .i64 => .{ .size = 8, .alignment = 8 },
-        .f32 => .{ .size = 4, .alignment = 4 },
-        .f64 => .{ .size = 8, .alignment = 8 },
-        .v2f32 => .{ .size = 8, .alignment = 8 },
-        .complex_f32 => .{ .size = 8, .alignment = 4 },
-        .complex_f64 => .{ .size = 16, .alignment = 8 },
-        .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
-        .void => .{ .size = 0, .alignment = 1 },
-    };
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    if (alignment <= 1) return value;
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
 fn inferConstantCharLen(ctx: *const Context, expr: ?*input.Expr) ?usize {
     const node = expr orelse return 1;
     const value = evaluator.evalConst(node, .{
@@ -1130,137 +984,6 @@ fn resolveMirroredPreludeParameterConstValue(ctx: *Context, name: []const u8) ?i
         }
     }
     return null;
-}
-
-fn builtinDerivedTypeLayout(name: []const u8) ?DerivedTypeLayout {
-    const empty_components = &[_]DerivedComponentLayout{};
-    if (std.ascii.eqlIgnoreCase(name, "c_ptr") or std.ascii.eqlIgnoreCase(name, "c_funptr")) {
-        return .{
-            .name = name,
-            .components = empty_components,
-            .size = @sizeOf(usize),
-            .alignment = @alignOf(usize),
-        };
-    }
-    return null;
-}
-
-fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {
-    return switch (stmt.node) {
-        .assignment, .pointer_assignment, .nullify, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
-        .associate_block => false,
-        else => false,
-    };
-}
-
-fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
-    var v = value;
-    var cursor = buffer.len;
-    while (true) {
-        cursor -= 1;
-        buffer[cursor] = '0' + @as(u8, @intCast(v % 10));
-        v /= 10;
-        if (v == 0) break;
-    }
-    return buffer[cursor..];
-}
-
-fn inferredParameterArrayElemCount(unit: ProgramUnit, sym: input.sema.Symbol) ?usize {
-    for (unit.decls) |decl| {
-        switch (decl) {
-            .type_decl => |type_decl| {
-                for (type_decl.items) |item| {
-                    if (!std.ascii.eqlIgnoreCase(item.name, sym.name)) continue;
-                    const init = item.init orelse return null;
-                    return arrayValuedExprElemCount(init);
-                }
-            },
-            .parameter => |param| {
-                for (param.assigns) |assign| {
-                    if (!std.ascii.eqlIgnoreCase(assign.name, sym.name)) continue;
-                    return arrayValuedExprElemCount(assign.value);
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn arrayValuedExprElemCount(expr_node: *input.Expr) ?usize {
-    return switch (expr_node.*) {
-        .array_constructor => |ctor| arrayConstructorElemCount(ctor),
-        .call_or_subscript => |call| blk: {
-            if (!std.ascii.eqlIgnoreCase(call.name, "reshape")) break :blk null;
-            if (call.args.len != 2) break :blk null;
-            break :blk shapeProductForExpr(call.args[1]);
-        },
-        .unary => |un| arrayValuedExprElemCount(un.expr),
-        .binary => |bin| blk: {
-            const left = arrayValuedExprElemCount(bin.left);
-            const right = arrayValuedExprElemCount(bin.right);
-            if (bin.op == .concat) {
-                const left_count = left orelse break :blk null;
-                const right_count = right orelse break :blk null;
-                break :blk std.math.add(usize, left_count, right_count) catch null;
-            }
-            if (left != null and right != null) {
-                if (left.? != right.?) break :blk null;
-                break :blk left.?;
-            }
-            break :blk left orelse right;
-        },
-        else => null,
-    };
-}
-
-fn arrayConstructorElemCount(ctor: input.ArrayConstructor) ?usize {
-    var total: usize = 0;
-    for (ctor.items) |item| {
-        const item_count = arrayValuedExprElemCount(item) orelse 1;
-        total = std.math.add(usize, total, item_count) catch return null;
-    }
-    return total;
-}
-
-fn shapeProductForExpr(expr_node: *input.Expr) ?usize {
-    const ctor = switch (expr_node.*) {
-        .array_constructor => expr_node.array_constructor,
-        else => return null,
-    };
-    var total: usize = 1;
-    for (ctor.items) |item| {
-        const value = switch (item.*) {
-            .literal => |lit| blk: {
-                if (lit.kind != .integer) break :blk null;
-                break :blk std.fmt.parseInt(i64, lit.text, 10) catch null;
-            },
-            else => null,
-        } orelse return null;
-        if (value < 0) return null;
-        const usize_value = std.math.cast(usize, value) orelse return null;
-        total = std.math.mul(usize, total, usize_value) catch return null;
-    }
-    return total;
-}
-
-fn procedureTypeSpec(proc_type: input.ProcedureTypeSpec) input.TypeSpec {
-    var spec = if (proc_type.derived_type_name) |derived_name|
-        input.TypeSpec.fromDerived(derived_name)
-    else if (proc_type.polymorphic)
-        input.TypeSpec.fromKind(.derived)
-    else
-        input.TypeSpec.fromResolvedKind(proc_type.type_kind, proc_type.type_kind, null);
-    spec = spec.withPolymorphic(proc_type.polymorphic);
-    return spec;
-}
-
-fn implicitTypeSpecForName(name: []const u8) input.TypeSpec {
-    if (name.len != 0) {
-        const first = std.ascii.toUpper(name[0]);
-        if (first >= 'I' and first <= 'N') return input.TypeSpec.fromResolvedKind(.integer, .integer, null);
-    }
-    return input.TypeSpec.fromResolvedKind(.real, .real, null);
 }
 
 test {
