@@ -12,6 +12,7 @@ const intrinsics = @import("../intrinsics/mod.zig");
 const memory = @import("../memory.zig");
 
 const int_eval = @import("int_eval.zig");
+const helpers = @import("character/helpers.zig");
 const resolution = @import("resolution.zig");
 const shared = @import("shared.zig");
 
@@ -23,6 +24,13 @@ const Context = shared.Context;
 const DerivedBindingInfo = cg_context.DerivedBindingInfo;
 const ValueRef = shared.ValueRef;
 const EmitError = shared.EmitError;
+const copyCharacterBytesConst = helpers.copyCharacterBytesConst;
+const internalLiteralSubstringArgOmitted = helpers.internalLiteralSubstringArgOmitted;
+const isInternalLiteralSubstringName = helpers.isInternalLiteralSubstringName;
+const isRepeatIntrinsicName = helpers.isRepeatIntrinsicName;
+const isTrimIntrinsicName = helpers.isTrimIntrinsicName;
+const literalBytes = helpers.literalBytes;
+const validateConstantSubstringBounds = helpers.validateConstantSubstringBounds;
 
 pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
     return switch (expr.*) {
@@ -949,18 +957,6 @@ fn typeBoundCharacterResultInfo(ctx: *Context, comp: ast.ComponentExpr) ?TypeBou
     };
 }
 
-fn isInternalLiteralSubstringName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "__col6forge_substring");
-}
-
-fn isRepeatIntrinsicName(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "repeat");
-}
-
-fn internalLiteralSubstringArgOmitted(expr_node: *Expr) bool {
-    return int_eval.intLiteralValue(expr_node) == 0;
-}
-
 fn internalLiteralSubstringConstLen(ctx: *Context, args: []*Expr, base_len_override: ?usize) ?usize {
     if (args.len != 3) return null;
     const base_len = if (base_len_override) |len|
@@ -974,51 +970,4 @@ fn internalLiteralSubstringConstLen(ctx: *Context, args: []*Expr, base_len_overr
     const length = int_eval.checkedAdd(span, 1) orelse return null;
     if (length <= 0) return null;
     return std.math.cast(usize, length);
-}
-
-fn validateConstantSubstringBounds(ctx: *Context, sub: ast.SubstringExpr) EmitError!void {
-    const sym = ctx.findSymbol(sub.name) orelse return;
-    if (!sym.isCharacter()) return;
-    const base_len_usize = common.constantCharacterLen(sym) orelse return;
-    const base_len = std.math.cast(i64, base_len_usize) orelse return;
-
-    if (sub.start) |start_expr| {
-        if (try int_eval.integerExprExceedsBound(start_expr, base_len)) {
-            return error.SubstringExceedsStringLength;
-        }
-    }
-    if (sub.end) |end_expr| {
-        if (try int_eval.integerExprExceedsBound(end_expr, base_len)) {
-            return error.SubstringExceedsStringLength;
-        }
-    }
-}
-
-fn copyCharacterBytesConst(
-    ctx: *Context,
-    builder: anytype,
-    dst_ptr: ValueRef,
-    bytes: []const u8,
-    dst_offset: usize,
-) EmitError!void {
-    var idx: usize = 0;
-    while (idx < bytes.len) : (idx += 1) {
-        const dst_idx = dst_offset + idx;
-        const dst_off = try ctx.constI32(@intCast(dst_idx));
-        const dst_gep = try ctx.nextTemp();
-        try builder.gep(dst_gep, .i8, dst_ptr, dst_off);
-        try builder.store(.{ .name = try ctx.intLiteral(bytes[idx]), .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
-    }
-}
-
-fn literalBytes(allocator: std.mem.Allocator, lit: ast.Literal) ![]const u8 {
-    return switch (lit.kind) {
-        .string => try utils.decodeStringLiteral(allocator, lit.text),
-        .hollerith => utils.hollerithBytes(lit.text) orelse return error.InvalidHollerith,
-        else => return error.UnsupportedLiteral,
-    };
-}
-
-fn isTrimIntrinsicName(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "trim");
 }

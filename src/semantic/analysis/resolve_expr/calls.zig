@@ -5,11 +5,28 @@ const procedure_pass = @import("../../../common/procedure_pass.zig");
 const symbols = @import("../../symbol/mod.zig");
 const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
+const bound_helpers = @import("calls/bound_helpers.zig");
+const lookup_helpers = @import("calls/lookup_helpers.zig");
 const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
 const ResolveError = anyerror;
+const emitInvalidArgumentDiagnostic = bound_helpers.emitInvalidArgumentDiagnostic;
+const emitInvalidSubscriptDiagnostic = bound_helpers.emitInvalidSubscriptDiagnostic;
+const hasVisibleExplicitInterface = lookup_helpers.hasVisibleExplicitInterface;
+const isAbstractDerivedType = lookup_helpers.isAbstractDerivedType;
+const isCurrentUnitProcedureReference = lookup_helpers.isCurrentUnitProcedureReference;
+const isImplicitExternalFunctionReference = lookup_helpers.isImplicitExternalFunctionReference;
+const knownProcedureConflictsWithDummy = lookup_helpers.knownProcedureConflictsWithDummy;
+const minimumRequiredProcedureArgs = bound_helpers.minimumRequiredProcedureArgs;
+const procedureComponentResultTypeSpec = bound_helpers.procedureComponentResultTypeSpec;
+const procedureComponentSig = bound_helpers.procedureComponentSig;
+const shouldCheckImplicitFunctionReferenceMismatch = lookup_helpers.shouldCheckImplicitFunctionReferenceMismatch;
+const typeBoundProcedureResultTypeSpec = bound_helpers.typeBoundProcedureResultTypeSpec;
+const typeBoundProcedureSig = bound_helpers.typeBoundProcedureSig;
+const validateProcedureComponentCall = bound_helpers.validateProcedureComponentCall;
+const validateTypeBoundProcedureCall = bound_helpers.validateTypeBoundProcedureCall;
 
 pub fn resolveCallOrSubscriptExpr(
     self: *context.Context,
@@ -179,16 +196,6 @@ pub fn resolveCallOrSubscriptExpr(
     }
     try deps.recordResolvedRef(self, expr_node, call.name, kind, idx);
     try deps.cacheExprType(self, expr_node, resolved_spec);
-}
-
-fn knownProcedureConflictsWithDummy(self: *context.Context, name: []const u8) bool {
-    const sig = symbols_mod.lookupKnownProcedureSig(self, name) orelse return false;
-    return sig.definition_known_from_current_program;
-}
-
-fn isAbstractDerivedType(self: *context.Context, type_name: []const u8) bool {
-    const derived = symbols_mod.lookupDerivedType(self, type_name) orelse return false;
-    return derived.abstract;
 }
 
 pub fn resolveSubstringExpr(
@@ -757,60 +764,6 @@ fn resolvedProcedureSig(
         symbols_mod.lookupKnownProcedureSig(self, name);
 }
 
-fn isImplicitExternalFunctionReference(sym: symbols.Symbol) bool {
-    if (sym.is_intrinsic) return false;
-    if (!sym.is_external) return false;
-    if (sym.storage == .dummy) return false;
-    if (sym.kind != .function and sym.kind != .variable) return false;
-    return sym.dims.len == 0;
-}
-
-fn shouldCheckImplicitFunctionReferenceMismatch(
-    self: *context.Context,
-    name: []const u8,
-    sym: symbols.Symbol,
-    visible_generic_sig: ?context.Context.ProcedureSig,
-) bool {
-    if (!isImplicitExternalFunctionReference(sym)) return false;
-    if (visible_generic_sig != null) return false;
-    if (hasVisibleExplicitInterface(self, name)) return false;
-    if (isCurrentUnitProcedureReference(self, name)) return false;
-    return true;
-}
-
-fn hasVisibleExplicitInterface(self: *context.Context, name: []const u8) bool {
-    if (symbols_mod.findSymbolIndex(self, name)) |idx| {
-        const sym = self.symbols.items[idx];
-        if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) return true;
-    }
-    if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| {
-        if (sig.actual_requires_explicit_interface) return true;
-    }
-    for (self.unit.decls) |decl| {
-        if (decl != .interface_block) continue;
-        const interface_block = decl.interface_block;
-        if (interface_block.name) |interface_name| {
-            if (std.ascii.eqlIgnoreCase(interface_name, name)) return true;
-        }
-        for (interface_block.procedure_headers) |proc_header| {
-            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
-        }
-    }
-    var it = self.known_host_interface_sources.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return true;
-    }
-    return false;
-}
-
-fn isCurrentUnitProcedureReference(self: *context.Context, name: []const u8) bool {
-    if (std.ascii.eqlIgnoreCase(self.unit.name, name)) return true;
-    if (self.unit.result_name) |result_name| {
-        if (std.ascii.eqlIgnoreCase(result_name, name)) return true;
-    }
-    return false;
-}
-
 fn singleTargetGenericInterfaceSig(
     self: *context.Context,
     interface_block: ast.InterfaceBlock,
@@ -1028,174 +981,4 @@ fn validateComponentArgs(
             },
         }
     }
-}
-
-fn validateTypeBoundProcedureCall(
-    self: *context.Context,
-    expr_node: *ast.Expr,
-    passed_object: *ast.Expr,
-    binding: context.Context.DerivedTypeInfo.BindingInfo,
-    args: []*ast.Expr,
-    comptime deps: anytype,
-) ResolveError!void {
-    const sig = typeBoundProcedureSig(self, binding) orelse return;
-    const actual_count = args.len + @as(usize, if (binding.nopass) 0 else 1);
-    if (actual_count > sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
-    if (actual_count < minimumRequiredProcedureArgs(sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
-
-    const pass_idx = if (binding.nopass) null else procedure_pass.procedurePassArgIndex(sig.args, binding.pass_name);
-    var actual_idx: usize = 0;
-    var formal_idx: usize = 0;
-    while (formal_idx < sig.args.len) : (formal_idx += 1) {
-        if (pass_idx != null and formal_idx == pass_idx.?) {
-            try validateTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object, deps);
-            continue;
-        }
-        if (actual_idx >= args.len) break;
-        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], args[actual_idx], deps);
-        actual_idx += 1;
-    }
-}
-
-fn validateProcedureComponentCall(
-    self: *context.Context,
-    expr_node: *ast.Expr,
-    passed_object: *ast.Expr,
-    component: context.Context.DerivedTypeInfo.ComponentInfo,
-    args: []*ast.Expr,
-    comptime deps: anytype,
-) ResolveError!void {
-    const sig = procedureComponentSig(self, component);
-    const procedure_kind = if (sig) |resolved_sig| resolved_sig.kind else component.procedure_kind orelse return error.InvalidSubscript;
-    if (procedure_kind != .function) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.actual_argument_not_function.code, "actual argument is not a function");
-    if (!component.procedure_has_explicit_interface) return;
-
-    const resolved_sig = sig orelse return;
-    const actual_count = args.len + @as(usize, if (component.procedure_nopass) 0 else 1);
-    if (actual_count > resolved_sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
-    if (actual_count < minimumRequiredProcedureArgs(resolved_sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
-
-    const pass_idx = if (component.procedure_nopass) null else procedure_pass.procedurePassArgIndex(resolved_sig.args, component.procedure_pass_name);
-    var actual_idx: usize = 0;
-    var formal_idx: usize = 0;
-    while (formal_idx < resolved_sig.args.len) : (formal_idx += 1) {
-        if (pass_idx != null and formal_idx == pass_idx.?) {
-            try validateTypeBoundProcedureActual(self, resolved_sig.args[formal_idx], passed_object, deps);
-            continue;
-        }
-        if (actual_idx >= args.len) break;
-        try validateTypeBoundProcedureActual(self, resolved_sig.args[formal_idx], args[actual_idx], deps);
-        actual_idx += 1;
-    }
-}
-
-fn validateTypeBoundProcedureActual(
-    self: *context.Context,
-    formal: context.Context.ProcedureSig.ArgSig,
-    actual: *ast.Expr,
-    comptime deps: anytype,
-) ResolveError!void {
-    const actual_spec = try deps.exprTypeSpecCached(self, actual);
-    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) return error.ArgumentTypeMismatch;
-}
-
-fn typeBoundProcedureSig(
-    self: *context.Context,
-    binding: context.Context.DerivedTypeInfo.BindingInfo,
-) ?context.Context.ProcedureSig {
-    const impl_name = binding.implementation_name orelse binding.name;
-    if (binding.owner_name) |owner_name| {
-        const qualified_impl = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, impl_name }) catch null;
-        if (qualified_impl) |name| {
-            if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| return sig;
-        }
-        if (binding.interface_name) |iface_name| {
-            const qualified_iface = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, iface_name }) catch null;
-            if (qualified_iface) |name| {
-                if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| return sig;
-            }
-        }
-    }
-    return symbols_mod.lookupKnownProcedureSig(self, impl_name) orelse
-        (if (binding.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null) orelse
-        symbols_mod.lookupKnownProcedureSig(self, binding.name);
-}
-
-fn typeBoundProcedureResultTypeSpec(
-    self: *context.Context,
-    binding: context.Context.DerivedTypeInfo.BindingInfo,
-) ResolveError!symbols.TypeSpec {
-    const sig = typeBoundProcedureSig(self, binding) orelse return error.InvalidSubscript;
-    if (sig.kind != .function) return error.InvalidSubscript;
-    if (sig.result_type_spec) |type_spec| return type_spec;
-    const result_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
-    if (binding.owner_name) |owner_name| {
-        const qualified_result = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, result_name }) catch null;
-        if (qualified_result) |name| {
-            if (symbols_mod.lookupKnownFunctionResolvedSpec(self, name)) |type_spec| return type_spec;
-        }
-    }
-    return symbols_mod.lookupKnownFunctionResolvedSpec(self, result_name) orelse return error.InvalidSubscript;
-}
-
-fn procedureComponentSig(
-    self: *context.Context,
-    component: context.Context.DerivedTypeInfo.ComponentInfo,
-) ?context.Context.ProcedureSig {
-    return component.procedure_sig orelse
-        (if (component.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null);
-}
-
-fn procedureComponentResultTypeSpec(
-    self: *context.Context,
-    component: context.Context.DerivedTypeInfo.ComponentInfo,
-) ResolveError!symbols.TypeSpec {
-    const sig = procedureComponentSig(self, component) orelse return error.InvalidSubscript;
-    if (sig.kind != .function) return error.InvalidSubscript;
-    return sig.result_type_spec orelse component.type_spec;
-}
-
-fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {
-    if (sig.args.len == 0) return sig.arg_count;
-    var required: usize = 0;
-    for (sig.args) |arg| {
-        if (!arg.optional) required += 1;
-    }
-    return required;
-}
-
-fn emitInvalidSubscriptDiagnostic(
-    self: *context.Context,
-    expr_node: *ast.Expr,
-    code: []const u8,
-    message: []const u8,
-) ResolveError {
-    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
-    self.setDiagnostic(
-        if (source.line == 0) 1 else source.line,
-        if (source.column == 0) 1 else source.column,
-        code,
-        message,
-        source.text,
-    );
-    self.setCurrentSource(source);
-    return error.InvalidSubscript;
-}
-
-fn emitInvalidArgumentDiagnostic(
-    self: *context.Context,
-    expr_node: *ast.Expr,
-    code: []const u8,
-    message: []const u8,
-) ResolveError {
-    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
-    self.setDiagnostic(
-        if (source.line == 0) 1 else source.line,
-        if (source.column == 0) 1 else source.column,
-        code,
-        message,
-        source.text,
-    );
-    self.setCurrentSource(source);
-    return error.InvalidArgumentCount;
 }

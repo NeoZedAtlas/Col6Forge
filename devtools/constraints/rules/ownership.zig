@@ -111,6 +111,13 @@ const semantic_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/semantic/analysis/resolve_specs/interfaces.zig",
     },
+    .{
+        .id = "AR-OWN-033",
+        .title = "procedure shape-signature helper owner",
+        .symbol_name = "shapeSignatureForDims",
+        .definition_kind = .function,
+        .owner_exact_path = "src/semantic/split/api/procedure_inference/shape_signatures.zig",
+    },
 };
 
 const implied_helper_specs = [_]OwnerSpec{
@@ -148,6 +155,27 @@ const implied_helper_specs = [_]OwnerSpec{
         .symbol_name = "emitChunkedStream",
         .definition_kind = .function,
         .owner_exact_path = "src/codegen/llvm/stmts/io/stream_chunks.zig",
+    },
+    .{
+        .id = "AR-OWN-034",
+        .title = "collapsed range subscript helper owner",
+        .symbol_name = "emitCollapsedRangeSubscriptValue",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/expansion/collapsed_sections.zig",
+    },
+    .{
+        .id = "AR-OWN-035",
+        .title = "collapsed substring section helper owner",
+        .symbol_name = "emitCollapsedSubstringSectionValue",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/expansion/collapsed_sections.zig",
+    },
+    .{
+        .id = "AR-OWN-036",
+        .title = "collapsed whole-array fallback helper owner",
+        .symbol_name = "emitCollapsedUnknownCountWholeArrayValue",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/expansion/collapsed_sections.zig",
     },
 };
 

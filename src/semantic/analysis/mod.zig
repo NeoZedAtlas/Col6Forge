@@ -2934,4 +2934,5 @@ test "external procedure without visible explicit interface does not enforce dum
 test {
     _ = @import("mod_proc_component_tests.zig");
     _ = @import("mod_regression_tests.zig");
+    _ = @import("mod_regression/contained_calls.zig");
 }
