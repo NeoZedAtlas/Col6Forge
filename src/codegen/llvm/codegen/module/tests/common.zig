@@ -1,0 +1,23 @@
+pub const std = @import("std");
+pub const ast = @import("../../../../../ast/nodes.zig");
+pub const input = @import("../../../../input.zig");
+pub const catalog = @import("../../../../../common/error_catalog.zig");
+pub const codegen_diag = @import("../../../../diagnostic.zig");
+pub const fixed_form = @import("../../../../../frontend/fixed_form.zig");
+pub const free_form = @import("../../../../../frontend/free_form.zig");
+pub const parser = @import("../../../../../frontend/parser/mod.zig");
+pub const split_api = @import("../../../../../semantic/split/api/mod.zig");
+pub const codegen = @import("../mod.zig");
+pub const fallbacks = @import("../fallbacks.zig");
+pub const test_support = @import("../test_support.zig");
+
+pub const emitModule = codegen.emitModule;
+pub const emitModuleToWriter = codegen.emitModuleToWriter;
+pub const setCodegenDiagForUnit = fallbacks.setCodegenDiagForUnit;
+pub const makeIdentExpr = test_support.makeIdentExpr;
+pub const makeLiteralExpr = test_support.makeLiteralExpr;
+pub const makeLocalArraySymbol = test_support.makeLocalArraySymbol;
+pub const makeLocalScalarSymbol = test_support.makeLocalScalarSymbol;
+pub const makeLocalCharacterSymbol = test_support.makeLocalCharacterSymbol;
+pub const makeIntrinsicFunctionSymbol = test_support.makeIntrinsicFunctionSymbol;
+pub const makeSourceRef = test_support.makeSourceRef;
