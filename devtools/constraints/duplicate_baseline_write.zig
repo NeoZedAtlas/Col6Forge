@@ -1,0 +1,97 @@
+const std = @import("std");
+const baseline = @import("audit/duplicate_baseline.zig");
+const duplicates = @import("audit/duplicates.zig");
+
+const baseline_path = "devtools/constraints/audit/duplicate_baseline.zig";
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var root: []const u8 = baseline.root;
+    var min_normalized_len: usize = baseline.min_normalized_len;
+    var write = false;
+
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.next();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--root")) {
+            root = args.next() orelse return error.MissingArgumentValue;
+        } else if (std.mem.eql(u8, arg, "--min-normalized-len")) {
+            const value = args.next() orelse return error.MissingArgumentValue;
+            min_normalized_len = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--write")) {
+            write = true;
+        } else {
+            std.log.err("unknown arg: {s}", .{arg});
+            return error.InvalidArgument;
+        }
+    }
+
+    if (!write) {
+        std.log.err("use --write to refresh {s}", .{baseline_path});
+        return error.MissingWriteMode;
+    }
+
+    const clusters = try duplicates.findDuplicateClusters(allocator, root, min_normalized_len);
+    defer {
+        for (clusters) |*cluster| cluster.deinit(allocator);
+        allocator.free(clusters);
+    }
+
+    const rendered = try renderBaseline(allocator, clusters, root, min_normalized_len);
+    defer allocator.free(rendered);
+
+    const cwd = std.fs.cwd();
+    const current = cwd.readFileAlloc(allocator, baseline_path, 16 * 1024 * 1024) catch null;
+    defer if (current) |buf| allocator.free(buf);
+
+    if (current) |buf| {
+        if (std.mem.eql(u8, buf, rendered)) {
+            std.log.info("duplicate baseline already up to date: {d} clusters", .{clusters.len});
+            return;
+        }
+    }
+
+    try cwd.writeFile(.{
+        .sub_path = baseline_path,
+        .data = rendered,
+    });
+    std.log.info("wrote duplicate baseline: {d} clusters to {s}", .{ clusters.len, baseline_path });
+}
+
+fn renderBaseline(
+    allocator: std.mem.Allocator,
+    clusters: []const duplicates.Cluster,
+    root: []const u8,
+    min_normalized_len: usize,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    const writer = out.writer(allocator);
+
+    try writer.print("pub const root = \"{s}\";\n", .{root});
+    try writer.print("pub const min_normalized_len: usize = {d};\n\n", .{min_normalized_len});
+    try out.appendSlice(allocator,
+        \\pub const AllowedCluster = struct {
+        \\    body_hash: u64,
+        \\    max_members: usize,
+        \\    normalized_len: usize,
+        \\};
+        \\
+        \\pub const allowed_clusters = [_]AllowedCluster{
+        \\
+    );
+
+    for (clusters) |cluster| {
+        try writer.print(
+            "    .{{ .body_hash = 0x{x}, .max_members = {d}, .normalized_len = {d} }},\n",
+            .{ cluster.body_hash, cluster.members.len, cluster.normalized_len },
+        );
+    }
+    try writer.writeAll("};\n");
+    return out.toOwnedSlice(allocator);
+}

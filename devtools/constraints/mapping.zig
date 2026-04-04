@@ -42,8 +42,8 @@ pub const Entry = struct {
 pub const entries = [_]Entry{
     .{
         .id = "DC-A-001",
-        .summary = "Source files must stay under the megafile line budget unless explicitly grandfathered.",
-        .rationale = "Large files stop being reviewable and cause unrelated feature work to pile onto the same hotspot. The budget must be enforced mechanically so structure does not depend on memory or discipline alone.",
+        .summary = "Single code files must not exceed the hard line budget.",
+        .rationale = "Large files stop being reviewable and invite unrelated work to accumulate in the same hotspot. The limit must fail mechanically instead of relying on grandfather lists or reviewer memory.",
         .class = .a_static_forbidden,
         .primary = &.{.architecture_audit},
         .secondary = &.{.review_checklist},

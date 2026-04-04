@@ -56,15 +56,6 @@ fn validateRule(rule: model.AuditRule) !void {
             if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
             if (rule.alias_path != null) return error.AuditRuleUnexpectedAliasPath;
         },
-        .max_line_count => {
-            if (rule.max_count == null or rule.max_count.? == 0) return error.AuditRuleMissingMaxCount;
-            if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
-            if (rule.symbol_name != null) return error.AuditRuleUnexpectedSymbolName;
-            if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;
-            if (rule.alias_path != null) return error.AuditRuleUnexpectedAliasPath;
-            if (rule.owner_exact_path != null) return error.AuditRuleUnexpectedOwnerPath;
-            if (rule.definition_kind != null) return error.AuditRuleUnexpectedDefinitionKind;
-        },
         .bare_error_code_literal, .error_catalog_consistency => {
             if (rule.needle != null) return error.AuditRuleUnexpectedNeedle;
             if (rule.call_path != null) return error.AuditRuleUnexpectedCallPath;

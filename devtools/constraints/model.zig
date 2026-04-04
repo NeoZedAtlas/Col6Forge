@@ -20,7 +20,6 @@ pub const RuleKind = enum {
     forbidden_member_access_path,
     owned_symbol_definition,
     bare_error_code_literal,
-    max_line_count,
     error_catalog_consistency,
 };
 
@@ -48,7 +47,6 @@ pub const AuditRule = struct {
     alias_path: ?[]const u8 = null,
     owner_exact_path: ?[]const u8 = null,
     definition_kind: ?DefinitionKind = null,
-    max_count: ?usize = null,
     excluded_exact_paths: []const []const u8 = &.{},
     excluded_path_prefixes: []const []const u8 = &.{},
     exclude_tests: bool = false,

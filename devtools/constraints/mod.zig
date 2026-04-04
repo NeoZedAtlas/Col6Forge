@@ -3,6 +3,7 @@ pub const registry = @import("registry.zig");
 pub const rules = @import("rules/mod.zig");
 pub const audit_domains = @import("audit/domains.zig");
 pub const audit_declarations = @import("audit/declarations.zig");
+pub const audit_file_sizes = @import("audit/file_sizes.zig");
 pub const audit_duplicates = @import("audit/duplicates.zig");
 pub const audit_imports = @import("audit/imports.zig");
 pub const audit_symbols = @import("audit/symbols.zig");

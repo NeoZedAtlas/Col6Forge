@@ -12,6 +12,7 @@ pub fn main() !void {
     var top: usize = 25;
     var min_normalized_len: usize = 96;
     var selected_domain: ?model.SourceDomain = null;
+    var selected_path_prefix: ?[]const u8 = null;
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -32,6 +33,8 @@ pub fn main() !void {
                 std.log.err("unknown domain: {s}", .{value});
                 return error.InvalidArgument;
             };
+        } else if (std.mem.eql(u8, arg, "--path-prefix")) {
+            selected_path_prefix = args.next() orelse return error.MissingArgumentValue;
         } else {
             std.log.err("unknown arg: {s}", .{arg});
             return error.InvalidArgument;
@@ -51,34 +54,26 @@ pub fn main() !void {
 
     var shown: usize = 0;
     for (clusters) |cluster| {
-        if (selected_domain) |domain| {
-            if (!clusterTouchesDomain(cluster, domain)) continue;
-        }
+        if (!clusterMatchesFilters(cluster, selected_domain, selected_path_prefix)) continue;
         shown += 1;
         if (shown == top) break;
     }
     if (shown == 0) {
-        std.log.info(
-            "no duplicate function-body clusters matched domain={s} in {s} with normalized length >= {d}",
-            .{ domains.label(selected_domain.?), root, min_normalized_len },
-        );
+        const filter_label = try renderFilterLabel(allocator, selected_domain, selected_path_prefix);
+        defer allocator.free(filter_label);
+        std.log.info("no duplicate function-body clusters matched {s} in {s} with normalized length >= {d}", .{ filter_label, root, min_normalized_len });
         return;
     }
-    const domain_suffix = if (selected_domain) |domain|
-        try std.fmt.allocPrint(allocator, ", domain={s}", .{domains.label(domain)})
-    else
-        try allocator.dupe(u8, "");
-    defer allocator.free(domain_suffix);
+    const filter_suffix = try renderFilterSuffix(allocator, selected_domain, selected_path_prefix);
+    defer allocator.free(filter_suffix);
 
     std.log.info(
         "duplicate function-body clusters: {d} total, showing {d}, root={s}, min_normalized_len={d}{s}",
-        .{ clusters.len, shown, root, min_normalized_len, domain_suffix },
+        .{ clusters.len, shown, root, min_normalized_len, filter_suffix },
     );
     var printed: usize = 0;
     for (clusters) |cluster| {
-        if (selected_domain) |domain| {
-            if (!clusterTouchesDomain(cluster, domain)) continue;
-        }
+        if (!clusterMatchesFilters(cluster, selected_domain, selected_path_prefix)) continue;
         const label_buf = try clusterDomainLabel(allocator, cluster);
         defer allocator.free(label_buf);
         printed += 1;
@@ -110,6 +105,27 @@ fn clusterTouchesDomain(cluster: duplicates.Cluster, domain: model.SourceDomain)
     return false;
 }
 
+fn clusterTouchesPathPrefix(cluster: duplicates.Cluster, path_prefix: []const u8) bool {
+    for (cluster.members) |member| {
+        if (std.mem.startsWith(u8, member.path, path_prefix)) return true;
+    }
+    return false;
+}
+
+fn clusterMatchesFilters(
+    cluster: duplicates.Cluster,
+    selected_domain: ?model.SourceDomain,
+    selected_path_prefix: ?[]const u8,
+) bool {
+    if (selected_domain) |domain| {
+        if (!clusterTouchesDomain(cluster, domain)) return false;
+    }
+    if (selected_path_prefix) |path_prefix| {
+        if (!clusterTouchesPathPrefix(cluster, path_prefix)) return false;
+    }
+    return true;
+}
+
 fn clusterDomainLabel(allocator: std.mem.Allocator, cluster: duplicates.Cluster) ![]u8 {
     var seen: [@typeInfo(model.SourceDomain).@"enum".fields.len]bool = [_]bool{false} ** @typeInfo(model.SourceDomain).@"enum".fields.len;
     var parts = std.ArrayList([]const u8).empty;
@@ -127,8 +143,55 @@ fn clusterDomainLabel(allocator: std.mem.Allocator, cluster: duplicates.Cluster)
     return std.mem.join(allocator, ",", parts.items);
 }
 
+fn renderFilterLabel(
+    allocator: std.mem.Allocator,
+    selected_domain: ?model.SourceDomain,
+    selected_path_prefix: ?[]const u8,
+) ![]u8 {
+    var parts = std.ArrayList([]const u8).empty;
+    defer parts.deinit(allocator);
+
+    if (selected_domain) |domain| {
+        try parts.append(allocator, try std.fmt.allocPrint(allocator, "domain={s}", .{domains.label(domain)}));
+    }
+    if (selected_path_prefix) |path_prefix| {
+        try parts.append(allocator, try std.fmt.allocPrint(allocator, "path-prefix={s}", .{path_prefix}));
+    }
+    if (parts.items.len == 0) return allocator.dupe(u8, "the current filters");
+
+    defer for (parts.items) |part| allocator.free(part);
+    return std.mem.join(allocator, ", ", parts.items);
+}
+
+fn renderFilterSuffix(
+    allocator: std.mem.Allocator,
+    selected_domain: ?model.SourceDomain,
+    selected_path_prefix: ?[]const u8,
+) ![]u8 {
+    if (selected_domain == null and selected_path_prefix == null) return allocator.dupe(u8, "");
+    const label = try renderFilterLabel(allocator, selected_domain, selected_path_prefix);
+    defer allocator.free(label);
+    return std.fmt.allocPrint(allocator, ", {s}", .{label});
+}
+
 test "parseDomainLabel accepts canonical labels" {
     try std.testing.expectEqual(model.SourceDomain.codegen, parseDomainLabel("codegen").?);
     try std.testing.expectEqual(model.SourceDomain.root_entry, parseDomainLabel("root-entry").?);
     try std.testing.expect(parseDomainLabel("missing") == null);
+}
+
+test "clusterMatchesFilters honors path prefix" {
+    const members = [_]duplicates.FunctionFingerprint{
+        .{ .path = @constCast("src/codegen/a.zig"), .name = @constCast("alpha"), .normalized_body = @constCast("X"), .line = 1 },
+        .{ .path = @constCast("src/runtime/b.zig"), .name = @constCast("beta"), .normalized_body = @constCast("X"), .line = 2 },
+    };
+    const cluster = duplicates.Cluster{
+        .body_hash = 1,
+        .normalized_len = 1,
+        .members = @constCast(members[0..]),
+    };
+    try std.testing.expect(clusterMatchesFilters(cluster, .codegen, null));
+    try std.testing.expect(clusterMatchesFilters(cluster, null, "src/runtime/"));
+    try std.testing.expect(!clusterMatchesFilters(cluster, .semantic, null));
+    try std.testing.expect(!clusterMatchesFilters(cluster, null, "src/frontend/"));
 }
