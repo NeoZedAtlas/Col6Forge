@@ -7,6 +7,7 @@ pub const audit_file_sizes = @import("audit/file_sizes.zig");
 pub const audit_duplicates = @import("audit/duplicates.zig");
 pub const audit_imports = @import("audit/imports.zig");
 pub const audit_symbols = @import("audit/symbols.zig");
+pub const audit_zig_ast = @import("audit/zig_ast/mod.zig");
 pub const audit_engine = @import("audit/engine.zig");
 pub const architecture_audit = @import("architecture_audit.zig");
 pub const duplicate_candidates = @import("duplicate_candidates.zig");

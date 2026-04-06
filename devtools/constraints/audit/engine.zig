@@ -6,6 +6,81 @@ const declarations = @import("declarations.zig");
 const domains = @import("domains.zig");
 const imports = @import("imports.zig");
 const symbols = @import("symbols.zig");
+const zig_ast = @import("zig_ast/mod.zig");
+
+const CombinedSymbolIndex = struct {
+    lexical: symbols.Index,
+    ast: ?symbols.Index = null,
+
+    fn deinit(self: *CombinedSymbolIndex, allocator: std.mem.Allocator) void {
+        self.lexical.deinit(allocator);
+        if (self.ast) |*index| index.deinit(allocator);
+        self.* = undefined;
+    }
+
+    fn findFunctionCall(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
+        return firstNonNull(self.findAstFunctionCall(symbol_name), self.lexical.findFunctionCall(symbol_name));
+    }
+
+    fn findFunctionCallOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
+        return firstNonNull(
+            self.findAstFunctionCallOutsidePath(symbol_name, required_path),
+            self.lexical.findFunctionCallOutsidePath(symbol_name, required_path),
+        );
+    }
+
+    fn findAliasOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
+        return firstNonNull(
+            self.findAstAliasOutsidePath(symbol_name, required_path),
+            self.lexical.findAliasOutsidePath(symbol_name, required_path),
+        );
+    }
+
+    fn findAnyAlias(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
+        return firstNonNull(self.findAstAnyAlias(symbol_name), self.lexical.findAnyAlias(symbol_name));
+    }
+
+    fn findFirstSymbolUse(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
+        const call_idx = self.findFunctionCall(symbol_name);
+        const alias_idx = self.findAnyAlias(symbol_name);
+        return switch (call_idx != null) {
+            true => switch (alias_idx != null) {
+                true => @min(call_idx.?, alias_idx.?),
+                false => call_idx.?,
+            },
+            false => alias_idx,
+        };
+    }
+
+    fn findMemberAccessPath(self: CombinedSymbolIndex, needle: []const u8) ?usize {
+        return firstNonNull(self.findAstMemberAccessPath(needle), self.lexical.findMemberAccessPath(needle));
+    }
+
+    fn findAstFunctionCall(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
+        const index = self.ast orelse return null;
+        return index.findFunctionCall(symbol_name);
+    }
+
+    fn findAstFunctionCallOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
+        const index = self.ast orelse return null;
+        return index.findFunctionCallOutsidePath(symbol_name, required_path);
+    }
+
+    fn findAstAliasOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
+        const index = self.ast orelse return null;
+        return index.findAliasOutsidePath(symbol_name, required_path);
+    }
+
+    fn findAstAnyAlias(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
+        const index = self.ast orelse return null;
+        return index.findAnyAlias(symbol_name);
+    }
+
+    fn findAstMemberAccessPath(self: CombinedSymbolIndex, needle: []const u8) ?usize {
+        const index = self.ast orelse return null;
+        return index.findMemberAccessPath(needle);
+    }
+};
 
 pub fn run(allocator: std.mem.Allocator, root: []const u8) !usize {
     try registry.validateRules();
@@ -62,7 +137,10 @@ fn scanFile(
     text: []const u8,
     failures: *usize,
 ) !void {
-    var symbol_index = try symbols.buildIndex(allocator, text);
+    var symbol_index: CombinedSymbolIndex = .{
+        .lexical = try symbols.buildIndex(allocator, text),
+        .ast = try zig_ast.index.buildIndex(allocator, text),
+    };
     defer symbol_index.deinit(allocator);
 
     for (registry.file_rules) |rule| {
@@ -76,7 +154,7 @@ fn applyFileRule(
     rel_path: []const u8,
     domain: model.SourceDomain,
     text: []const u8,
-    symbol_index: symbols.Index,
+    symbol_index: CombinedSymbolIndex,
     failures: *usize,
 ) !void {
     _ = domain;
@@ -132,7 +210,7 @@ fn applyOwnedSymbolUsage(
     rule: model.AuditRule,
     rel_path: []const u8,
     text: []const u8,
-    symbol_index: symbols.Index,
+    symbol_index: CombinedSymbolIndex,
     failures: *usize,
 ) !void {
     const symbol_name = rule.symbol_name orelse return error.AuditRuleMissingSymbolName;
@@ -160,6 +238,10 @@ fn applyOwnedSymbolUsage(
             failures.* += 1;
         }
     }
+}
+
+fn firstNonNull(primary: ?usize, fallback: ?usize) ?usize {
+    return primary orelse fallback;
 }
 
 fn scanBareErrorCodeLiterals(
