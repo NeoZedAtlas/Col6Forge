@@ -313,10 +313,7 @@ pub fn emitComponentDimLower(
     comp: ast.ComponentExpr,
     dim_index: usize,
 ) anyerror!ValueRef {
-    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_index);
-    const tmp = try ctx.nextTemp();
-    try builder.load(tmp, .i64, slot);
-    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    return emitLoadedComponentDescriptorSlot(ctx, builder, comp, .lower, dim_index);
 }
 
 pub fn emitComponentDimExtent(
@@ -325,10 +322,7 @@ pub fn emitComponentDimExtent(
     comp: ast.ComponentExpr,
     dim_index: usize,
 ) anyerror!ValueRef {
-    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_index);
-    const tmp = try ctx.nextTemp();
-    try builder.load(tmp, .i64, slot);
-    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    return emitLoadedComponentDescriptorSlot(ctx, builder, comp, .extent, dim_index);
 }
 
 pub fn emitComponentDimMultiplier(
@@ -337,7 +331,17 @@ pub fn emitComponentDimMultiplier(
     comp: ast.ComponentExpr,
     dim_index: usize,
 ) anyerror!ValueRef {
-    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_index);
+    return emitLoadedComponentDescriptorSlot(ctx, builder, comp, .multiplier, dim_index);
+}
+
+fn emitLoadedComponentDescriptorSlot(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    comptime slot_kind: DescriptorSlotKind,
+    dim_index: usize,
+) anyerror!ValueRef {
+    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, slot_kind, dim_index);
     const tmp = try ctx.nextTemp();
     try builder.load(tmp, .i64, slot);
     return .{ .name = tmp, .ty = .i64, .is_ptr = false };
