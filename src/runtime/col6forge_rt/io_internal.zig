@@ -388,7 +388,7 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
+                const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
@@ -693,7 +693,7 @@ fn readInternalCoreWithProvider(
             }
             assigned += 1;
         } else if (conv == 'L' and kind == 'L') {
-            const out: *u8 = @ptrCast(@alignCast(arg_any));
+            const out: *c_int = @ptrCast(@alignCast(arg_any));
             out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&field), used));
             assigned += 1;
         }

@@ -3,6 +3,7 @@ const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
+const complex = @import("../../../codegen/expression/complex.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
@@ -267,8 +268,17 @@ fn emitResolvedArrayActualStream(ctx: *Context, builder: anytype, state: ValueRe
         try emitStreamNextPointer(ctx, builder, state, elem_ptr, 's', actual.address_scale);
     } else {
         const value = try emitArrayActualElement(ctx, builder, idx_val, actual);
-        const arg = try emitStreamArg(ctx, builder, value, 0);
-        try emitStreamNextValue(ctx, builder, state, arg);
+        if (complex.isComplexType(value.ty)) {
+            const real = try complex.extractComplex(ctx, builder, value, 0);
+            const imag = try complex.extractComplex(ctx, builder, value, 1);
+            const real_arg = try emitStreamArg(ctx, builder, real, 0);
+            const imag_arg = try emitStreamArg(ctx, builder, imag, 0);
+            try emitStreamNextValue(ctx, builder, state, real_arg);
+            try emitStreamNextValue(ctx, builder, state, imag_arg);
+        } else {
+            const arg = try emitStreamArg(ctx, builder, value, 0);
+            try emitStreamNextValue(ctx, builder, state, arg);
+        }
     }
 
     const next_tmp = try ctx.nextTemp();

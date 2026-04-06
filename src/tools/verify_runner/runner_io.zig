@@ -7,15 +7,13 @@ const RuntimeBackend = common.RuntimeBackend;
 const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
 
-const emitCacheTag = common.emitCacheTag;
-const runtimeBackendTag = common.runtimeBackendTag;
-fn writeFile(path: []const u8, contents: []const u8) !void {
+pub fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
 }
 
-fn emitPipelineToFile(
+pub fn emitPipelineToFile(
     allocator: std.mem.Allocator,
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
@@ -43,7 +41,7 @@ fn emitPipelineToFile(
     try out_writer.interface.flush();
 }
 
-fn parseDialect(text: []const u8) !Col6Forge.Dialect {
+pub fn parseDialect(text: []const u8) !Col6Forge.Dialect {
     if (std.ascii.eqlIgnoreCase(text, "default")) return .default;
     if (std.ascii.eqlIgnoreCase(text, "f95")) return .default;
     if (std.ascii.eqlIgnoreCase(text, "f77")) return .f77_legacy;
@@ -62,7 +60,7 @@ fn runtimeBackendTag(backend: RuntimeBackend) []const u8 {
     };
 }
 
-fn hashFileXx64(path: []const u8) !u64 {
+pub fn hashFileXx64(path: []const u8) !u64 {
     var file = try std.fs.openFileAbsolute(path, .{});
     defer file.close();
     var hasher = std.hash.XxHash64.init(0);
@@ -75,12 +73,12 @@ fn hashFileXx64(path: []const u8) !u64 {
     return hasher.final();
 }
 
-fn fileExistsAbsolute(path: []const u8) bool {
+pub fn fileExistsAbsolute(path: []const u8) bool {
     std.fs.accessAbsolute(path, .{}) catch return false;
     return true;
 }
 
-fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
+pub fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     var src = try std.fs.openFileAbsolute(src_path, .{});
     defer src.close();
     const stat = try src.stat();
@@ -100,11 +98,11 @@ fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     }
 }
 
-fn deleteFileAbsoluteIfExists(path: []const u8) void {
+pub fn deleteFileAbsoluteIfExists(path: []const u8) void {
     std.fs.deleteFileAbsolute(path) catch {};
 }
 
-fn deleteWindowsLinkSidecarsIfExists(allocator: std.mem.Allocator, exe_path: []const u8) void {
+pub fn deleteWindowsLinkSidecarsIfExists(allocator: std.mem.Allocator, exe_path: []const u8) void {
     if (builtin.os.tag != .windows) return;
     const ext = std.fs.path.extension(exe_path);
     const stem = if (ext.len != 0) exe_path[0 .. exe_path.len - ext.len] else exe_path;
@@ -122,7 +120,7 @@ fn isWindowsLinkAccessDenied(stderr: []const u8) bool {
         std.mem.indexOf(u8, stderr, "AccessDenied") != null;
 }
 
-fn buildVerifyCachePath(
+pub fn buildVerifyCachePath(
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
     compiler_cache_key: []const u8,
@@ -139,7 +137,7 @@ fn buildVerifyCachePath(
     return std.fs.path.join(allocator, &.{ cache_dir, name });
 }
 
-fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+pub fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
     const src_dir = try std.fs.path.join(allocator, &.{ root_path, "src" });
     defer allocator.free(src_dir);
 
@@ -179,7 +177,7 @@ fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) 
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+pub fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
     const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
     defer allocator.free(runtime_dir);
 
@@ -224,7 +222,7 @@ fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn computeRunScopedRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+pub fn computeRunScopedRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
     const base_key = try computeRuntimeCacheKey(allocator, root_path);
     defer allocator.free(base_key);
 
@@ -233,7 +231,7 @@ fn computeRunScopedRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []co
     return std.fmt.allocPrint(allocator, "{s}_{x:0>16}", .{ base_key, nonce });
 }
 
-fn computeReferenceCompilerCacheKey(
+pub fn computeReferenceCompilerCacheKey(
     allocator: std.mem.Allocator,
     gfortran_cmd: []const u8,
     timeout_ms: u64,
@@ -264,7 +262,7 @@ fn computeReferenceCompilerCacheKey(
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn computeLinkedExeCacheKey(
+pub fn computeLinkedExeCacheKey(
     allocator: std.mem.Allocator,
     compiler_cache_key: []const u8,
     runtime_cache_key: []const u8,
@@ -283,7 +281,7 @@ const RefSource = struct {
     owned: bool,
 };
 
-fn prepareGfortranSource(
+pub fn prepareGfortranSource(
     allocator: std.mem.Allocator,
     abs_input_path: []const u8,
     work_dir: []const u8,
@@ -381,7 +379,7 @@ fn isCommentLine(line: []const u8) bool {
     return line[0] == 'c' or line[0] == 'C' or line[0] == '*' or line[0] == '!';
 }
 
-fn prepareExePath(allocator: std.mem.Allocator, work_dir: []const u8, base: []const u8) ![]const u8 {
+pub fn prepareExePath(allocator: std.mem.Allocator, work_dir: []const u8, base: []const u8) ![]const u8 {
     var attempt: usize = 0;
     while (attempt < 1000) : (attempt += 1) {
         const candidate = try buildExePath(allocator, work_dir, base, attempt);
@@ -416,7 +414,7 @@ fn buildExePath(
     return std.fs.path.join(allocator, &.{ work_dir, file_name });
 }
 
-fn reportPipelineError(log_state: *LogState, diag_bag: *const Col6Forge.diag.Bag, input_path: []const u8, err: anyerror) !void {
+pub fn reportPipelineError(log_state: anytype, diag_bag: *const Col6Forge.diag.Bag, input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
@@ -426,19 +424,19 @@ fn reportPipelineError(log_state: *LogState, diag_bag: *const Col6Forge.diag.Bag
     try writer.interface.flush();
 }
 
-const ProcessResult = struct {
+pub const ProcessResult = struct {
     stdout: []const u8,
     stderr: []const u8,
     term: std.process.Child.Term,
     timed_out: bool,
 
-    fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
         allocator.free(self.stderr);
     }
 };
 
-fn runProcessCapture(
+pub fn runProcessCapture(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
@@ -447,7 +445,7 @@ fn runProcessCapture(
     return runProcessCaptureWithInput(allocator, argv, cwd, timeout_ms, null);
 }
 
-fn runProcessCaptureWithInput(
+pub fn runProcessCaptureWithInput(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
@@ -510,7 +508,7 @@ fn runProcessCaptureWithInput(
     };
 }
 
-fn runZigCcLinkWithWindowsRetry(
+pub fn runZigCcLinkWithWindowsRetry(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: []const u8,
@@ -530,24 +528,24 @@ fn runZigCcLinkWithWindowsRetry(
     return runProcessCapture(allocator, argv, cwd, timeout_ms);
 }
 
-fn remainingTimeoutMs(timeout_ms: u64, timer: *std.time.Timer) ?u64 {
+pub fn remainingTimeoutMs(timeout_ms: u64, timer: *std.time.Timer) ?u64 {
     if (timeout_ms == 0) return null;
     const elapsed_ms = timer.read() / std.time.ns_per_ms;
     if (elapsed_ms >= timeout_ms) return 0;
     return timeout_ms - elapsed_ms;
 }
 
-fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
+pub fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
     if (timeout_ms == 0) return false;
     const elapsed_ms = timer.read() / std.time.ns_per_ms;
     return elapsed_ms >= timeout_ms;
 }
 
-fn cleanupWorkDir(path: []const u8) void {
+pub fn cleanupWorkDir(path: []const u8) void {
     std.fs.cwd().deleteTree(path) catch {};
 }
 
-fn resolveVerifyWorkDir(
+pub fn resolveVerifyWorkDir(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     work_name: []const u8,
@@ -573,7 +571,7 @@ fn shouldRelocateVerifyWorkDir(root_path: []const u8) bool {
     return std.mem.startsWith(u8, root_path, "/mnt/");
 }
 
-fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
+pub fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
     var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
     defer dir.close();
 
@@ -585,7 +583,7 @@ fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
     }
 }
 
-fn copyCaseSupportFiles(allocator: std.mem.Allocator, case_dir: []const u8, work_dir: []const u8) !void {
+pub fn copyCaseSupportFiles(allocator: std.mem.Allocator, case_dir: []const u8, work_dir: []const u8) !void {
     var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
     defer dir.close();
 
@@ -602,7 +600,7 @@ fn copyCaseSupportFiles(allocator: std.mem.Allocator, case_dir: []const u8, work
     }
 }
 
-fn findCompanionInputPath(
+pub fn findCompanionInputPath(
     allocator: std.mem.Allocator,
     case_dir: []const u8,
     input_path: []const u8,
@@ -664,10 +662,18 @@ fn terminateChild(child: *std.process.Child) void {
     _ = child.kill() catch {};
 }
 
-fn isZeroExit(term: std.process.Child.Term) bool {
+pub fn isZeroExit(term: std.process.Child.Term) bool {
     return switch (term) {
         .Exited => |code| code == 0,
         else => false,
+    };
+}
+
+pub fn exitCode(term: std.process.Child.Term) u32 {
+    return switch (term) {
+        .Exited => |code| code,
+        .Signal => |signal| 128 + signal,
+        else => 255,
     };
 }
 

@@ -1,14 +1,14 @@
 pub const std = @import("std");
-const builtin = @import("builtin");
-const Col6Forge = @import("Col6Forge");
+pub const builtin = @import("builtin");
+pub const Col6Forge = @import("Col6Forge");
 
-const RuntimeBackend = enum {
+pub const RuntimeBackend = enum {
     c,
     zig,
 };
 
-const CACHE_SCHEMA_VERSION: u32 = 2;
-const HOST_CACHE_TAG = std.fmt.comptimePrint(
+pub const CACHE_SCHEMA_VERSION: u32 = 2;
+pub const HOST_CACHE_TAG = std.fmt.comptimePrint(
     "{s}-{s}-{s}",
     .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
 );
@@ -19,7 +19,7 @@ const ALLBLAS = [_][]const u8{
     "xerbla_array.f",
 };
 
-const FORTRAN_FALLBACK = [_][]const u8{
+pub const FORTRAN_FALLBACK = [_][]const u8{
     // Empty by default: translate all .f BLAS sources when possible.
 };
 
@@ -220,14 +220,14 @@ const XBLAT3D_SOURCES = ALLBLAS ++ DBLAS3;
 const XBLAT3C_SOURCES = ALLBLAS ++ CBLAS3;
 const XBLAT3Z_SOURCES = ALLBLAS ++ ZBLAS3;
 
-const BlasCase = struct {
+pub const BlasCase = struct {
     name: []const u8,
     driver: []const u8,
     input: ?[]const u8,
     sources: []const []const u8,
 };
 
-const ALL_CASES = [_]BlasCase{
+pub const ALL_CASES = [_]BlasCase{
     .{ .name = "xblat1s", .driver = "sblat1.f", .input = null, .sources = XBLAT1S_SOURCES[0..] },
     .{ .name = "xblat1d", .driver = "dblat1.f", .input = null, .sources = XBLAT1D_SOURCES[0..] },
     .{ .name = "xblat1c", .driver = "cblat1.f", .input = null, .sources = XBLAT1C_SOURCES[0..] },

@@ -10,24 +10,24 @@ const MAX_RUN_INPUT_BYTES = common.MAX_RUN_INPUT_BYTES;
 const MAX_RUN_OUTPUT_BYTES = common.MAX_RUN_OUTPUT_BYTES;
 const LapackCase = common.LapackCase;
 const SupportLibs = common.SupportLibs;
-const ProcessResult = struct {
+pub const ProcessResult = struct {
     stdout: []const u8,
     stderr: []const u8,
     term: std.process.Child.Term,
     timed_out: bool,
 
-    fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
         allocator.free(self.stderr);
     }
 };
 
-const ProcessRedirectResult = struct {
+pub const ProcessRedirectResult = struct {
     term: std.process.Child.Term,
     timed_out: bool,
 };
 
-fn runProcessCaptureWithInputPath(
+pub fn runProcessCaptureWithInputPath(
     allocator: std.mem.Allocator,
     exe_path: []const u8,
     cwd: ?[]const u8,
@@ -42,7 +42,7 @@ fn runProcessCaptureWithInputPath(
     return runProcessCaptureWithInput(allocator, &.{ "sh", "-c", cmd }, cwd, null, timeout_ms);
 }
 
-fn runProcessStreamToFilesWithInputPath(
+pub fn runProcessStreamToFilesWithInputPath(
     allocator: std.mem.Allocator,
     exe_path: []const u8,
     cwd: ?[]const u8,
@@ -70,7 +70,7 @@ fn runProcessStreamToFilesWithInputPath(
     );
 }
 
-fn runProcessPipeToFiles(
+pub fn runProcessPipeToFiles(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
@@ -133,7 +133,7 @@ fn runProcessPipeToFiles(
     };
 }
 
-fn pumpPipeToFile(src: std.fs.File, dst: std.fs.File) void {
+pub fn pumpPipeToFile(src: std.fs.File, dst: std.fs.File) void {
     var reader_file = src;
     var writer_file = dst;
     var buf: [64 * 1024]u8 = undefined;
@@ -144,7 +144,7 @@ fn pumpPipeToFile(src: std.fs.File, dst: std.fs.File) void {
     }
 }
 
-fn runProcessCaptureWithInput(
+pub fn runProcessCaptureWithInput(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
@@ -205,7 +205,7 @@ fn runProcessCaptureWithInput(
     };
 }
 
-fn timeoutMonitor(
+pub fn timeoutMonitor(
     child: *std.process.Child,
     done: *std.atomic.Value(bool),
     timed_out: *std.atomic.Value(bool),
@@ -225,7 +225,7 @@ fn timeoutMonitor(
     terminateChildNoWait(child);
 }
 
-fn terminateChildNoWait(child: *std.process.Child) void {
+pub fn terminateChildNoWait(child: *std.process.Child) void {
     if (builtin.os.tag == .windows) {
         std.os.windows.TerminateProcess(child.id, 1) catch |err| switch (err) {
             error.AccessDenied => {},
@@ -240,14 +240,14 @@ fn terminateChildNoWait(child: *std.process.Child) void {
     };
 }
 
-fn isZeroExit(term: std.process.Child.Term) bool {
+pub fn isZeroExit(term: std.process.Child.Term) bool {
     return switch (term) {
         .Exited => |code| code == 0,
         else => false,
     };
 }
 
-fn exitCode(term: std.process.Child.Term) u32 {
+pub fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .Exited => |code| code,
         .Signal => |signal| 128 + signal,
@@ -255,12 +255,12 @@ fn exitCode(term: std.process.Child.Term) u32 {
     };
 }
 
-fn fileExists(path: []const u8) bool {
+pub fn fileExists(path: []const u8) bool {
     std.fs.cwd().access(path, .{}) catch return false;
     return true;
 }
 
-fn buildRunArtifactPath(
+pub fn buildRunArtifactPath(
     allocator: std.mem.Allocator,
     dir: []const u8,
     input_name: []const u8,
@@ -271,7 +271,7 @@ fn buildRunArtifactPath(
     return std.fs.path.join(allocator, &.{ dir, file_name });
 }
 
-fn readFileLimitedAbsolute(
+pub fn readFileLimitedAbsolute(
     allocator: std.mem.Allocator,
     path: []const u8,
     max_bytes: usize,
@@ -281,7 +281,7 @@ fn readFileLimitedAbsolute(
     return file.readToEndAlloc(allocator, max_bytes);
 }
 
-fn retryStdoutComparisonWithCapturedRuns(
+pub fn retryStdoutComparisonWithCapturedRuns(
     allocator: std.mem.Allocator,
     ref_exe: []const u8,
     ref_dir: []const u8,
@@ -302,7 +302,7 @@ fn retryStdoutComparisonWithCapturedRuns(
     return outputsEquivalent(ref_run.stdout, test_run.stdout);
 }
 
-fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
+pub fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
     if (std.mem.eql(u8, expected, actual)) return true;
 
     var exp_it = std.mem.splitScalar(u8, expected, '\n');
@@ -322,7 +322,7 @@ fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
     }
 }
 
-fn equivalentTextWithNumericTolerance(expected: []const u8, actual: []const u8) bool {
+pub fn equivalentTextWithNumericTolerance(expected: []const u8, actual: []const u8) bool {
     var exp_idx: usize = 0;
     var act_idx: usize = 0;
     while (true) {
@@ -346,7 +346,7 @@ fn equivalentTextWithNumericTolerance(expected: []const u8, actual: []const u8) 
     }
 }
 
-const NumericToken = struct {
+pub const NumericToken = struct {
     raw: []const u8,
     end: usize,
     kind: enum { integer, float },
@@ -355,7 +355,7 @@ const NumericToken = struct {
     tolerance: f64 = 0.0,
 };
 
-fn numericTokensEquivalent(expected: NumericToken, actual: NumericToken) bool {
+pub fn numericTokensEquivalent(expected: NumericToken, actual: NumericToken) bool {
     if (expected.kind == .integer and actual.kind == .integer) {
         return expected.int_value == actual.int_value;
     }
@@ -371,7 +371,7 @@ fn numericTokensEquivalent(expected: NumericToken, actual: NumericToken) bool {
     return @abs(exp_float - act_float) <= tol;
 }
 
-fn parseNumericToken(text: []const u8, start_idx: usize) ?NumericToken {
+pub fn parseNumericToken(text: []const u8, start_idx: usize) ?NumericToken {
     if (start_idx >= text.len) return null;
     var i = start_idx;
     if (text[i] == '+' or text[i] == '-') {
@@ -466,15 +466,15 @@ fn parseNumericToken(text: []const u8, start_idx: usize) ?NumericToken {
     };
 }
 
-fn isHorizontalSpace(ch: u8) bool {
+pub fn isHorizontalSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t';
 }
 
-fn trimCr(line: []const u8) []const u8 {
+pub fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
 }
 
-fn isTimingLine(line: []const u8) bool {
+pub fn isTimingLine(line: []const u8) bool {
     return std.mem.indexOf(u8, line, "Total time used =") != null;
 }
 

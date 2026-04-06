@@ -7,20 +7,13 @@ const RuntimeBackend = common.RuntimeBackend;
 const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
 
-fn suiteTestsDir(suite: TestSuite) []const u8 {
-    return switch (suite) {
-        .fcvs21_f95 => "tests/NIST_F78_test_suite/fcvs21_f95",
-        .fcsv78 => "tests/NIST_F78_test_suite/FCSV78",
-    };
-}
-
-const TestCase = struct {
+pub const TestCase = struct {
     input_path: []const u8,
     case_dir: []const u8,
     work_name: []const u8,
 };
 
-fn collectTestCases(
+pub fn collectTestCases(
     allocator: std.mem.Allocator,
     tests_dir: []const u8,
     filter: ?[]const u8,
@@ -83,7 +76,7 @@ fn isFortranSource(path: []const u8) bool {
     return false;
 }
 
-fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 {
+pub fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 {
     const base_name = std.fs.path.basename(rel_path);
     var stem_buf: [32]u8 = undefined;
     var stem_len: usize = 0;
@@ -115,7 +108,7 @@ fn exeName(comptime base: []const u8) []const u8 {
     return if (builtin.os.tag == .windows) base ++ ".exe" else base;
 }
 
-fn defaultGfortran() []const u8 {
+pub fn defaultGfortran() []const u8 {
     return if (builtin.os.tag == .windows) "gfortran.exe" else "gfortran";
 }
 

@@ -46,7 +46,7 @@ const isZeroExit = runner_io.isZeroExit;
 const allowsProcessorDependentOutputDiff = compare.allowsProcessorDependentOutputDiff;
 const tryRecoverRuntimeCacheAndRelink = runtime.tryRecoverRuntimeCacheAndRelink;
 const logProgress = runtime.logProgress;
-fn processCase(
+pub fn processCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     cache_dir: []const u8,
@@ -523,5 +523,46 @@ fn processCase(
     }
 
     return true;
+}
+
+pub fn runCaseParallel(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
+    runtime_artifacts: *RuntimeArtifacts,
+    compiler_cache_key: []const u8,
+    ref_compiler_cache_key: []const u8,
+    gfortran_cmd: []const u8,
+    case: TestCase,
+    options: Options,
+    log_state: *LogState,
+    progress: *Progress,
+    dir_locks: *DirLocks,
+    failures: *std.atomic.Value(usize),
+    profile_collector: *PipelineProfileCollector,
+) void {
+    logProgress(log_state, progress, case.input_path);
+    const ok = processCase(
+        allocator,
+        root_path,
+        cache_dir,
+        runtime_cache_key,
+        runtime_artifacts,
+        compiler_cache_key,
+        ref_compiler_cache_key,
+        gfortran_cmd,
+        case,
+        options,
+        log_state,
+        dir_locks,
+        profile_collector,
+    ) catch {
+        _ = failures.fetchAdd(1, .seq_cst);
+        _ = progress.completed.fetchAdd(1, .seq_cst);
+        return;
+    };
+    if (!ok) _ = failures.fetchAdd(1, .seq_cst);
+    _ = progress.completed.fetchAdd(1, .seq_cst);
 }
 

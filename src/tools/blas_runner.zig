@@ -21,6 +21,8 @@ const translateSources = build_helpers.translateSources;
 const compileTranslated = build_helpers.compileTranslated;
 const parseSummaryOutputName = build_helpers.parseSummaryOutputName;
 const readOptionalFile = build_helpers.readOptionalFile;
+const computeRuntimeCacheKey = build_helpers.computeRuntimeCacheKey;
+const computeCompilerCacheKey = build_helpers.computeCompilerCacheKey;
 const cleanupWorkDir = build_helpers.cleanupWorkDir;
 const buildExePath = build_helpers.buildExePath;
 const ProcessResult = io_compare.ProcessResult;
@@ -463,5 +465,3 @@ fn processCase(
 
     return true;
 }
-
-fn buildSourcePaths(

@@ -612,7 +612,7 @@ fn normalizeForMatch(allocator: std.mem.Allocator, text: []const u8) ![]const u8
     return result;
 }
 
-fn patternHasRegexMeta(pattern: []const u8) bool {
+pub fn patternHasRegexMeta(pattern: []const u8) bool {
     for (pattern) |ch| {
         switch (ch) {
             '.', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\' => return true,
@@ -652,7 +652,7 @@ fn orderedTokensMatch(allocator: std.mem.Allocator, actual: []const u8, pattern:
     return true;
 }
 
-fn stripRegexMeta(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
+pub fn stripRegexMeta(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     for (pattern) |ch| {
@@ -669,7 +669,7 @@ fn stripRegexMeta(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8
     return result;
 }
 
-fn matchExpectedPattern(allocator: std.mem.Allocator, pattern: []const u8, actual: []const u8) !bool {
+pub fn matchExpectedPattern(allocator: std.mem.Allocator, pattern: []const u8, actual: []const u8) !bool {
     if (pattern.len == 0) return true;
     const pattern_norm = try normalizeForMatch(allocator, pattern);
     defer allocator.free(pattern_norm);

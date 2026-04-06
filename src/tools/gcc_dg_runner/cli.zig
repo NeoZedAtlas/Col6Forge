@@ -180,6 +180,8 @@ pub fn strictLevelLabel(level: StrictLevel) []const u8 {
         .warning => "warning",
         .full => "full",
     };
+}
+
 pub fn defaultJobs() usize {
     const cpu = std.Thread.getCpuCount() catch 1;
     return if (cpu > 4) 4 else cpu;

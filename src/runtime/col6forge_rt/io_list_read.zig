@@ -265,7 +265,8 @@ pub export fn col6forge_read_list_l_n(unit: c_int, count: c_int, stride: c_int, 
         const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
         const off = checkedMulI64(i, stride) orelse return -1;
         const ptr = offsetBytes(out, off) orelse return -1;
-        ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
+        const out_value: *c_int = @ptrCast(@alignCast(ptr));
+        out_value.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
     }
     col6forgeDiscardToRecordEnd(file);
     commit_pos = true;
@@ -354,7 +355,7 @@ pub export fn col6forge_read_list_v(
                     .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
+                const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
@@ -513,7 +514,7 @@ pub export fn col6forge_read_list_mix_v_n(
                     .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
+                const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
@@ -649,7 +650,8 @@ pub export fn col6forge_read_list_mix_v_n(
                     const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
                     const off = checkedMulI64(@intCast(j), stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
                     const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
+                    const out_value: *c_int = @ptrCast(@alignCast(ptr));
+                    out_value.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
                 }
             },
             'c' => {
@@ -752,7 +754,7 @@ pub export fn col6forge_read_list_mix_v_n(
                     .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
+                const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {

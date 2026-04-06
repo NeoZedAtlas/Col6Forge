@@ -16,26 +16,26 @@ const fileExistsAbsolute = runner_io.fileExistsAbsolute;
 const deleteFileAbsoluteIfExists = runner_io.deleteFileAbsoluteIfExists;
 const deleteWindowsLinkSidecarsIfExists = runner_io.deleteWindowsLinkSidecarsIfExists;
 const runtimeBackendTag = common.runtimeBackendTag;
-const LogState = struct {
+pub const LogState = struct {
     mutex: std.Thread.Mutex = .{},
 
-    fn lock(self: *LogState) void {
+    pub fn lock(self: *LogState) void {
         self.mutex.lock();
     }
 
-    fn unlock(self: *LogState) void {
+    pub fn unlock(self: *LogState) void {
         self.mutex.unlock();
     }
 
-    fn stdout(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+    pub fn stdout(self: *LogState, comptime fmt: []const u8, args: anytype) void {
         self.print(std.fs.File.stdout(), fmt, args);
     }
 
-    fn stderr(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+    pub fn stderr(self: *LogState, comptime fmt: []const u8, args: anytype) void {
         self.print(std.fs.File.stderr(), fmt, args);
     }
 
-    fn print(self: *LogState, file: std.fs.File, comptime fmt: []const u8, args: anytype) void {
+    pub fn print(self: *LogState, file: std.fs.File, comptime fmt: []const u8, args: anytype) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         var buffer: [4096]u8 = undefined;
@@ -45,13 +45,13 @@ const LogState = struct {
     }
 };
 
-const Progress = struct {
+pub const Progress = struct {
     total: usize,
     started: std.atomic.Value(usize),
     completed: std.atomic.Value(usize),
     timer: std.time.Timer,
 
-    fn init(total: usize) !Progress {
+    pub fn init(total: usize) !Progress {
         return .{
             .total = total,
             .started = std.atomic.Value(usize).init(0),
@@ -60,19 +60,19 @@ const Progress = struct {
         };
     }
 
-    fn deinit(_: *Progress) void {}
+    pub fn deinit(_: *Progress) void {}
 };
 
-const DirLocks = struct {
+pub const DirLocks = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
     map: std.StringHashMapUnmanaged(*std.Thread.Mutex) = .{},
 
-    fn init(allocator: std.mem.Allocator) DirLocks {
+    pub fn init(allocator: std.mem.Allocator) DirLocks {
         return .{ .allocator = allocator };
     }
 
-    fn deinit(self: *DirLocks) void {
+    pub fn deinit(self: *DirLocks) void {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             self.allocator.destroy(entry.value_ptr.*);
@@ -81,7 +81,7 @@ const DirLocks = struct {
         self.map.deinit(self.allocator);
     }
 
-    fn get(self: *DirLocks, dir: []const u8) !*std.Thread.Mutex {
+    pub fn get(self: *DirLocks, dir: []const u8) !*std.Thread.Mutex {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -98,7 +98,7 @@ const DirLocks = struct {
     }
 };
 
-fn logProgress(log_state: *LogState, progress: *Progress, path: []const u8) void {
+pub fn logProgress(log_state: *LogState, progress: *Progress, path: []const u8) void {
     const started = progress.started.fetchAdd(1, .seq_cst) + 1;
     const completed = progress.completed.load(.seq_cst);
     const elapsed_ms = progress.timer.read() / std.time.ns_per_ms;
@@ -133,23 +133,23 @@ fn formatDuration(buf: []u8, total_ms: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds }) catch "00:00:00";
 }
 
-fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
+pub fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
     if (std.ascii.eqlIgnoreCase(text, "c")) return .c;
     if (std.ascii.eqlIgnoreCase(text, "zig")) return .zig;
     return error.InvalidRuntimeBackend;
 }
 
-const RuntimeArtifacts = struct {
+pub const RuntimeArtifacts = struct {
     zig_object: ?[]const u8 = null,
 
-    fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
         if (self.zig_object) |obj| {
             allocator.free(obj);
             self.zig_object = null;
         }
     }
 
-    fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
+    pub fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
         if (self.zig_object) |obj| {
             try args.append(allocator, obj);
         }
@@ -164,13 +164,13 @@ fn isRuntimeCacheCorruption(stderr: []const u8, runtime_artifacts: *const Runtim
         std.mem.indexOf(u8, stderr, "file format not recognized") != null;
 }
 
-fn tryRecoverRuntimeCacheAndRelink(
+pub fn tryRecoverRuntimeCacheAndRelink(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
     runtime_artifacts: *RuntimeArtifacts,
-    options: Options,
+    options: anytype,
     log_state: *LogState,
     dir_locks: *DirLocks,
     abs_input_path: []const u8,
@@ -223,7 +223,7 @@ fn tryRecoverRuntimeCacheAndRelink(
     return isZeroExit(link_result.term);
 }
 
-fn prepareRuntimeArtifacts(
+pub fn prepareRuntimeArtifacts(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     output_dir: []const u8,
@@ -271,7 +271,8 @@ fn prepareRuntimeArtifacts(
     };
 }
 
-fn defaultJobs() usize {
+pub fn defaultJobs() usize {
+    if (builtin.os.tag == .windows) return 1;
     const cpu = std.Thread.getCpuCount() catch 1;
     return if (cpu > 4) 4 else cpu;
 }

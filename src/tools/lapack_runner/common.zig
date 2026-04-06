@@ -1,8 +1,8 @@
-const builtin = @import("builtin");
+const builtin_mod = @import("builtin");
 pub const std = @import("std");
 pub const Col6Forge = @import("Col6Forge");
-pub const fallback_policy = @import("fallback_policy.zig");
-pub const builtin = builtin;
+pub const fallback_policy = @import("../fallback_policy.zig");
+pub const builtin = builtin_mod;
 
 pub const RuntimeBackend = enum {
     c,
@@ -12,14 +12,12 @@ pub const RuntimeBackend = enum {
 pub const CACHE_SCHEMA_VERSION: u32 = 2;
 pub const HOST_CACHE_TAG = std.fmt.comptimePrint(
     "{s}-{s}-{s}",
-    .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
+    .{ @tagName(builtin_mod.os.tag), @tagName(builtin_mod.cpu.arch), @tagName(builtin_mod.abi) },
 );
 pub const MAX_RUN_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_RUN_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
-const MAX_RUN_INPUT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RUN_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 
-const INSTALL_EXTRAS = [_][]const u8{
+pub const INSTALL_EXTRAS = [_][]const u8{
     "lsame.f",
     "slamch.f",
     "dlamch.f",
@@ -27,7 +25,7 @@ const INSTALL_EXTRAS = [_][]const u8{
     "dsecnd_INT_CPU_TIME.f",
 };
 
-const FORTRAN_FALLBACK = [_][]const u8{
+pub const FORTRAN_FALLBACK = [_][]const u8{
     "schkec.f",
     "serrec.f",
     "sget31.f",
@@ -162,7 +160,7 @@ const EIG_COMPLEX16_INPUTS = [_][]const u8{
     "lse.in",
 };
 
-const LapackCase = struct {
+pub const LapackCase = struct {
     name: []const u8,
     suite_dir: []const u8,
     inputs: []const []const u8,
@@ -170,7 +168,7 @@ const LapackCase = struct {
     allow_translation: bool,
 };
 
-const ALL_CASES = [_]LapackCase{
+pub const ALL_CASES = [_]LapackCase{
     .{ .name = "xlintsts", .suite_dir = "LIN", .inputs = ST_INPUTS[0..], .make_vars = XLINTSTS_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstc", .suite_dir = "LIN", .inputs = CT_INPUTS[0..], .make_vars = XLINTSTC_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstd", .suite_dir = "LIN", .inputs = DT_INPUTS[0..], .make_vars = XLINTSTD_VARS[0..], .allow_translation = true },
@@ -182,26 +180,10 @@ const ALL_CASES = [_]LapackCase{
     .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_DOUBLE_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = false },
     .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_COMPLEX16_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = false },
 };
-const SupportLibs = struct {
+pub const SupportLibs = struct {
     blas_lib: []const u8,
     lapack_lib: []const u8,
     tmg_lib: []const u8,
 };
 
-const ParseArgError = union(enum) {
-    missing_value: []const u8,
-    unknown_flag: []const u8,
-    invalid_runtime_backend: []const u8,
-    invalid_timeout: []const u8,
-    invalid_max_fallbacks: []const u8,
-    invalid_fallback_policy: []const u8,
-    conflicting_fallback_policy: void,
-    missing_fallback_budget: void,
-    redundant_fallback_budget: void,
-};
-
-const ParseArgsOutcome = union(enum) {
-    success: Options,
-    failure: ParseArgError,
-};
 

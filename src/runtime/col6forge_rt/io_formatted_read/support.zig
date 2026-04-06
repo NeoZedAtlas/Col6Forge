@@ -1,8 +1,8 @@
 const std = @import("std");
-const dynamic_format = @import("io_dynamic_format.zig");
-const io_common = @import("io_common.zig");
-const io_control = @import("io_control.zig");
-const runtime_text = @import("runtime_text.zig");
+const dynamic_format = @import("../io_dynamic_format.zig");
+const io_common = @import("../io_common.zig");
+const io_control = @import("../io_control.zig");
+const runtime_text = @import("../runtime_text.zig");
 
 const c_begin_stream = @extern(
     *const fn (unit: c_int, fmt: ?[*:0]const u8, status_mode: c_int) callconv(.c) ?*anyopaque,
@@ -17,7 +17,7 @@ const c_finish_stream = @extern(
     .{ .name = "col6forge_formatted_read_stream_finish" },
 );
 
-const FILE = opaque {};
+pub const FILE = opaque {};
 extern fn fgetc(stream: *FILE) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern fn fclose(stream: *FILE) c_int;
@@ -527,7 +527,7 @@ pub fn streamConsumeValue(
         return 0;
     }
     if (conv == 'L' and kind == 'L') {
-        const out: *u8 = @ptrCast(@alignCast(arg));
+        const out: *c_int = @ptrCast(@alignCast(arg));
         out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&field), used));
         return 0;
     }

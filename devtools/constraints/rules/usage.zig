@@ -60,6 +60,13 @@ const io_list_read_prefix = "src/runtime/col6forge_rt/io_list_read/";
 const io_list_read_shared = "src/runtime/col6forge_rt/io_list_read/shared.zig";
 const io_list_read_title = "io_list_read shared helper use must import the shared facade module and bind aliases to shared";
 
+const verify_runner_entry = "src/tools/verify_runner.zig";
+const blas_runner_entry = "src/tools/blas_runner.zig";
+const gcc_dg_runner_entry = "src/tools/gcc_dg_runner.zig";
+const verify_runner_title = "verify runner root entry must stay wired through dedicated submodules";
+const blas_runner_title = "blas runner root entry must stay wired through dedicated submodules";
+const gcc_dg_runner_title = "gcc dg runner root entry must stay wired through dedicated submodules";
+
 const io_binary_v_specs = [_]UsageSpec{
     .{ .id = "AR-CALL-001", .symbol_name = "runtimeArgCount", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgCount" },
     .{ .id = "AR-CALL-002", .symbol_name = "runtimeArgPtrAt", .import_fragment = "shared.zig", .call_path = "shared.runtimeArgPtrAt" },
@@ -121,6 +128,22 @@ const io_list_read_specs = [_]UsageSpec{
     .{ .id = "AR-CALL-040", .symbol_name = "complexOffsetIndex", .import_fragment = "shared.zig", .alias_path = "shared.complexOffsetIndex" },
 };
 
+const verify_runner_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-072", .symbol_name = "parseArgs", .import_fragment = "verify_runner/cli.zig", .alias_path = "cli.parseArgs" },
+    .{ .id = "AR-CALL-073", .symbol_name = "processCase", .import_fragment = "verify_runner/process.zig", .alias_path = "process_mod.processCase" },
+};
+
+const blas_runner_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-074", .symbol_name = "compileReference", .import_fragment = "blas_runner/build_helpers.zig", .alias_path = "build_helpers.compileReference" },
+    .{ .id = "AR-CALL-075", .symbol_name = "Comparator", .import_fragment = "blas_runner/io_compare.zig", .alias_path = "io_compare.Comparator" },
+};
+
+const gcc_dg_runner_specs = [_]UsageSpec{
+    .{ .id = "AR-CALL-076", .symbol_name = "parseArgs", .import_fragment = "gcc_dg_runner/cli.zig", .alias_path = "cli.parseArgs" },
+    .{ .id = "AR-CALL-077", .symbol_name = "collectRunnableCases", .import_fragment = "gcc_dg_runner/directives.zig", .alias_path = "directives.collectRunnableCases" },
+    .{ .id = "AR-CALL-078", .symbol_name = "processCase", .import_fragment = "gcc_dg_runner/process.zig", .alias_path = "process_mod.processCase" },
+};
+
 const list_directed_stride_specs = [_]UsageSpec{
     .{ .id = "AR-CALL-068", .symbol_name = "impliedStrideForDim", .alias_path = "implied_helpers.impliedStrideForSymbolDim" },
 };
@@ -145,6 +168,9 @@ const runtime_memory_rules = buildUsageRules(runtime_memory_title, .{ .prefix = 
 const runtime_stride_rules = buildUsageRules(runtime_stride_title, .{ .prefix = runtime_prefix }, runtime_stride_specs[0..], &.{runtime_stride_owner}, runtime_facade_prefixes);
 const runtime_text_rules = buildUsageRules(runtime_text_title, .{ .prefix = runtime_prefix }, runtime_text_specs[0..], &.{runtime_text_owner}, runtime_facade_prefixes);
 const io_list_read_rules = buildUsageRules(io_list_read_title, .{ .prefix = io_list_read_prefix }, io_list_read_specs[0..], &.{io_list_read_shared}, &.{});
+const verify_runner_rules = buildUsageRules(verify_runner_title, .{ .prefix = verify_runner_entry }, verify_runner_specs[0..], &.{}, &.{});
+const blas_runner_rules = buildUsageRules(blas_runner_title, .{ .prefix = blas_runner_entry }, blas_runner_specs[0..], &.{}, &.{});
+const gcc_dg_runner_rules = buildUsageRules(gcc_dg_runner_title, .{ .prefix = gcc_dg_runner_entry }, gcc_dg_runner_specs[0..], &.{}, &.{});
 const list_directed_stride_rules = buildUsageRules("list-directed implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/list_directed.zig" }, list_directed_stride_specs[0..], &.{}, &.{});
 const streaming_stride_rules = buildUsageRules("streaming implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/direct/streaming.zig" }, streaming_stride_specs[0..], &.{}, &.{});
 const special_write_stride_rules = buildUsageRules("special write implied stride alias must bind to implied_helpers", .{ .prefix = "src/codegen/llvm/stmts/io/formatted/special_write.zig" }, special_write_stride_specs[0..], &.{}, &.{});
@@ -159,6 +185,9 @@ pub const file_rules =
     runtime_stride_rules ++
     runtime_text_rules ++
     io_list_read_rules ++
+    verify_runner_rules ++
+    blas_runner_rules ++
+    gcc_dg_runner_rules ++
     list_directed_stride_rules ++
     streaming_stride_rules ++
     special_write_stride_rules ++

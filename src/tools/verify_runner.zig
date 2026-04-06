@@ -96,8 +96,7 @@ pub fn main() !void {
         runtime_cache_key,
         true,
     ) catch |err| {
-        log_state.stderr("runtime backend prepare failed: {s}
-", .{@errorName(err)});
+        log_state.stderr("runtime backend prepare failed: {s}\n", .{@errorName(err)});
         return err;
     };
     defer runtime_artifacts.deinit(allocator);
@@ -117,8 +116,7 @@ pub fn main() !void {
 
     const cases_list = try collectTestCases(arena_allocator, options.tests_dir, options.filter, options.dialect);
     if (cases_list.len == 0) {
-        log_state.stdout("no .f tests found
-", .{});
+        log_state.stdout("no .f tests found\n", .{});
         return;
     }
 
@@ -157,14 +155,12 @@ pub fn main() !void {
         if (failures > 0) {
             profile_collector.print(&log_state);
             try emitFallbackSummary(&log_state, &fallback_tracker);
-            log_state.stderr("verification failed: {d}
-", .{failures});
+            log_state.stderr("verification failed: {d}\n", .{failures});
             return error.VerificationFailed;
         }
         profile_collector.print(&log_state);
         try emitFallbackSummary(&log_state, &fallback_tracker);
-        log_state.stdout("verification passed
-", .{});
+        log_state.stdout("verification passed\n", .{});
         return;
     }
 
@@ -202,12 +198,10 @@ pub fn main() !void {
     if (failure_count > 0) {
         profile_collector.print(&log_state);
         try emitFallbackSummary(&log_state, &fallback_tracker);
-        log_state.stderr("verification failed: {d}
-", .{failure_count});
+        log_state.stderr("verification failed: {d}\n", .{failure_count});
         return error.VerificationFailed;
     }
     profile_collector.print(&log_state);
     try emitFallbackSummary(&log_state, &fallback_tracker);
-    log_state.stdout("verification passed
-", .{});
+    log_state.stdout("verification passed\n", .{});
 }

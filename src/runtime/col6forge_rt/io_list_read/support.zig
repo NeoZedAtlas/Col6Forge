@@ -342,7 +342,7 @@ pub fn listReadStreamReadTypedArg(stream: *ListReadStreamState, kind: u8, arg: ?
         },
         'l' => {
             const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *u8 = @ptrCast(@alignCast(ptr));
+            const out: *c_int = @ptrCast(@alignCast(ptr));
             out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
         },
         's' => {
@@ -440,7 +440,8 @@ pub fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count:
                 const token = listReadStreamReadToken(stream) orelse return stream.status;
                 const off = checkedMulI64(@intCast(idx), stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
+                const out_value: *c_int = @ptrCast(@alignCast(ptr));
+                out_value.* = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
             }
         },
         'c' => {

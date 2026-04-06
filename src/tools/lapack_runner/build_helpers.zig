@@ -8,9 +8,14 @@ const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
 const MAX_RUN_INPUT_BYTES = common.MAX_RUN_INPUT_BYTES;
 const MAX_RUN_OUTPUT_BYTES = common.MAX_RUN_OUTPUT_BYTES;
+const INSTALL_EXTRAS = common.INSTALL_EXTRAS;
 const LapackCase = common.LapackCase;
 const SupportLibs = common.SupportLibs;
 const io_compare = @import("io_compare.zig");
+const FORTRAN_FALLBACK = common.FORTRAN_FALLBACK;
+const runProcessCaptureWithInput = io_compare.runProcessCaptureWithInput;
+const fileExists = io_compare.fileExists;
+const trimCr = io_compare.trimCr;
 const ProcessResult = io_compare.ProcessResult;
 const ProcessRedirectResult = io_compare.ProcessRedirectResult;
 const runProcessCaptureWithInputPath = io_compare.runProcessCaptureWithInputPath;
@@ -20,7 +25,68 @@ const exitCode = io_compare.exitCode;
 const buildRunArtifactPath = io_compare.buildRunArtifactPath;
 const retryStdoutComparisonWithCapturedRuns = io_compare.retryStdoutComparisonWithCapturedRuns;
 const readFileLimitedAbsolute = io_compare.readFileLimitedAbsolute;
-fn buildSupportLibs(
+
+pub const RuntimeArtifacts = struct {
+    zig_object: ?[]const u8 = null,
+
+    pub fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
+        if (self.zig_object) |obj| {
+            allocator.free(obj);
+            self.zig_object = null;
+        }
+    }
+
+    pub fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
+        if (self.zig_object) |obj| {
+            try args.append(allocator, obj);
+        }
+    }
+};
+
+pub fn prepareRuntimeArtifacts(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    output_dir: []const u8,
+    backend: RuntimeBackend,
+    timeout_ms: u64,
+    runtime_cache_key: []const u8,
+    incremental: bool,
+) !RuntimeArtifacts {
+    return switch (backend) {
+        .c, .zig => blk: {
+            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "col6forge_rt.zig" });
+            defer allocator.free(runtime_src);
+            const runtime_obj_name = if (incremental)
+                try std.fmt.allocPrint(
+                    allocator,
+                    "col6forge_rt_v{d}_{s}_{s}.o",
+                    .{ CACHE_SCHEMA_VERSION, runtimeBackendTag(backend), runtime_cache_key },
+                )
+            else
+                try allocator.dupe(u8, "col6forge_rt.o");
+            defer allocator.free(runtime_obj_name);
+            const runtime_obj = try std.fs.path.join(allocator, &.{ output_dir, runtime_obj_name });
+            errdefer allocator.free(runtime_obj);
+            if (incremental and fileExistsAbsolute(runtime_obj)) {
+                break :blk .{ .zig_object = runtime_obj };
+            }
+            const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
+            defer allocator.free(emit_arg);
+            const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", "-fPIC", emit_arg, runtime_src };
+            const build = try runProcessCaptureWithInput(allocator, &cmd, output_dir, null, timeout_ms);
+            defer build.deinit(allocator);
+            if (build.timed_out) return error.RuntimeBackendBuildTimeout;
+            if (!isZeroExit(build.term)) {
+                std.log.err("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                return error.RuntimeBackendBuildFailed;
+            }
+            break :blk .{
+                .zig_object = runtime_obj,
+            };
+        },
+    };
+}
+pub fn buildSupportLibs(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     work_dir: []const u8,
@@ -98,7 +164,7 @@ fn buildSupportLibs(
     return .{ .blas_lib = blas_lib, .lapack_lib = lapack_lib, .tmg_lib = tmg_lib };
 }
 
-fn buildStaticLib(
+pub fn buildStaticLib(
     allocator: std.mem.Allocator,
     gfortran_cmd: []const u8,
     lib_path: []const u8,
@@ -149,7 +215,7 @@ fn buildStaticLib(
     }
 }
 
-fn buildSourcePaths(
+pub fn buildSourcePaths(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     case_dir: []const u8,
@@ -164,7 +230,7 @@ fn buildSourcePaths(
     return out;
 }
 
-fn resolveCaseSourcesFromMakefile(
+pub fn resolveCaseSourcesFromMakefile(
     allocator: std.mem.Allocator,
     suite_dir: []const u8,
     vars: []const []const u8,
@@ -196,7 +262,7 @@ fn resolveCaseSourcesFromMakefile(
     return out.toOwnedSlice(allocator);
 }
 
-fn extractMakeVarSources(
+pub fn extractMakeVarSources(
     allocator: std.mem.Allocator,
     makefile_text: []const u8,
     var_name: []const u8,
@@ -236,7 +302,7 @@ fn extractMakeVarSources(
     return out.toOwnedSlice(allocator);
 }
 
-fn appendObjectTokensFromLine(
+pub fn appendObjectTokensFromLine(
     allocator: std.mem.Allocator,
     out: *std.ArrayList([]const u8),
     line_raw: []const u8,
@@ -258,12 +324,12 @@ fn appendObjectTokensFromLine(
     return continued;
 }
 
-fn objectTokenToFortranSource(allocator: std.mem.Allocator, obj_token: []const u8) ![]const u8 {
+pub fn objectTokenToFortranSource(allocator: std.mem.Allocator, obj_token: []const u8) ![]const u8 {
     const stem = obj_token[0 .. obj_token.len - 2];
     return std.fmt.allocPrint(allocator, "{s}.f", .{stem});
 }
 
-fn collectFortranSources(
+pub fn collectFortranSources(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     dir_path: []const u8,
@@ -288,17 +354,17 @@ fn collectFortranSources(
     return list.toOwnedSlice(allocator);
 }
 
-fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
+pub fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
-fn isFortranFile(name: []const u8) bool {
+pub fn isFortranFile(name: []const u8) bool {
     if (std.mem.startsWith(u8, name, "._")) return false;
     const ext = std.fs.path.extension(name);
     return std.ascii.eqlIgnoreCase(ext, ".f") or std.ascii.eqlIgnoreCase(ext, ".f90");
 }
 
-fn compileReferenceCase(
+pub fn compileReferenceCase(
     allocator: std.mem.Allocator,
     gfortran_cmd: []const u8,
     out_exe: []const u8,
@@ -353,7 +419,7 @@ fn compileReferenceCase(
     return true;
 }
 
-fn selectTranslatedSources(
+pub fn selectTranslatedSources(
     allocator: std.mem.Allocator,
     source_paths: []const []const u8,
     translate_sources: bool,
@@ -367,7 +433,7 @@ fn selectTranslatedSources(
     return selected.toOwnedSlice(allocator);
 }
 
-fn shouldTranslate(path: []const u8) bool {
+pub fn shouldTranslate(path: []const u8) bool {
     const base = std.fs.path.basename(path);
     if (base.len == 0) return false;
     if (std.mem.startsWith(u8, base, "._")) return false;
@@ -378,12 +444,12 @@ fn shouldTranslate(path: []const u8) bool {
     return std.ascii.eqlIgnoreCase(ext, ".f") or std.ascii.eqlIgnoreCase(ext, ".f90");
 }
 
-const TranslateResult = struct {
+pub const TranslateResult = struct {
     sources: []const []const u8,
     ll_paths: []const []const u8,
 };
 
-fn translateSources(
+pub fn translateSources(
     allocator: std.mem.Allocator,
     ll_dir: []const u8,
     cache_dir: []const u8,
@@ -455,14 +521,14 @@ fn translateSources(
     };
 }
 
-fn sourceInList(list: []const []const u8, path: []const u8) bool {
+pub fn sourceInList(list: []const []const u8, path: []const u8) bool {
     for (list) |item| {
         if (std.mem.eql(u8, item, path)) return true;
     }
     return false;
 }
 
-fn compileTranslatedCase(
+pub fn compileTranslatedCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     gfortran_cmd: []const u8,
@@ -637,11 +703,11 @@ fn compileTranslatedCase(
     return true;
 }
 
-fn shouldLinkRuntimeArtifacts(translated_object_count: usize) bool {
+pub fn shouldLinkRuntimeArtifacts(translated_object_count: usize) bool {
     return translated_object_count > 0;
 }
 
-fn recordFallback(
+pub fn recordFallback(
     tracker: *fallback_policy.Tracker,
     kind: fallback_policy.Kind,
     src_path: []const u8,
@@ -650,37 +716,37 @@ fn recordFallback(
     std.log.warn("{s} fallback: {s}\n", .{ fallback_policy.kindEventLabel(kind), src_path });
 }
 
-fn formatFallbackSummary(buf: []u8, stats: fallback_policy.Stats) ![]const u8 {
+pub fn formatFallbackSummary(buf: []u8, stats: fallback_policy.Stats) ![]const u8 {
     var stream = std.io.fixedBufferStream(buf);
     try fallback_policy.writeSummary(stream.writer(), stats);
     return stream.getWritten();
 }
 
-fn formatFallbackBudgetExceeded(buf: []u8, stats: fallback_policy.Stats, max_fallbacks: usize) ![]const u8 {
+pub fn formatFallbackBudgetExceeded(buf: []u8, stats: fallback_policy.Stats, max_fallbacks: usize) ![]const u8 {
     var stream = std.io.fixedBufferStream(buf);
     try fallback_policy.writeBudgetExceeded(stream.writer(), stats, max_fallbacks);
     return stream.getWritten();
 }
 
-fn absolutizePath(allocator: std.mem.Allocator, root_path: []const u8, path: []const u8) ![]const u8 {
+pub fn absolutizePath(allocator: std.mem.Allocator, root_path: []const u8, path: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(path)) return allocator.dupe(u8, path);
     return std.fs.path.join(allocator, &.{ root_path, path });
 }
 
-fn buildExePath(allocator: std.mem.Allocator, dir: []const u8, base: []const u8) ![]const u8 {
+pub fn buildExePath(allocator: std.mem.Allocator, dir: []const u8, base: []const u8) ![]const u8 {
     const ext = if (builtin.os.tag == .windows) ".exe" else "";
     const file_name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, ext });
     defer allocator.free(file_name);
     return std.fs.path.join(allocator, &.{ dir, file_name });
 }
 
-fn writeFile(path: []const u8, contents: []const u8) !void {
+pub fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
 }
 
-fn emitPipelineToFile(
+pub fn emitPipelineToFile(
     allocator: std.mem.Allocator,
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
@@ -702,23 +768,23 @@ fn emitPipelineToFile(
     try out_writer.interface.flush();
 }
 
-fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
+pub fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
     return "llvm";
 }
 
-fn runtimeBackendTag(backend: RuntimeBackend) []const u8 {
+pub fn runtimeBackendTag(backend: RuntimeBackend) []const u8 {
     return switch (backend) {
         .c => "c",
         .zig => "zig",
     };
 }
 
-fn fileExistsAbsolute(path: []const u8) bool {
+pub fn fileExistsAbsolute(path: []const u8) bool {
     std.fs.accessAbsolute(path, .{}) catch return false;
     return true;
 }
 
-fn hashFileXx64(path: []const u8) !u64 {
+pub fn hashFileXx64(path: []const u8) !u64 {
     var file = try std.fs.openFileAbsolute(path, .{});
     defer file.close();
     var hasher = std.hash.XxHash64.init(0);
@@ -731,7 +797,7 @@ fn hashFileXx64(path: []const u8) !u64 {
     return hasher.final();
 }
 
-fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
+pub fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     var src = try std.fs.openFileAbsolute(src_path, .{});
     defer src.close();
     var dst = try std.fs.createFileAbsolute(dst_path, .{ .truncate = true });
@@ -744,7 +810,7 @@ fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     }
 }
 
-fn buildSourceLlCachePath(
+pub fn buildSourceLlCachePath(
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
     compiler_cache_key: []const u8,
@@ -760,13 +826,13 @@ fn buildSourceLlCachePath(
     return std.fs.path.join(allocator, &.{ cache_dir, name });
 }
 
-fn buildTranslatedObjCachePath(allocator: std.mem.Allocator, cache_dir: []const u8, ll_hash: u64) ![]const u8 {
+pub fn buildTranslatedObjCachePath(allocator: std.mem.Allocator, cache_dir: []const u8, ll_hash: u64) ![]const u8 {
     const name = try std.fmt.allocPrint(allocator, "obj_v{d}_{x:0>16}.o", .{ CACHE_SCHEMA_VERSION, ll_hash });
     defer allocator.free(name);
     return std.fs.path.join(allocator, &.{ cache_dir, name });
 }
 
-fn getOrBuildTranslatedObject(
+pub fn getOrBuildTranslatedObject(
     allocator: std.mem.Allocator,
     ll_path: []const u8,
     cache_dir: []const u8,
@@ -792,7 +858,7 @@ fn getOrBuildTranslatedObject(
     return obj_cache_path;
 }
 
-fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+pub fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
     const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
     defer allocator.free(runtime_dir);
 
@@ -837,7 +903,7 @@ fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+pub fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
     const src_dir = try std.fs.path.join(allocator, &.{ root_path, "src" });
     defer allocator.free(src_dir);
 
@@ -877,7 +943,7 @@ fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) 
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
-fn printPipelineError(path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) void {
+pub fn printPipelineError(path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err: anyerror) void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
@@ -888,4 +954,18 @@ fn printPipelineError(path: []const u8, diag_bag: *const Col6Forge.diag.Bag, err
     writer.interface.flush() catch {};
 }
 
-fn cleanupWorkDir(path: []const u8) void {
+pub fn cleanupWorkDir(path: []const u8) void {
+    if (builtin.os.tag == .windows) {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+        const args = [_][]const u8{ "cmd.exe", "/C", "rmdir", "/S", "/Q", path };
+        var child = std.process.Child.init(&args, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        _ = child.spawnAndWait() catch {};
+        return;
+    }
+    std.fs.cwd().deleteTree(path) catch {};
+}

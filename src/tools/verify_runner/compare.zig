@@ -6,8 +6,12 @@ const fallback_policy = common.fallback_policy;
 const RuntimeBackend = common.RuntimeBackend;
 const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
+const cases = @import("cases.zig");
+const runner_io = @import("runner_io.zig");
+const sanitizeWorkName = cases.sanitizeWorkName;
+const findCompanionInputPath = runner_io.findCompanionInputPath;
 
-const Comparator = struct {
+pub const Comparator = struct {
     pub const CompareResult = struct {
         ok: bool,
         diff: ?[]const u8,
@@ -107,7 +111,7 @@ fn testCaseStemEquals(input_path: []const u8, stem: []const u8) bool {
     return std.ascii.eqlIgnoreCase(base[0..dot], stem);
 }
 
-fn allowsProcessorDependentOutputDiff(input_path: []const u8) bool {
+pub fn allowsProcessorDependentOutputDiff(input_path: []const u8) bool {
     // FM905/FM907 are NIST list-directed output inspection tests whose text
     // rendering is explicitly processor-dependent.
     return testCaseStemEquals(input_path, "FM905") or

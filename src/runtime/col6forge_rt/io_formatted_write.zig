@@ -429,6 +429,10 @@ fn flushRemainingFormat(state: *FormattedWriteStreamState) c_int {
 fn finishWrite(state: *FormattedWriteStreamState) c_int {
     if (state.status != 0) return state.status;
     if (flushRemainingFormat(state) != 0) return state.status;
+    // Every formatted WRITE terminates the current record. If the lowered
+    // format already ended with a slash-generated newline, append one more
+    // newline here so the trailing slash materializes as a blank record.
+    if (!state.out.appendByte('\n')) return failStream(state, 1);
     if (!state.out.terminate()) return failStream(state, 1);
     defer col6forge_fmt_release_all();
     return switch (state.dest) {
@@ -608,6 +612,17 @@ test "formatted write stream flushes literal-only tabbed format before finish" {
         "                         12.34506.78 120.34 506.78 123.40 567.80",
         flattened.data.?[0..flattened.len],
     );
+}
+
+test "formatted write stream preserves trailing slash blank record" {
+    var buf = [_]u8{0} ** 32;
+    const fmt = "A\n";
+    const state_any = col6forge_write_internal_stream_begin(&buf, 8, 2, fmt) orelse return error.TestUnexpectedResult;
+    var value: c_int = 7;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_next(state_any, @ptrCast(&value), 'i', 0));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_finish(state_any));
+    try std.testing.expectEqualSlices(u8, "       7", buf[0..8]);
+    try std.testing.expectEqualSlices(u8, "        ", buf[8..16]);
 }
 
 test "formatted write stream flattens multi-line literal tab markers" {

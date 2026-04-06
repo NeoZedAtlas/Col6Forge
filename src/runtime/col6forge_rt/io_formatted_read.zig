@@ -18,7 +18,7 @@ const c_finish_stream = @extern(
     .{ .name = "col6forge_formatted_read_stream_finish" },
 );
 
-const FILE = opaque {};
+const FILE = support.FILE;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern fn fclose(stream: *FILE) c_int;
@@ -421,7 +421,7 @@ pub export fn col6forge_formatted_read_core(
             }
             assigned += 1;
         } else if (conv == 'L' and kind == 'L') {
-            const out: *u8 = @ptrCast(@alignCast(arg));
+            const out: *c_int = @ptrCast(@alignCast(arg));
             out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&field), used));
             assigned += 1;
         }

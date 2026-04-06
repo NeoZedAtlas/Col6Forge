@@ -4,7 +4,9 @@ const builtin = common.builtin;
 const Col6Forge = common.Col6Forge;
 const fallback_policy = common.fallback_policy;
 const RuntimeBackend = common.RuntimeBackend;
+const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
+const MAX_RUN_OUTPUT_BYTES = common.MAX_RUN_OUTPUT_BYTES;
 const LapackCase = common.LapackCase;
 const SupportLibs = common.SupportLibs;
 const ALL_CASES = common.ALL_CASES;
@@ -49,6 +51,8 @@ const computeRuntimeCacheKey = build_helpers.computeRuntimeCacheKey;
 const computeCompilerCacheKey = build_helpers.computeCompilerCacheKey;
 const printPipelineError = build_helpers.printPipelineError;
 const cleanupWorkDir = build_helpers.cleanupWorkDir;
+const RuntimeArtifacts = build_helpers.RuntimeArtifacts;
+const prepareRuntimeArtifacts = build_helpers.prepareRuntimeArtifacts;
 const ProcessResult = io_compare.ProcessResult;
 const ProcessRedirectResult = io_compare.ProcessRedirectResult;
 const runProcessCaptureWithInputPath = io_compare.runProcessCaptureWithInputPath;
@@ -89,12 +93,6 @@ const Options = struct {
     incremental: bool,
     clean_cache: bool,
     prepare_only: bool,
-};
-
-const SupportLibs = struct {
-    blas_lib: []const u8,
-    lapack_lib: []const u8,
-    tmg_lib: []const u8,
 };
 
 const ParseArgError = union(enum) {
@@ -494,67 +492,6 @@ fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
     if (std.ascii.eqlIgnoreCase(text, "c")) return .c;
     if (std.ascii.eqlIgnoreCase(text, "zig")) return .zig;
     return error.InvalidRuntimeBackend;
-}
-
-const RuntimeArtifacts = struct {
-    zig_object: ?[]const u8 = null,
-
-    fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
-        if (self.zig_object) |obj| {
-            allocator.free(obj);
-            self.zig_object = null;
-        }
-    }
-
-    fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
-        if (self.zig_object) |obj| {
-            try args.append(allocator, obj);
-        }
-    }
-};
-
-fn prepareRuntimeArtifacts(
-    allocator: std.mem.Allocator,
-    root_path: []const u8,
-    output_dir: []const u8,
-    backend: RuntimeBackend,
-    timeout_ms: u64,
-    runtime_cache_key: []const u8,
-    incremental: bool,
-) !RuntimeArtifacts {
-    return switch (backend) {
-        .c, .zig => blk: {
-            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "col6forge_rt.zig" });
-            defer allocator.free(runtime_src);
-            const runtime_obj_name = if (incremental)
-                try std.fmt.allocPrint(
-                    allocator,
-                    "col6forge_rt_v{d}_{s}_{s}.o",
-                    .{ CACHE_SCHEMA_VERSION, runtimeBackendTag(backend), runtime_cache_key },
-                )
-            else
-                try allocator.dupe(u8, "col6forge_rt.o");
-            defer allocator.free(runtime_obj_name);
-            const runtime_obj = try std.fs.path.join(allocator, &.{ output_dir, runtime_obj_name });
-            errdefer allocator.free(runtime_obj);
-            if (incremental and fileExistsAbsolute(runtime_obj)) {
-                break :blk .{ .zig_object = runtime_obj };
-            }
-            const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
-            defer allocator.free(emit_arg);
-            const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", "-fPIC", emit_arg, runtime_src };
-            const build = try runProcessCaptureWithInput(allocator, &cmd, output_dir, null, timeout_ms);
-            defer build.deinit(allocator);
-            if (build.timed_out) return error.RuntimeBackendBuildTimeout;
-            if (!isZeroExit(build.term)) {
-                std.log.err("zig runtime backend build failed\n{s}\n", .{build.stderr});
-                return error.RuntimeBackendBuildFailed;
-            }
-            break :blk .{
-                .zig_object = runtime_obj,
-            };
-        },
-    };
 }
 
 fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8, exact_case: ?[]const u8) ![]LapackCase {

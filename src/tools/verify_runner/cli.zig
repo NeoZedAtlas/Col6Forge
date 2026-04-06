@@ -7,10 +7,15 @@ const RuntimeBackend = common.RuntimeBackend;
 const CACHE_SCHEMA_VERSION = common.CACHE_SCHEMA_VERSION;
 const HOST_CACHE_TAG = common.HOST_CACHE_TAG;
 const runtime = @import("runtime.zig");
+const cases = @import("cases.zig");
+const runner_io = @import("runner_io.zig");
 
 const LogState = runtime.LogState;
 const parseRuntimeBackend = runtime.parseRuntimeBackend;
-const Options = struct {
+const defaultJobs = runtime.defaultJobs;
+const defaultGfortran = cases.defaultGfortran;
+const parseDialect = runner_io.parseDialect;
+pub const Options = struct {
     tests_dir: []const u8,
     filter: ?[]const u8,
     gfortran_path: []const u8,
@@ -42,7 +47,7 @@ const StageSamples = struct {
     }
 };
 
-const PipelineProfileCollector = struct {
+pub const PipelineProfileCollector = struct {
     enabled: bool,
     mutex: std.Thread.Mutex = .{},
     count: usize = 0,
@@ -62,11 +67,11 @@ const PipelineProfileCollector = struct {
     codegen_decls: StageSamples = .{},
     total: StageSamples = .{},
 
-    fn init(enabled: bool) PipelineProfileCollector {
+    pub fn init(enabled: bool) PipelineProfileCollector {
         return .{ .enabled = enabled };
     }
 
-    fn deinit(self: *PipelineProfileCollector, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *PipelineProfileCollector, allocator: std.mem.Allocator) void {
         self.read.deinit(allocator);
         self.normalize.deinit(allocator);
         self.parse.deinit(allocator);
@@ -83,7 +88,7 @@ const PipelineProfileCollector = struct {
         self.total.deinit(allocator);
     }
 
-    fn record(self: *PipelineProfileCollector, allocator: std.mem.Allocator, sample: Col6Forge.PipelineProfileSample) !void {
+    pub fn record(self: *PipelineProfileCollector, allocator: std.mem.Allocator, sample: Col6Forge.PipelineProfileSample) !void {
         if (!self.enabled) return;
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -106,7 +111,7 @@ const PipelineProfileCollector = struct {
         try self.total.append(allocator, sample.total_ns);
     }
 
-    fn print(self: *PipelineProfileCollector, log_state: *LogState) void {
+    pub fn print(self: *PipelineProfileCollector, log_state: *LogState) void {
         if (!self.enabled or self.count == 0) return;
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -209,7 +214,7 @@ const ParseArgsOutcome = union(enum) {
     failure: ParseArgError,
 };
 
-fn parseArgs(args: []const []const u8) ParseArgsOutcome {
+pub fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
     var tests_dir_set = false;
     var filter: ?[]const u8 = null;
@@ -403,7 +408,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     } };
 }
 
-fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
+pub fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
     var buffer: [512]u8 = undefined;
     var writer = file.writer(&buffer);
     switch (parse_err) {
@@ -424,7 +429,7 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
     try writer.interface.flush();
 }
 
-fn printUsage(file: std.fs.File) !void {
+pub fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
         \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--std <default|f77>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [--profile-summary] [-emit-llvm]
         \\Options:
@@ -436,7 +441,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
         \\  --runtime-backend  Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
-        \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
+        \\  --jobs <n>, -j <n> Parallel job count (default: 1 on Windows, else min(CPU cores, 4))
         \\  --fallback-policy <mode> Fallback gate: disabled, report (default), budget, or strict
         \\  --fail-on-fallback      Compatibility alias for --fallback-policy strict
         \\  --max-fallbacks <n>     Budget threshold for fallback-policy budget (or implicit budget mode)
@@ -455,7 +460,7 @@ fn printUsage(file: std.fs.File) !void {
     );
 }
 
-fn emitFallbackSummary(log_state: *LogState, tracker: *fallback_policy.Tracker) !void {
+pub fn emitFallbackSummary(log_state: *LogState, tracker: *fallback_policy.Tracker) !void {
     if (!tracker.policy.shouldPrintSummary()) return;
 
     var summary_buf: [256]u8 = undefined;
@@ -486,6 +491,13 @@ const TestSuite = enum {
     fcvs21_f95,
     fcsv78,
 };
+
+fn suiteTestsDir(suite: TestSuite) []const u8 {
+    return switch (suite) {
+        .fcvs21_f95 => "tests/NIST_F78_test_suite/fcvs21_f95",
+        .fcsv78 => "tests/NIST_F78_test_suite/FCSV78",
+    };
+}
 
 test "parseArgs recognizes verify fallback budget gate" {
     const args = [_][]const u8{

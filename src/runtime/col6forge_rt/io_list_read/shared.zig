@@ -577,7 +577,7 @@ pub fn applyListItemToArg(
             out.* = parseFloat64Token(item) orelse return false;
         },
         'l' => {
-            const out: *u8 = @ptrCast(@alignCast(ptr));
+            const out: *c_int = @ptrCast(@alignCast(ptr));
             out.* = @intCast(col6forge_parse_logical_field(asConstCStr(item.ptr), @intCast(cstrlenRaw(item))));
         },
         's' => {

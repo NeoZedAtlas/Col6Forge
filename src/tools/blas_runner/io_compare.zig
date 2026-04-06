@@ -7,7 +7,7 @@ pub const ProcessResult = struct {
     term: std.process.Child.Term,
     timed_out: bool,
 
-    fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
         allocator.free(self.stderr);
     }
@@ -94,7 +94,7 @@ pub const Comparator = struct {
         diff: ?[]const u8,
     };
 
-    fn compare(
+    pub fn compare(
         allocator: std.mem.Allocator,
         ref_term: std.process.Child.Term,
         test_term: std.process.Child.Term,
@@ -114,7 +114,7 @@ pub const Comparator = struct {
         return compareText(allocator, ref_stdout, test_stdout);
     }
 
-    fn compareText(allocator: std.mem.Allocator, expected: []const u8, actual: []const u8) !CompareResult {
+    pub fn compareText(allocator: std.mem.Allocator, expected: []const u8, actual: []const u8) !CompareResult {
         if (std.mem.eql(u8, expected, actual)) {
             return .{ .ok = true, .diff = null };
         }
