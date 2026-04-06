@@ -386,6 +386,29 @@ fn emitMergeViewElement(
     return .{ .name = select_name, .ty = plan.elem_ty, .is_ptr = false };
 }
 
+fn emitIndexedCompareReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    count: usize,
+    initial: ValueRef,
+    left: anytype,
+    right: anytype,
+    comptime emitLeft: anytype,
+    comptime emitRight: anytype,
+    comptime reduce_op: ast.BinaryOp,
+) EmitError!ValueRef {
+    var acc = initial;
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const lhs = try emitLeft(ctx, builder, left, idx);
+        const rhs = try emitRight(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, reduce_op, acc, cmp);
+    }
+    return acc;
+}
+
 fn emitWholeArrayMergeViewReduction(
     ctx: *Context,
     builder: anytype,
@@ -394,15 +417,7 @@ fn emitWholeArrayMergeViewReduction(
     right: MergeViewPlan,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitMergeViewElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
+    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergeViewElement, .or_);
 }
 
 fn emitMergeViewWholeArrayReduction(
@@ -413,15 +428,24 @@ fn emitMergeViewWholeArrayReduction(
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitMergeViewElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
+    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitMergeViewElement, emitWholeArrayElement, .or_);
+}
+
+fn emitWholeArrayCompareReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: anytype,
+    right: anytype,
+    comptime whole_array_on_left: bool,
+    comptime emitLeft: anytype,
+    comptime emitRight: anytype,
+) EmitError!ValueRef {
+    const count = if (whole_array_on_left)
+        left.count orelse return error.UnsupportedIntrinsicType
+    else
+        right.count orelse return error.UnsupportedIntrinsicType;
+    return emitIndexedCompareReduction(ctx, builder, op, count, .{ .name = "1", .ty = .i1, .is_ptr = false }, left, right, emitLeft, emitRight, .and_);
 }
 
 fn emitWholeArrayMergeViewReductionAll(
@@ -431,16 +455,7 @@ fn emitWholeArrayMergeViewReductionAll(
     left: WholeArrayView,
     right: MergeViewPlan,
 ) EmitError!ValueRef {
-    const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitMergeViewElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitMergeViewElement);
 }
 
 fn emitMergeViewWholeArrayReductionAll(
@@ -450,16 +465,7 @@ fn emitMergeViewWholeArrayReductionAll(
     left: MergeViewPlan,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitMergeViewElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, false, emitMergeViewElement, emitWholeArrayElement);
 }
 
 fn analyzeMergeComparePlan(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?MergeComparePlan {
@@ -522,15 +528,7 @@ fn emitWholeArrayMergeReduction(
     right: MergeComparePlan,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitMergePlanElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
+    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergePlanElement, .or_);
 }
 
 fn emitMergeWholeArrayReduction(
@@ -541,15 +539,7 @@ fn emitMergeWholeArrayReduction(
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitMergePlanElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
+    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitMergePlanElement, emitWholeArrayElement, .or_);
 }
 
 fn emitWholeArrayMergeReductionAll(
@@ -559,16 +549,7 @@ fn emitWholeArrayMergeReductionAll(
     left: WholeArrayView,
     right: MergeComparePlan,
 ) EmitError!ValueRef {
-    const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitMergePlanElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitMergePlanElement);
 }
 
 fn emitMergeWholeArrayReductionAll(
@@ -578,16 +559,7 @@ fn emitMergeWholeArrayReductionAll(
     left: MergeComparePlan,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitMergePlanElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, false, emitMergePlanElement, emitWholeArrayElement);
 }
 
 fn emitWholeArrayWholeArrayReduction(
@@ -598,15 +570,7 @@ fn emitWholeArrayWholeArrayReduction(
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
+    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitWholeArrayElement, .or_);
 }
 
 fn emitWholeArrayScalarReduction(
@@ -750,16 +714,7 @@ fn emitWholeArrayWholeArrayReductionAll(
     left: WholeArrayView,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitWholeArrayElement);
 }
 
 fn emitWholeArrayScalarReductionAll(

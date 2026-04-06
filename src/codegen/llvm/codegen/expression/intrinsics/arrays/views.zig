@@ -44,27 +44,30 @@ fn staticWholeArrayExprCount(ctx: *Context, expr_node: *Expr) ?usize {
         .call_or_subscript => |call| staticCallArrayCount(ctx, call),
         .binary => |bin| blk: {
             const shape = staticBinaryShape(ctx, bin) orelse break :blk null;
-            defer ctx.allocator.free(shape);
-            var count: usize = 1;
-            for (shape) |extent| {
-                count = std.math.mul(usize, count, extent) catch return null;
-            }
-            break :blk count;
+            break :blk staticOwnedShapeCount(ctx, shape);
         },
         .unary => |un| blk: {
             const shape = switch (un.op) {
                 .plus, .minus => staticExprShape(ctx, un.expr),
                 else => null,
             } orelse break :blk null;
-            defer ctx.allocator.free(shape);
-            var count: usize = 1;
-            for (shape) |extent| {
-                count = std.math.mul(usize, count, extent) catch return null;
-            }
-            break :blk count;
+            break :blk staticOwnedShapeCount(ctx, shape);
         },
         else => null,
     };
+}
+
+fn staticOwnedShapeCount(ctx: *Context, shape: []usize) ?usize {
+    defer ctx.allocator.free(shape);
+    return staticShapeCount(shape);
+}
+
+fn staticShapeCount(shape: []const usize) ?usize {
+    var count: usize = 1;
+    for (shape) |extent| {
+        count = std.math.mul(usize, count, extent) catch return null;
+    }
+    return count;
 }
 
 fn staticSymbolArrayCount(ctx: *Context, name: []const u8) ?usize {
@@ -86,12 +89,7 @@ fn staticCallArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
 
 fn staticSectionArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     const shape = staticSectionShape(ctx, call) orelse return null;
-    defer ctx.allocator.free(shape);
-    var count: usize = 1;
-    for (shape) |extent| {
-        count = std.math.mul(usize, count, extent) catch return null;
-    }
-    return count;
+    return staticOwnedShapeCount(ctx, shape);
 }
 
 fn staticSumArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
@@ -115,22 +113,12 @@ fn staticSumArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
 
 fn staticCountArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     const shape = staticCountShape(ctx, call) orelse return null;
-    defer ctx.allocator.free(shape);
-    var count: usize = 1;
-    for (shape) |extent| {
-        count = std.math.mul(usize, count, extent) catch return null;
-    }
-    return count;
+    return staticOwnedShapeCount(ctx, shape);
 }
 
 fn staticBoundsArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     const shape = staticBoundsShape(ctx, call) orelse return null;
-    defer ctx.allocator.free(shape);
-    var count: usize = 1;
-    for (shape) |extent| {
-        count = std.math.mul(usize, count, extent) catch return null;
-    }
-    return count;
+    return staticOwnedShapeCount(ctx, shape);
 }
 
 fn staticMergeArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
@@ -202,12 +190,7 @@ fn staticCallShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
 
 fn staticVectorSubscriptArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     const shape = staticVectorSubscriptShape(ctx, call) orelse return null;
-    defer ctx.allocator.free(shape);
-    var count: usize = 1;
-    for (shape) |extent| {
-        count = std.math.mul(usize, count, extent) catch return null;
-    }
-    return count;
+    return staticOwnedShapeCount(ctx, shape);
 }
 
 fn staticCountShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {
@@ -283,12 +266,7 @@ fn staticVectorSubscriptShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize
 
 fn staticReshapeArrayCount(ctx: *Context, call: ast.CallOrSubscript) ?usize {
     const shape = staticReshapeShape(ctx, call) orelse return null;
-    defer ctx.allocator.free(shape);
-    var count: usize = 1;
-    for (shape) |extent| {
-        count = std.math.mul(usize, count, extent) catch return null;
-    }
-    return count;
+    return staticOwnedShapeCount(ctx, shape);
 }
 
 fn staticReshapeShape(ctx: *Context, call: ast.CallOrSubscript) ?[]usize {

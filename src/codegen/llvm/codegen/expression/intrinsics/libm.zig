@@ -264,25 +264,61 @@ pub fn emitRuntimeComplexUnary(
     return .{ .name = tmp, .ty = target_ty, .is_ptr = false };
 }
 
-pub fn emitSin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+fn emitComplexAwareUnary(
+    ctx: *Context,
+    builder: anytype,
+    args: []*Expr,
+    comptime complex_emit: anytype,
+    comptime real_emit: anytype,
+) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitComplexCsin(ctx, builder, args);
+    if (complex.isComplexType(arg_ty)) return complex_emit(ctx, builder, args);
+    return real_emit(ctx, builder, args);
+}
+
+fn emitComplexAwareLibmUnary(
+    ctx: *Context,
+    builder: anytype,
+    args: []*Expr,
+    comptime complex_name_f32: []const u8,
+    comptime complex_name_f64: []const u8,
+    comptime real_name_f32: []const u8,
+    comptime real_name_f64: []const u8,
+) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, complex_name_f32, complex_name_f64, args);
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, real_name_f32, real_name_f64, value);
+}
+
+fn emitSinReal(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
 }
 
-pub fn emitCos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitComplexCcos(ctx, builder, args);
+fn emitCosReal(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
 }
 
-pub fn emitSqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitComplexCsqrt(ctx, builder, args);
+fn emitSqrtReal(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
+}
+
+fn emitLogReal(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitDoubleUnaryLibm(ctx, builder, "log", args);
+}
+
+pub fn emitSin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitComplexAwareUnary(ctx, builder, args, emitComplexCsin, emitSinReal);
+}
+
+pub fn emitCos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitComplexAwareUnary(ctx, builder, args, emitComplexCcos, emitCosReal);
+}
+
+pub fn emitSqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    return emitComplexAwareUnary(ctx, builder, args, emitComplexCsqrt, emitSqrtReal);
 }
 
 pub fn emitExp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -294,18 +330,11 @@ pub fn emitExp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRe
 }
 
 pub fn emitLog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitComplexClog(ctx, builder, args);
-    return emitDoubleUnaryLibm(ctx, builder, "log", args);
+    return emitComplexAwareUnary(ctx, builder, args, emitComplexClog, emitLogReal);
 }
 
 pub fn emitTan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ctan_ptr", "col6forge_ztan_ptr", args);
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    return emitLibmUnaryFloatValue(ctx, builder, "tanf", "tan", value);
+    return emitComplexAwareLibmUnary(ctx, builder, args, "col6forge_ctan_ptr", "col6forge_ztan_ptr", "tanf", "tan");
 }
 
 pub fn emitAsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -321,19 +350,11 @@ pub fn emitAcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueR
 }
 
 pub fn emitSinh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_csinh_ptr", "col6forge_zsinh_ptr", args);
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    return emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", value);
+    return emitComplexAwareLibmUnary(ctx, builder, args, "col6forge_csinh_ptr", "col6forge_zsinh_ptr", "sinhf", "sinh");
 }
 
 pub fn emitCosh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ccosh_ptr", "col6forge_zcosh_ptr", args);
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    return emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", value);
+    return emitComplexAwareLibmUnary(ctx, builder, args, "col6forge_ccosh_ptr", "col6forge_zcosh_ptr", "coshf", "cosh");
 }
 
 pub fn emitAlog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -349,11 +370,7 @@ pub fn emitAlog10(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Valu
 }
 
 pub fn emitTanh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    const arg_ty = try casting.exprType(ctx, args[0]);
-    if (complex.isComplexType(arg_ty)) return emitRuntimeComplexUnary(ctx, builder, "col6forge_ctanh_ptr", "col6forge_ztanh_ptr", args);
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    return emitLibmUnaryFloatValue(ctx, builder, "tanhf", "tanh", value);
+    return emitComplexAwareLibmUnary(ctx, builder, args, "col6forge_ctanh_ptr", "col6forge_ztanh_ptr", "tanhf", "tanh");
 }
 
 pub fn emitAtan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
