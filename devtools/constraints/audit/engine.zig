@@ -11,10 +11,12 @@ const zig_ast = @import("zig_ast/mod.zig");
 const CombinedSymbolIndex = struct {
     lexical: symbols.Index,
     ast: ?symbols.Index = null,
+    ast_imports: ?zig_ast.imports.Index = null,
 
     fn deinit(self: *CombinedSymbolIndex, allocator: std.mem.Allocator) void {
         self.lexical.deinit(allocator);
         if (self.ast) |*index| index.deinit(allocator);
+        if (self.ast_imports) |*index| index.deinit(allocator);
         self.* = undefined;
     }
 
@@ -56,6 +58,10 @@ const CombinedSymbolIndex = struct {
         return firstNonNull(self.findAstMemberAccessPath(needle), self.lexical.findMemberAccessPath(needle));
     }
 
+    fn findImportLiteralContaining(self: CombinedSymbolIndex, text: []const u8, fragment: []const u8) ?usize {
+        return firstNonNull(self.findAstImportLiteralContaining(fragment), findLexicalImportLiteralContaining(text, fragment));
+    }
+
     fn findAstFunctionCall(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
         const index = self.ast orelse return null;
         return index.findFunctionCall(symbol_name);
@@ -79,6 +85,11 @@ const CombinedSymbolIndex = struct {
     fn findAstMemberAccessPath(self: CombinedSymbolIndex, needle: []const u8) ?usize {
         const index = self.ast orelse return null;
         return index.findMemberAccessPath(needle);
+    }
+
+    fn findAstImportLiteralContaining(self: CombinedSymbolIndex, fragment: []const u8) ?usize {
+        const index = self.ast_imports orelse return null;
+        return index.findLiteralContaining(fragment);
     }
 };
 
@@ -140,6 +151,7 @@ fn scanFile(
     var symbol_index: CombinedSymbolIndex = .{
         .lexical = try symbols.buildIndex(allocator, text),
         .ast = try zig_ast.index.buildIndex(allocator, text),
+        .ast_imports = try zig_ast.imports.buildIndex(allocator, text),
     };
     defer symbol_index.deinit(allocator);
 
@@ -168,11 +180,8 @@ fn applyFileRule(
         },
         .forbidden_import_path_fragment => {
             const fragment = rule.needle orelse return error.AuditRuleMissingNeedle;
-            var cursor: usize = 0;
-            while (imports.findNextLiteral(text, cursor)) |match| {
-                cursor = match.next_cursor;
-                if (std.mem.indexOf(u8, match.literal, fragment) == null) continue;
-                reportViolation(rel_path, match.start_idx, text, rule.id, rule.title, match.literal);
+            if (symbol_index.findImportLiteralContaining(text, fragment)) |idx| {
+                reportViolation(rel_path, idx, text, rule.id, rule.title, fragment);
                 failures.* += 1;
             }
         },
@@ -217,7 +226,7 @@ fn applyOwnedSymbolUsage(
     const first_use_idx = symbol_index.findFirstSymbolUse(symbol_name) orelse return;
 
     if (rule.needle) |fragment| {
-        if (!imports.hasLiteralContaining(text, fragment)) {
+        if (symbol_index.findImportLiteralContaining(text, fragment) == null) {
             reportViolation(rel_path, first_use_idx, text, rule.id, rule.title, fragment);
             failures.* += 1;
             return;
@@ -242,6 +251,15 @@ fn applyOwnedSymbolUsage(
 
 fn firstNonNull(primary: ?usize, fallback: ?usize) ?usize {
     return primary orelse fallback;
+}
+
+fn findLexicalImportLiteralContaining(text: []const u8, fragment: []const u8) ?usize {
+    var cursor: usize = 0;
+    while (imports.findNextLiteral(text, cursor)) |match| {
+        cursor = match.next_cursor;
+        if (std.mem.indexOf(u8, match.literal, fragment) != null) return match.start_idx;
+    }
+    return null;
 }
 
 fn scanBareErrorCodeLiterals(
