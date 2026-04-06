@@ -27,21 +27,34 @@ pub fn analyzeKnownArrayFunctionActual(
     const sig = ctx.lookupKnownProcedureSig(call.name) orelse return null;
     if (sig.result_rank == 0) return null;
     const result_spec = sig.result_type_spec orelse return null;
-    if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
+    if (result_spec.lowered_kind == .derived) return null;
 
     const extents = try materializeKnownArrayResultExtents(ctx, builder, sig, call.args, hooks) orelse return null;
-    const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
+    const result_char_len = if (result_spec.lowered_kind == .character) result_spec.char_len orelse 1 else null;
+    const elem_ty: IRType = if (result_char_len != null) .i8 else storageIRTypeForProcedureResult(ctx, result_spec);
     const elem_count = try hooks.emitExtentProductI64(ctx, builder, extents);
-    const result_ptr = try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
+    const result_ptr = if (result_char_len) |char_len|
+        try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, try hooks.emitMulI64(ctx, builder, elem_count, hooks.i64Const(ctx, @intCast(char_len))))
+    else
+        try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
 
     var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer abi_args.deinit();
     var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    try appendKnownArrayProcedureCallArgs(ctx, builder, &abi_args, &owned_heap_args, call.args, sig, hooks);
+    try appendKnownArrayProcedureCallArgs(
+        ctx,
+        builder,
+        &abi_args,
+        &owned_heap_args,
+        call.args,
+        sig,
+        if (result_char_len) |char_len| try ctx.abiCharacterLenConst(@intCast(char_len)) else null,
+        hooks,
+    );
 
-    const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .void, call.args, false);
+    const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .void, call.args, result_char_len != null);
     try builder.callTyped(null, .void, fn_name, abi_args.items);
     try hooks.emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
 
@@ -50,7 +63,7 @@ pub fn analyzeKnownArrayFunctionActual(
         .elem_ty = elem_ty,
         .extents = extents,
         .multipliers = try hooks.emitContiguousMultipliers(ctx, builder, extents),
-        .address_scale = hooks.i64Const(ctx, 1),
+        .address_scale = if (result_char_len) |char_len| hooks.i64Const(ctx, @intCast(char_len)) else hooks.i64Const(ctx, 1),
         .storage = .materialized_temp,
         .owned_heap_ptr = result_ptr,
         .contiguous = true,
@@ -196,21 +209,34 @@ pub fn analyzeKnownArrayProcedureComponentActual(
     const proc_sig = component.procedure_sig orelse return null;
     if (proc_sig.result_rank == 0) return null;
     const result_spec = proc_sig.result_type_spec orelse return null;
-    if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
+    if (result_spec.lowered_kind == .derived) return null;
 
     const actuals = try buildProcedureComponentArrayActuals(ctx, comp, component, proc_sig);
     defer ctx.allocator.free(actuals);
     const extents = try materializeKnownArrayResultExtents(ctx, builder, proc_sig, actuals, hooks) orelse return null;
-    const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
+    const result_char_len = if (result_spec.lowered_kind == .character) result_spec.char_len orelse 1 else null;
+    const elem_ty: IRType = if (result_char_len != null) .i8 else storageIRTypeForProcedureResult(ctx, result_spec);
     const elem_count = try hooks.emitExtentProductI64(ctx, builder, extents);
-    const result_ptr = try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
+    const result_ptr = if (result_char_len) |char_len|
+        try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, try hooks.emitMulI64(ctx, builder, elem_count, hooks.i64Const(ctx, @intCast(char_len))))
+    else
+        try hooks.emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
 
     var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer abi_args.deinit();
     var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    try appendKnownArrayProcedureCallArgs(ctx, builder, &abi_args, &owned_heap_args, actuals, proc_sig, hooks);
+    try appendKnownArrayProcedureCallArgs(
+        ctx,
+        builder,
+        &abi_args,
+        &owned_heap_args,
+        actuals,
+        proc_sig,
+        if (result_char_len) |char_len| try ctx.abiCharacterLenConst(@intCast(char_len)) else null,
+        hooks,
+    );
 
     const slot_ptr = try memory.emitComponentStoragePtr(ctx, builder, .{
         .base = comp.base,
@@ -228,7 +254,7 @@ pub fn analyzeKnownArrayProcedureComponentActual(
         .elem_ty = elem_ty,
         .extents = extents,
         .multipliers = try hooks.emitContiguousMultipliers(ctx, builder, extents),
-        .address_scale = hooks.i64Const(ctx, 1),
+        .address_scale = if (result_char_len) |char_len| hooks.i64Const(ctx, @intCast(char_len)) else hooks.i64Const(ctx, 1),
         .storage = .materialized_temp,
         .owned_heap_ptr = result_ptr,
         .contiguous = true,
@@ -242,6 +268,7 @@ fn appendKnownArrayProcedureCallArgs(
     owned_heap_args: *std.array_list.Managed(ValueRef),
     args: []*Expr,
     sig: ast.sema.KnownProcedureSig,
+    result_len: ?ValueRef,
     comptime hooks: anytype,
 ) !void {
     var resolved_args = std.array_list.Managed(ArgPointerResult).init(ctx.allocator);
@@ -263,6 +290,9 @@ fn appendKnownArrayProcedureCallArgs(
             try hooks.materializeActualDescriptor(ctx, builder, arg, sig.args[idx]);
         try abi_args.append(desc.extent_ptr);
         try abi_args.append(desc.multiplier_ptr);
+    }
+    if (result_len) |len_val| {
+        try abi_args.append(len_val);
     }
     for (args) |arg| {
         if (try hooks.emitCharacterLengthArg(ctx, builder, arg)) |len_val| {
@@ -557,20 +587,94 @@ fn parseKnownShapeFactor(
     }
     if (parser.parseInteger()) |value| return hooks.i64Const(ctx, value);
     const designator = parser.parseDesignator() orelse return null;
-    if (std.ascii.eqlIgnoreCase(designator, "size")) {
-        if (!parser.consume('(')) return null;
-        const size_name = parser.parseDesignator() orelse return null;
-        if (!parser.consume(',')) return null;
-        const dim_value = parser.parseInteger() orelse return null;
-        if (dim_value <= 0 or !parser.consume(')')) return null;
-        const actual_expr = (try buildKnownShapeDesignatorExpr(ctx, sig, args, size_name)) orelse return null;
-        return try emitKnownActualDimExtent(ctx, builder, actual_expr, @intCast(dim_value - 1), hooks);
-    }
     if (parser.consume('(')) {
+        if (std.ascii.eqlIgnoreCase(designator, "len")) {
+            return parseKnownShapeLenCall(ctx, builder, sig, args, parser);
+        }
+        if (std.ascii.eqlIgnoreCase(designator, "size")) {
+            return parseKnownShapeSizeCall(ctx, builder, sig, args, parser, hooks);
+        }
+        if (std.ascii.eqlIgnoreCase(designator, "min") or std.ascii.eqlIgnoreCase(designator, "max")) {
+            return parseKnownShapeMinMaxCall(ctx, builder, sig, args, parser, designator, hooks);
+        }
         if (!parser.consume(')')) return null;
         return emitKnownShapeZeroArgCallValue(ctx, builder, designator);
     }
     return emitKnownShapeDesignatorValue(ctx, builder, sig, args, designator, hooks);
+}
+
+fn parseKnownShapeLenCall(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+) anyerror!?ValueRef {
+    const len_name = parser.parseDesignator() orelse return null;
+    const actual_expr = (try buildKnownShapeDesignatorExpr(ctx, sig, args, len_name)) orelse return null;
+    if (!parser.consume(')')) return null;
+    var len_val = (try dispatch.emitAbiCharacterLenValue(ctx, builder, actual_expr)) orelse return null;
+    if (len_val.ty != .i64) len_val = try casting.coerce(ctx, builder, len_val, .i64);
+    return len_val;
+}
+
+fn parseKnownShapeSizeCall(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+    comptime hooks: anytype,
+) anyerror!?ValueRef {
+    const size_name = parser.parseDesignator() orelse return null;
+    const actual_expr = (try buildKnownShapeDesignatorExpr(ctx, sig, args, size_name)) orelse return null;
+
+    if (parser.consume(')')) {
+        return emitKnownActualElemCount(ctx, builder, actual_expr, hooks);
+    }
+    if (!parser.consume(',')) return null;
+
+    const keyword_start = parser.index;
+    if (parser.parseIdentifier()) |maybe_kw| {
+        if (std.ascii.eqlIgnoreCase(maybe_kw, "dim")) {
+            if (!parser.consume('=')) return null;
+        } else {
+            parser.index = keyword_start;
+        }
+    }
+
+    const dim_value = parser.parseInteger() orelse return null;
+    if (dim_value <= 0 or !parser.consume(')')) return null;
+    return try emitKnownActualDimExtent(ctx, builder, actual_expr, @intCast(dim_value - 1), hooks);
+}
+
+fn parseKnownShapeMinMaxCall(
+    ctx: *Context,
+    builder: anytype,
+    sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
+    parser: *ShapeExprParser,
+    name: []const u8,
+    comptime hooks: anytype,
+) anyerror!?ValueRef {
+    const lhs = (try parseKnownShapeExpr(ctx, builder, sig, args, parser, hooks)) orelse return null;
+    if (!parser.consume(',')) return null;
+    const rhs = (try parseKnownShapeExpr(ctx, builder, sig, args, parser, hooks)) orelse return null;
+    if (!parser.consume(')')) return null;
+
+    const cmp_tmp = try ctx.nextTemp();
+    const pred = if (std.ascii.eqlIgnoreCase(name, "min")) "sle" else "sge";
+    try builder.compare(cmp_tmp, "icmp", pred, .i64, lhs, rhs);
+
+    const select_tmp = try ctx.nextTemp();
+    try builder.select(
+        select_tmp,
+        .i64,
+        .{ .name = cmp_tmp, .ty = .i1, .is_ptr = false },
+        lhs,
+        rhs,
+    );
+    return .{ .name = select_tmp, .ty = .i64, .is_ptr = false };
 }
 
 fn emitKnownShapeIdentifierValue(
@@ -625,6 +729,17 @@ fn emitKnownShapeDesignatorValue(
     if (value.ty == .ptr) return null;
     if (value.ty != .i64) value = try casting.coerce(ctx, builder, value, .i64);
     return value;
+}
+
+fn emitKnownActualElemCount(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    comptime hooks: anytype,
+) anyerror!?ValueRef {
+    const actual = (try hooks.resolveArrayActual(ctx, builder, expr)) orelse return null;
+    try actual.validate();
+    return try hooks.emitExtentProductI64(ctx, builder, actual.extents);
 }
 
 fn emitKnownShapeZeroArgCallValue(

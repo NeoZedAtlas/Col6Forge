@@ -480,6 +480,37 @@ fn wholeProjectedComponentView(
     };
 }
 
+fn wholeActualView(
+    ctx: *Context,
+    builder: anytype,
+    expr_node: *Expr,
+) EmitError!?WholeArrayView {
+    const actual = (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) orelse return null;
+    if (!actual.contiguous) {
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+        return null;
+    }
+    if (actual.elem_ty == .i8) {
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+        return null;
+    }
+    if (!std.mem.eql(u8, actual.address_scale.name, "1") or actual.address_scale.ty != .i64 or actual.address_scale.is_ptr) {
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+        return null;
+    }
+    const count = staticIntrinsicArrayResultCount(ctx, actual.extents) orelse {
+        try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+        return null;
+    };
+    return .{
+        .base_ptr = actual.base_ptr,
+        .elem_ty = actual.elem_ty,
+        .count = count,
+        .stride_bytes = 0,
+        .owned_heap_ptr = actual.owned_heap_ptr,
+    };
+}
+
 pub fn supportedWholeArrayView(
     ctx: *Context,
     builder: anytype,
@@ -487,9 +518,9 @@ pub fn supportedWholeArrayView(
 ) EmitError!?WholeArrayView {
     return switch (expr_node.*) {
         .identifier => |name| wholeArraySymbolView(ctx, name),
-        .call_or_subscript => |call| try wholeArraySectionView(ctx, builder, call),
-        .component => |comp| try wholeProjectedComponentView(ctx, builder, comp),
-        else => null,
+        .call_or_subscript => |call| (try wholeArraySectionView(ctx, builder, call)) orelse try wholeActualView(ctx, builder, expr_node),
+        .component => |comp| (try wholeProjectedComponentView(ctx, builder, comp)) orelse try wholeActualView(ctx, builder, expr_node),
+        else => try wholeActualView(ctx, builder, expr_node),
     };
 }
 

@@ -37,6 +37,7 @@ const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const impliedLoopDim = implied_helpers.impliedLoopDim;
 const impliedStrideForDim = implied_helpers.impliedStrideForSymbolDim;
 const resolveArrayActual = @import("../../codegen/expression/call/array_actuals.zig").resolveArrayActual;
+const emitArrayActualElementPtr = @import("../../codegen/expression/call/array_actuals.zig").emitArrayActualElementPtr;
 const emitExtentProductI64 = @import("../../codegen/expression/call/array_actuals.zig").emitExtentProductI64;
 const emitOwnedHeapActualFree = @import("../../codegen/expression/call/array_actuals.zig").emitOwnedHeapActualFree;
 const valueRefEquals = @import("../../codegen/expression/call/array_actuals.zig").valueRefEquals;
@@ -405,6 +406,11 @@ fn emitListWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: [
             chunk_start = idx + 1;
             continue;
         }
+        if (try emitResolvedCharacterArrayWriteIfPossible(ctx, builder, state, args[idx])) {
+            try emitListWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
+            chunk_start = idx + 1;
+            continue;
+        }
         if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
             try emitListWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
             try emitListWriteBlockTransfer(ctx, builder, state, transfer);
@@ -537,6 +543,73 @@ fn emitDynamicCharacterWholeArrayWriteIfPossible(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+    return true;
+}
+
+fn emitResolvedCharacterArrayWriteIfPossible(
+    ctx: *Context,
+    builder: anytype,
+    state: ValueRef,
+    arg: *ast.Expr,
+) EmitError!bool {
+    const actual = (try resolveArrayActual(ctx, builder, arg)) orelse return false;
+    errdefer emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr) catch {};
+    if (actual.elem_ty != .i8) return false;
+
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, &.{actual.base_ptr});
+    const kinds_ptr = try emitKindArray(ctx, builder, &[_]u8{'s'});
+    const lens_name = try ctx.nextTemp();
+    try builder.alloca(lens_name, .i32);
+    const lens_ptr = ValueRef{ .name = lens_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(try coerceRuntimeI32(ctx, builder, actual.address_scale), lens_ptr);
+    const arg_count = try ctx.constI32(1);
+    const write_decl = try ctx.ensureDeclRaw("col6forge_write_list_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
+
+    const slot_gep = try ctx.nextTemp();
+    try builder.gep(slot_gep, .ptr, ptr_array, try ctx.constI32(0));
+    const slot_ptr = ValueRef{ .name = slot_gep, .ty = .ptr, .is_ptr = true };
+
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(utils.zeroValue(.i64), idx_ptr);
+
+    const count = try emitExtentProductI64(ctx, builder, actual.extents);
+    const loop_head = try ctx.nextLabel("list_write_actual_char_head");
+    const loop_body = try ctx.nextLabel("list_write_actual_char_body");
+    const loop_exit = try ctx.nextLabel("list_write_actual_char_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, count);
+    try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const elem_ptr = try emitArrayActualElementPtr(
+        ctx,
+        builder,
+        actual.base_ptr,
+        actual.elem_ty,
+        actual.extents,
+        actual.multipliers,
+        actual.address_scale,
+        actual.contiguous,
+        idx_val,
+    );
+    try builder.store(.{ .name = elem_ptr.name, .ty = .ptr, .is_ptr = false }, slot_ptr);
+    try builder.callTyped(null, .i32, write_decl, &.{ state, ptr_array, kinds_ptr, lens_ptr, arg_count });
+
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i64, idx_val, try ctx.constI64(1));
+    try builder.store(.{ .name = next_tmp, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    try emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
     return true;
 }
 
