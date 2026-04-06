@@ -6,6 +6,7 @@ const expr_call = @import("../../codegen/expression/call/mod.zig");
 const array_actuals = @import("../../codegen/expression/call/array_actuals.zig");
 const call_shared = @import("../../codegen/expression/call/shared.zig");
 const expr_memory = @import("../../codegen/expression/memory.zig");
+const array_shape_checks = @import("../../shared/array_shape_checks.zig");
 const utils = @import("../../codegen/utils.zig");
 const cfg = @import("../cfg.zig");
 const ir = @import("../../../ir.zig");
@@ -177,33 +178,15 @@ fn emitRequireSameArrayShape(
     lhs_extents: []const ValueRef,
     rhs_extents: []const ValueRef,
 ) EmitError!void {
-    if (lhs_extents.len != rhs_extents.len) return error.UnsupportedArrayActual;
-    if (lhs_extents.len == 0) return;
-
-    var all_equal = ValueRef{ .name = "true", .ty = .i1, .is_ptr = false };
-    for (lhs_extents, rhs_extents) |lhs_extent, rhs_extent| {
-        const cmp_name = try ctx.nextTemp();
-        try builder.compare(cmp_name, "icmp", "eq", .i64, lhs_extent, rhs_extent);
-        const cmp_val = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
-        if (std.mem.eql(u8, all_equal.name, "true")) {
-            all_equal = cmp_val;
-        } else {
-            const and_name = try ctx.nextTemp();
-            try builder.binary(and_name, "and", .i1, all_equal, cmp_val);
-            all_equal = .{ .name = and_name, .ty = .i1, .is_ptr = false };
-        }
-    }
-
-    const ok_label = try ctx.nextLabel("elemental_call_shape_ok");
-    const fail_label = try ctx.nextLabel("elemental_call_shape_fail");
-    try builder.brCond(all_equal, ok_label, fail_label);
-
-    try builder.label(fail_label);
-    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
-    try builder.callTyped(null, .void, trap_name, &.{});
-    try builder.emitUnreachable();
-
-    try builder.label(ok_label);
+    return array_shape_checks.emitRequireEqualExtents(
+        ctx,
+        builder,
+        lhs_extents,
+        rhs_extents,
+        error.UnsupportedArrayActual,
+        "elemental_call_shape_ok",
+        "elemental_call_shape_fail",
+    );
 }
 
 fn emitExtentProductI64(

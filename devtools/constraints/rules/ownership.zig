@@ -198,6 +198,13 @@ const implied_helper_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/codegen/llvm/shared/memory_intrinsics.zig",
     },
+    .{
+        .id = "AR-OWN-040",
+        .title = "array shape equality check helper owner",
+        .symbol_name = "emitRequireEqualExtents",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/shared/array_shape_checks.zig",
+    },
 };
 
 const runtime_arg_specs = [_]OwnerSpec{
