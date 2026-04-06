@@ -8,6 +8,7 @@ const llvm_types = @import("../../../../../types.zig");
 const casting = @import("../../../casting.zig");
 const runtime_fail = @import("../../../../runtime_fail.zig");
 const shared = @import("../../shared.zig");
+const memory_intrinsics = @import("../../../../../shared/memory_intrinsics.zig");
 
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -435,21 +436,8 @@ pub fn emitContiguousMultipliers(
     return multipliers;
 }
 
-pub fn emitMemsetByte(
-    ctx: *Context,
-    builder: anytype,
-    ptr: ValueRef,
-    size: ValueRef,
-    byte_value: ValueRef,
-) !void {
-    const memset_name = try ctx.ensureDeclRaw("llvm.memset.p0.i64", .void, &[_]IRType{ .ptr, .i8, .i64, .i1 }, false);
-    try builder.callTyped(null, .void, memset_name, &.{ ptr, byte_value, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
-}
-
-pub fn emitMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) !void {
-    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]IRType{ .ptr, .ptr, .i64, .i1 }, false);
-    try builder.callTyped(null, .void, memcpy_name, &.{ dst_ptr, src_ptr, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
-}
+pub const emitMemsetByte = memory_intrinsics.emitMemsetByte;
+pub const emitMemcpyBytes = memory_intrinsics.emitMemcpyBytes;
 
 pub fn emitMinI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
     const cmp_name = try ctx.nextTemp();

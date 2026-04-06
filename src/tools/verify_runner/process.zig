@@ -46,6 +46,46 @@ const isZeroExit = runner_io.isZeroExit;
 const allowsProcessorDependentOutputDiff = compare.allowsProcessorDependentOutputDiff;
 const tryRecoverRuntimeCacheAndRelink = runtime.tryRecoverRuntimeCacheAndRelink;
 const logProgress = runtime.logProgress;
+
+fn emitTranslatedLl(
+    allocator: std.mem.Allocator,
+    abs_input_path: []const u8,
+    options: Options,
+    ll_path: []const u8,
+    ll_cache_path: ?[]const u8,
+    log_state: *LogState,
+    profile_collector: *PipelineProfileCollector,
+) !bool {
+    var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
+    defer pipeline_diag_bag.deinit();
+    emitPipelineToFile(
+        allocator,
+        abs_input_path,
+        options.emit,
+        ll_path,
+        options.dialect,
+        options.profile_summary,
+        &pipeline_diag_bag,
+    ) catch |err| {
+        try reportPipelineError(log_state, &pipeline_diag_bag, abs_input_path, err);
+        return false;
+    };
+    if (options.profile_summary) {
+        if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
+            profile_collector.record(allocator, sample) catch |err| {
+                log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
+            };
+        }
+    }
+    if (ll_cache_path) |cache_path| {
+        copyFileAbsolute(ll_path, cache_path) catch |err| {
+            log_state.stderr("failed to update cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
+    }
+    return true;
+}
+
 pub fn processCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
@@ -223,37 +263,25 @@ pub fn processCase(
                 return false;
             };
         } else {
+            var used_cached_ll = false;
             if (fileExistsAbsolute(ll_cache_path.?)) {
                 copyFileAbsolute(ll_cache_path.?, ll_path) catch |err| {
                     log_state.stderr("failed to copy cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
                     return false;
                 };
+                used_cached_ll = true;
             } else {
-                var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
-                defer pipeline_diag_bag.deinit();
-                emitPipelineToFile(
+                if (!(try emitTranslatedLl(
                     allocator,
                     abs_input_path,
-                    options.emit,
+                    options,
                     ll_path,
-                    options.dialect,
-                    options.profile_summary,
-                    &pipeline_diag_bag,
-                ) catch |err| {
-                    try reportPipelineError(log_state, &pipeline_diag_bag, abs_input_path, err);
+                    ll_cache_path.?,
+                    log_state,
+                    profile_collector,
+                ))) {
                     return false;
-                };
-                if (options.profile_summary) {
-                    if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
-                        profile_collector.record(allocator, sample) catch |err| {
-                            log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
-                        };
-                    }
                 }
-                copyFileAbsolute(ll_path, ll_cache_path.?) catch |err| {
-                    log_state.stderr("failed to update cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-                    return false;
-                };
             }
 
             const object_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
@@ -278,32 +306,63 @@ pub fn processCase(
                 return false;
             }
             if (!isZeroExit(object_compile.term)) {
-                log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, object_compile.stderr });
-                return false;
+                if (used_cached_ll) {
+                    log_state.stderr("cached ll rejected by zig cc; regenerating: {s}\n", .{abs_input_path});
+                    deleteFileAbsoluteIfExists(ll_path);
+                    if (!(try emitTranslatedLl(
+                        allocator,
+                        abs_input_path,
+                        options,
+                        ll_path,
+                        ll_cache_path.?,
+                        log_state,
+                        profile_collector,
+                    ))) {
+                        return false;
+                    }
+                    const retry_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+                    if (retry_timeout != null and retry_timeout.? == 0) {
+                        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+                        cleanupWorkDir(work_dir);
+                        return false;
+                    }
+                    const retry_compile = runProcessCapture(
+                        allocator,
+                        &.{ "zig", "cc", "-O0", "-c", "-o", translated_obj_path, ll_path },
+                        work_dir,
+                        retry_timeout,
+                    ) catch |err| {
+                        log_state.stderr("zig cc failed after ll regenerate: {s} ({s})\n", .{ ll_path, @errorName(err) });
+                        return false;
+                    };
+                    defer retry_compile.deinit(allocator);
+                    if (retry_compile.timed_out) {
+                        log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+                        cleanupWorkDir(work_dir);
+                        return false;
+                    }
+                    if (!isZeroExit(retry_compile.term)) {
+                        log_state.stderr("zig cc compile failed after ll regenerate: {s}\n{s}\n", .{ ll_path, retry_compile.stderr });
+                        return false;
+                    }
+                } else {
+                    log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, object_compile.stderr });
+                    return false;
+                }
             }
             copyFileAbsolute(translated_obj_path, obj_cache_path.?) catch {};
         }
     } else {
-        var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
-        defer pipeline_diag_bag.deinit();
-        emitPipelineToFile(
+        if (!(try emitTranslatedLl(
             allocator,
             abs_input_path,
-            options.emit,
+            options,
             ll_path,
-            options.dialect,
-            options.profile_summary,
-            &pipeline_diag_bag,
-        ) catch |err| {
-            try reportPipelineError(log_state, &pipeline_diag_bag, abs_input_path, err);
+            null,
+            log_state,
+            profile_collector,
+        ))) {
             return false;
-        };
-        if (options.profile_summary) {
-            if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
-                profile_collector.record(allocator, sample) catch |err| {
-                    log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
-                };
-            }
         }
     }
 

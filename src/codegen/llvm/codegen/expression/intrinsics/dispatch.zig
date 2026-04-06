@@ -6,6 +6,7 @@ const call = @import("../call/mod.zig");
 const array_actuals = @import("../call/array_actuals.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const resolution = @import("../dispatch/resolution.zig");
+const memory_intrinsics = @import("../../../shared/memory_intrinsics.zig");
 const shared = @import("shared.zig");
 const numeric = @import("numeric.zig");
 const libm = @import("libm.zig");
@@ -713,10 +714,7 @@ fn zeroByteBuffer(ctx: *Context, builder: anytype, ptr: ValueRef, size: ValueRef
     try builder.callTyped(null, .void, memset_name, &.{ ptr, .{ .name = "0", .ty = .i8, .is_ptr = false }, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
 }
 
-fn emitMemcpyBytes(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, size: ValueRef) EmitError!void {
-    const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i64", .void, &[_]IRType{ .ptr, .ptr, .i64, .i1 }, false);
-    try builder.callTyped(null, .void, memcpy_name, &.{ dst_ptr, src_ptr, size, .{ .name = "false", .ty = .i1, .is_ptr = false } });
-}
+const emitMemcpyBytes = memory_intrinsics.emitMemcpyBytes;
 
 fn emitTransferMinI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
     const cmp_name = try ctx.nextTemp();

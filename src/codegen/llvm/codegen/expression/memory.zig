@@ -524,22 +524,39 @@ pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     return casting.coerce(ctx, builder, value, index_ty);
 }
 
-pub fn emitSymbolDimExtent(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
-    if (ctx.runtimeArrayDimExtentSlot(sym.name, dim_index)) |slot| {
+fn emitRuntimeArrayDimSlotOrExpr(
+    ctx: *Context,
+    builder: anytype,
+    slot: ?ValueRef,
+    expr_node: *Expr,
+    comptime fallback: anytype,
+) !ValueRef {
+    if (slot) |loaded_slot| {
         const tmp = try ctx.nextTemp();
-        try builder.load(tmp, .i64, slot);
+        try builder.load(tmp, .i64, loaded_slot);
         return .{ .name = tmp, .ty = .i64, .is_ptr = false };
     }
-    return emitDimValue(ctx, builder, sym.dims[dim_index]);
+    return fallback(ctx, builder, expr_node);
+}
+
+pub fn emitSymbolDimExtent(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
+    return emitRuntimeArrayDimSlotOrExpr(
+        ctx,
+        builder,
+        ctx.runtimeArrayDimExtentSlot(sym.name, dim_index),
+        sym.dims[dim_index],
+        emitDimValue,
+    );
 }
 
 pub fn emitSymbolDimLower(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
-    if (ctx.runtimeArrayDimLowerSlot(sym.name, dim_index)) |slot| {
-        const tmp = try ctx.nextTemp();
-        try builder.load(tmp, .i64, slot);
-        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
-    }
-    return emitDimLower(ctx, builder, sym.dims[dim_index]);
+    return emitRuntimeArrayDimSlotOrExpr(
+        ctx,
+        builder,
+        ctx.runtimeArrayDimLowerSlot(sym.name, dim_index),
+        sym.dims[dim_index],
+        emitDimLower,
+    );
 }
 
 pub fn emitSymbolDimMultiplier(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {

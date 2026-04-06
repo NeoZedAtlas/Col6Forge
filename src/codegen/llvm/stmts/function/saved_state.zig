@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../../codegen/context/mod.zig");
 const common = @import("../../codegen/common.zig");
+const pure_helpers = @import("../../codegen/context/support/pure_helpers.zig");
 const execution = @import("../execution/mod.zig");
 const utils = @import("../../codegen/utils.zig");
 
@@ -18,11 +19,6 @@ pub const SaveInfo = struct {
     pub fn deinit(self: *SaveInfo) void {
         self.names.deinit();
     }
-};
-
-const SizeAlign = struct {
-    size: usize,
-    alignment: usize,
 };
 
 pub fn buildSaveInfo(ctx: *Context) !SaveInfo {
@@ -146,7 +142,7 @@ pub fn installSavedGlobals(
         var total_size: usize = 1;
         var alignment: usize = 1;
         if (sym.is_pointer or sym.is_allocatable) {
-            const sa = sizeAlignForType(.ptr);
+            const sa = pure_helpers.sizeAlignForIRType(.ptr);
             total_size = sa.size;
             alignment = sa.alignment;
         } else if (sym.isCharacter()) {
@@ -156,7 +152,7 @@ pub fn installSavedGlobals(
             alignment = 1;
         } else {
             const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
-            const sa = sizeAlignForType(ty);
+            const sa = pure_helpers.sizeAlignForIRType(ty);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = sa.size * elem_count;
             alignment = sa.alignment;
@@ -331,20 +327,4 @@ fn unitHasSavedDeclaratorInit(ctx: *Context, save_info: *const SaveInfo) bool {
         }
     }
     return false;
-}
-
-fn sizeAlignForType(ty: llvm_types.IRType) SizeAlign {
-    return switch (ty) {
-        .i1 => .{ .size = 1, .alignment = 1 },
-        .i8 => .{ .size = 1, .alignment = 1 },
-        .i32 => .{ .size = 4, .alignment = 4 },
-        .i64 => .{ .size = 8, .alignment = 8 },
-        .f32 => .{ .size = 4, .alignment = 4 },
-        .f64 => .{ .size = 8, .alignment = 8 },
-        .v2f32 => .{ .size = 8, .alignment = 8 },
-        .complex_f32 => .{ .size = 8, .alignment = 4 },
-        .complex_f64 => .{ .size = 16, .alignment = 8 },
-        .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
-        .void => .{ .size = 1, .alignment = 1 },
-    };
 }

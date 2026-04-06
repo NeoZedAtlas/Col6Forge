@@ -208,13 +208,7 @@ pub fn emitRewind(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
-    const unit_value = try expr.emitExpr(ctx, builder, rewind.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const rewind_name = try ctx.ensureDeclRaw("col6forge_rewind", .i32, &.{.i32}, false);
-    const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, rewind_name, &.{unit_i32});
-    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-    return emitIoStatusOutcome(ctx, builder, status, rewind.iostat, rewind.err_label, next_block, local_label_map);
+    return emitSingleUnitStatusOp(ctx, builder, rewind.unit, rewind.iostat, rewind.err_label, next_block, local_label_map, "col6forge_rewind");
 }
 const InquireSpec = struct {
     unit_expr: ?*ast.Expr = null,
@@ -417,13 +411,7 @@ pub fn emitBackspace(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
-    const unit_value = try expr.emitExpr(ctx, builder, backspace.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const backspace_name = try ctx.ensureDeclRaw("col6forge_backspace", .i32, &.{.i32}, false);
-    const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, backspace_name, &.{unit_i32});
-    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-    return emitIoStatusOutcome(ctx, builder, status, backspace.iostat, backspace.err_label, next_block, local_label_map);
+    return emitSingleUnitStatusOp(ctx, builder, backspace.unit, backspace.iostat, backspace.err_label, next_block, local_label_map, "col6forge_backspace");
 }
 pub fn emitEndfile(
     ctx: *Context,
@@ -432,11 +420,24 @@ pub fn emitEndfile(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
-    const unit_value = try expr.emitExpr(ctx, builder, endfile.unit);
+    return emitSingleUnitStatusOp(ctx, builder, endfile.unit, endfile.iostat, endfile.err_label, next_block, local_label_map, "col6forge_endfile");
+}
+
+fn emitSingleUnitStatusOp(
+    ctx: *Context,
+    builder: anytype,
+    unit_expr: *ast.Expr,
+    iostat_expr: ?*ast.Expr,
+    err_label: ?[]const u8,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    comptime runtime_name: []const u8,
+) EmitError!bool {
+    const unit_value = try expr.emitExpr(ctx, builder, unit_expr);
     const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const endfile_name = try ctx.ensureDeclRaw("col6forge_endfile", .i32, &.{.i32}, false);
+    const fn_name = try ctx.ensureDeclRaw(runtime_name, .i32, &.{.i32}, false);
     const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, endfile_name, &.{unit_i32});
+    try builder.callTyped(status_tmp, .i32, fn_name, &.{unit_i32});
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-    return emitIoStatusOutcome(ctx, builder, status, endfile.iostat, endfile.err_label, next_block, local_label_map);
+    return emitIoStatusOutcome(ctx, builder, status, iostat_expr, err_label, next_block, local_label_map);
 }

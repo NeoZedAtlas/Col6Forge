@@ -15,6 +15,7 @@ const io_utils = @import("../utils.zig");
 const implied_helpers = @import("../implied_helpers.zig");
 const expansion = @import("../expansion.zig");
 const stream_chunks = @import("../stream_chunks.zig");
+const typed_slices = @import("../typed_slices.zig");
 const typed = @import("typed.zig");
 const arrays = @import("arrays.zig");
 
@@ -432,25 +433,11 @@ fn emitDirectArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitEr
 }
 
 fn emitDirectWriteTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    if (args.len == 0) return;
-    var expanded = try expandIoArgs(ctx, args);
-    defer expanded.deinit(ctx.allocator);
-    var typed_args = try buildTypedWriteArgs(ctx, builder, expanded.items);
-    defer typed_args.deinit();
-    const packed_args = try packTypedDirectArgs(ctx, builder, &typed_args);
-    const decl = try ctx.ensureDeclRaw("col6forge_write_direct_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+    return typed_slices.emitTypedSlice(ctx, builder, state, args, buildTypedWriteArgs, packTypedDirectArgs, "col6forge_write_direct_stream_typed");
 }
 
 fn emitDirectReadTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    if (args.len == 0) return;
-    var expanded = try expandIoArgs(ctx, args);
-    defer expanded.deinit(ctx.allocator);
-    var typed_args = try buildTypedReadArgs(ctx, builder, expanded.items);
-    defer typed_args.deinit();
-    const packed_args = try packTypedDirectArgs(ctx, builder, &typed_args);
-    const decl = try ctx.ensureDeclRaw("col6forge_read_direct_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+    return typed_slices.emitTypedSlice(ctx, builder, state, args, buildTypedReadArgs, packTypedDirectArgs, "col6forge_read_direct_stream_typed");
 }
 
 fn emitDirectWriteBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: DirectBlockTransfer) EmitError!void {

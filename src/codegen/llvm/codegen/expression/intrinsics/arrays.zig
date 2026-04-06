@@ -430,15 +430,6 @@ fn emitArrayDimExtentExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitErro
     return casting.coerce(ctx, builder, value, .i64);
 }
 
-fn emitSymbolDimExtentValue(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) EmitError!ValueRef {
-    if (ctx.runtimeArrayDimExtentSlot(sym.name, dim_index)) |slot| {
-        const tmp = try ctx.nextTemp();
-        try builder.load(tmp, .i64, slot);
-        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
-    }
-    return emitArrayDimExtentExpr(ctx, builder, sym.dims[dim_index]);
-}
-
 fn emitComponentDimExtentValue(ctx: *Context, builder: anytype, comp: ast.ComponentExpr, dim_index: usize) EmitError!ValueRef {
     const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
     const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
@@ -513,7 +504,7 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
     var value = blk: {
         if (requested_dim) |dim_index| {
             break :blk switch (subject) {
-                .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+                .symbol => |sym| try memory.emitSymbolDimExtent(ctx, builder, sym, dim_index),
                 .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
             };
         }
@@ -522,7 +513,7 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
         var dim_index: usize = 0;
         while (dim_index < rank) : (dim_index += 1) {
             const extent = switch (subject) {
-                .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+                .symbol => |sym| try memory.emitSymbolDimExtent(ctx, builder, sym, dim_index),
                 .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
             };
             total = try binary.emitMul(ctx, builder, total, extent);
@@ -550,7 +541,7 @@ fn emitIntrinsicSizeDynamicDim(
     var dim_index: usize = 0;
     while (dim_index < rank) : (dim_index += 1) {
         var candidate = switch (subject) {
-            .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+            .symbol => |sym| try memory.emitSymbolDimExtent(ctx, builder, sym, dim_index),
             .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
         };
         if (candidate.ty != result_ty) candidate = try casting.coerce(ctx, builder, candidate, result_ty);
@@ -667,7 +658,7 @@ fn emitIntrinsicBoundsScalar(ctx: *Context, builder: anytype, args: []*Expr, com
             try memory.emitSymbolDimLower(ctx, builder, sym, dim_index)
         else blk: {
             const lower = try memory.emitSymbolDimLower(ctx, builder, sym, dim_index);
-            const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+            const extent = try memory.emitSymbolDimExtent(ctx, builder, sym, dim_index);
             break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
         },
         .component => |comp| if (use_lower)
@@ -706,7 +697,7 @@ fn emitIntrinsicBoundsDynamicDim(
                 try memory.emitSymbolDimLower(ctx, builder, sym, dim_index)
             else blk: {
                 const lower = try memory.emitSymbolDimLower(ctx, builder, sym, dim_index);
-                const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+                const extent = try memory.emitSymbolDimExtent(ctx, builder, sym, dim_index);
                 break :blk try binary.emitAdd(ctx, builder, lower, try binary.emitSub(ctx, builder, extent, try oneIndexValue(ctx)));
             },
             .component => |comp| if (use_lower)

@@ -12,9 +12,11 @@ const ValueRef = context.ValueRef;
 const EmitError = anyerror;
 
 const io_utils = @import("utils.zig");
+const array_helpers = @import("array_helpers.zig");
 const implied_helpers = @import("implied_helpers.zig");
 const expansion = @import("expansion.zig");
 const stream_chunks = @import("stream_chunks.zig");
+const typed_slices = @import("typed_slices.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitStackValue = io_utils.emitStackValue;
@@ -51,7 +53,7 @@ const UnformattedArgs = struct {
         };
     }
 
-    fn deinit(self: *UnformattedArgs) void {
+    pub fn deinit(self: *UnformattedArgs) void {
         self.ptrs.deinit();
         self.kinds.deinit();
         self.lens.deinit();
@@ -230,23 +232,7 @@ fn packUnformattedArgs(
     };
 }
 
-fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitError!ValueRef {
-    if (ctx.arrayElemCountForSymbol(sym) catch null) |count| {
-        return ctx.constI32(@intCast(count));
-    }
-    var total = try ctx.constI32(1);
-    for (sym.dims, 0..) |dim, dim_idx| {
-        var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
-            error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
-            else => return err,
-        };
-        if (extent.ty != .i32) extent = try coerceRuntimeI32(ctx, builder, extent);
-        const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, total, extent);
-        total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-    }
-    return total;
-}
+const emitArrayElemCountI32 = array_helpers.emitArrayElemCountI32;
 
 const BlockTransfer = struct {
     kind: u8,
@@ -485,14 +471,7 @@ fn emitUnformattedWriteTypedSlice(
     state: ValueRef,
     args: []*ast.Expr,
 ) EmitError!void {
-    if (args.len == 0) return;
-    var expanded = try expandIoArgs(ctx, args);
-    defer expanded.deinit(ctx.allocator);
-    var packed_args = try buildUnformattedWriteArgs(ctx, builder, expanded.items);
-    defer packed_args.deinit();
-    const packed_args_ref = try packUnformattedArgs(ctx, builder, &packed_args);
-    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .i32, decl, &.{ state, packed_args_ref.ptr_array, packed_args_ref.kinds_ptr, packed_args_ref.lens_ptr, packed_args_ref.count });
+    return typed_slices.emitTypedSlice(ctx, builder, state, args, buildUnformattedWriteArgs, packUnformattedArgs, "col6forge_unformatted_write_stream_typed");
 }
 
 fn emitUnformattedReadTypedSlice(
@@ -501,14 +480,7 @@ fn emitUnformattedReadTypedSlice(
     state: ValueRef,
     args: []*ast.Expr,
 ) EmitError!void {
-    if (args.len == 0) return;
-    var expanded = try expandIoArgs(ctx, args);
-    defer expanded.deinit(ctx.allocator);
-    var packed_args = try buildUnformattedReadArgs(ctx, builder, expanded.items);
-    defer packed_args.deinit();
-    const packed_args_ref = try packUnformattedArgs(ctx, builder, &packed_args);
-    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .i32, decl, &.{ state, packed_args_ref.ptr_array, packed_args_ref.kinds_ptr, packed_args_ref.lens_ptr, packed_args_ref.count });
+    return typed_slices.emitTypedSlice(ctx, builder, state, args, buildUnformattedReadArgs, packUnformattedArgs, "col6forge_unformatted_read_stream_typed");
 }
 
 fn emitUnformattedWriteBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: BlockTransfer) EmitError!void {

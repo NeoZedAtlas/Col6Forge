@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../../codegen/context/mod.zig");
 const common = @import("../../codegen/common.zig");
+const pure_helpers = @import("../../codegen/context/support/pure_helpers.zig");
 const expression = @import("../../codegen/expression/mod.zig");
 const saved_state = @import("saved_state.zig");
 
@@ -17,11 +18,6 @@ pub const LocalInstallOptions = struct {
     uses_hidden_result_ptr: bool,
     is_character_function: bool,
     is_complex_sret_function: bool,
-};
-
-const SizeAlign = struct {
-    size: usize,
-    alignment: usize,
 };
 
 pub fn installFunctionLocals(
@@ -167,7 +163,7 @@ pub fn installFunctionLocals(
                     constI64(ctx, @intCast(count))
                 else
                     try emitDynamicElemCount(ctx, builder, sym);
-                const elem_size = constI64(ctx, @intCast(sizeAlignForType(ty).size));
+                const elem_size = constI64(ctx, @intCast(pure_helpers.sizeAlignForIRType(ty).size));
                 const total_bytes = try expression.emitMul(ctx, builder, count_val, elem_size);
                 const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]llvm_types.IRType{.i64}, false);
                 const heap_ptr_name = try ctx.nextTemp();
@@ -391,20 +387,4 @@ fn addAssignedGotoVar(
     if (seen.contains(name)) return;
     try seen.put(name, {});
     try out_names.append(name);
-}
-
-fn sizeAlignForType(ty: llvm_types.IRType) SizeAlign {
-    return switch (ty) {
-        .i1 => .{ .size = 1, .alignment = 1 },
-        .i8 => .{ .size = 1, .alignment = 1 },
-        .i32 => .{ .size = 4, .alignment = 4 },
-        .i64 => .{ .size = 8, .alignment = 8 },
-        .f32 => .{ .size = 4, .alignment = 4 },
-        .f64 => .{ .size = 8, .alignment = 8 },
-        .v2f32 => .{ .size = 8, .alignment = 8 },
-        .complex_f32 => .{ .size = 8, .alignment = 4 },
-        .complex_f64 => .{ .size = 16, .alignment = 8 },
-        .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
-        .void => .{ .size = 1, .alignment = 1 },
-    };
 }

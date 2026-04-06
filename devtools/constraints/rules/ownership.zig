@@ -177,6 +177,27 @@ const implied_helper_specs = [_]OwnerSpec{
         .definition_kind = .function,
         .owner_exact_path = "src/codegen/llvm/stmts/io/expansion/collapsed_sections.zig",
     },
+    .{
+        .id = "AR-OWN-037",
+        .title = "io array element count helper owner",
+        .symbol_name = "emitArrayElemCountI32",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/stmts/io/array_helpers.zig",
+    },
+    .{
+        .id = "AR-OWN-038",
+        .title = "llvm memset helper owner",
+        .symbol_name = "emitMemsetByte",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/shared/memory_intrinsics.zig",
+    },
+    .{
+        .id = "AR-OWN-039",
+        .title = "llvm memcpy helper owner",
+        .symbol_name = "emitMemcpyBytes",
+        .definition_kind = .function,
+        .owner_exact_path = "src/codegen/llvm/shared/memory_intrinsics.zig",
+    },
 };
 
 const runtime_arg_specs = [_]OwnerSpec{
