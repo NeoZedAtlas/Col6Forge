@@ -497,11 +497,19 @@ fn emitConstructorActualReductionAll(
 
 fn supportsConstructorActualReduction(actual: ArrayActualPlan, ctor: ConstructorView) bool {
     if (actual.elem_ty == .i8) return false;
-    if (actual.extents.len != 1) return false;
-    if (std.fmt.parseInt(usize, actual.extents[0].name, 10) catch null) |count| {
-        return count == ctor.count;
+    const count = staticActualElementCount(actual) orelse return false;
+    return count == ctor.count;
+}
+
+fn staticActualElementCount(actual: ArrayActualPlan) ?usize {
+    var total: usize = 1;
+    for (actual.extents) |extent| {
+        const value = std.fmt.parseInt(i64, extent.name, 10) catch return null;
+        if (value < 0) return null;
+        const usize_value = std.math.cast(usize, value) orelse return null;
+        total = std.math.mul(usize, total, usize_value) catch return null;
     }
-    return true;
+    return total;
 }
 
 fn emitIndexedCompareReduction(

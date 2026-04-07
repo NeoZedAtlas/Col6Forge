@@ -27,6 +27,7 @@ const known_functions = @import("array_actuals/known_functions.zig");
 const reductions_intrinsics = @import("array_actuals/intrinsics/reductions.zig");
 const shape_intrinsics = @import("array_actuals/intrinsics/shape_ops.zig");
 const transfer_intrinsics = @import("array_actuals/intrinsics/transfer.zig");
+const numeric_unary_intrinsics = @import("array_actuals/intrinsics/numeric_unary.zig");
 
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -908,6 +909,13 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
     }
     if (expr.* == .call_or_subscript) {
         if (try elemental_char_intrinsics.analyzeElementalCharCodeArrayActual(ctx, builder, expr.call_or_subscript, .{
+            .resolveArrayActual = resolveArrayActual,
+            .emitArrayActualElement = emitArrayActualElement,
+            .emitOwnedHeapActualFree = emitOwnedHeapActualFree,
+        })) |actual| {
+            return try validatedArrayActual(actual);
+        }
+        if (try numeric_unary_intrinsics.analyzeElementalUnaryFloatIntrinsicActual(ctx, builder, expr.call_or_subscript, .{
             .resolveArrayActual = resolveArrayActual,
             .emitArrayActualElement = emitArrayActualElement,
             .emitOwnedHeapActualFree = emitOwnedHeapActualFree,

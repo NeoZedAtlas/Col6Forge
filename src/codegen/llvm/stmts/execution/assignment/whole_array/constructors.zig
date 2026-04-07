@@ -362,6 +362,11 @@ pub fn wholeArrayConstructorTarget(ctx: *Context, expr_node: *ast.Expr) ?TargetI
             const sym = ctx.findSymbol(name) orelse break :blk null;
             break :blk .{ .name = name, .sym = sym };
         },
+        .call_or_subscript => |call| blk: {
+            if (!isWholeArraySectionCallTarget(ctx, call)) break :blk null;
+            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            break :blk .{ .name = call.name, .sym = sym };
+        },
         .substring => |sub| blk: {
             if (!isWholeArraySectionSubstringTarget(ctx, sub)) break :blk null;
             const sym = ctx.findSymbol(sub.name) orelse break :blk null;
@@ -375,6 +380,35 @@ fn isWholeArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) boo
     if (!isArraySectionSubstringTarget(ctx, sub)) return false;
     if (sub.start != null or sub.end != null) return false;
     return true;
+}
+
+fn isWholeArraySectionCallTarget(ctx: *Context, call: ast.CallOrSubscript) bool {
+    const sym = ctx.findSymbol(call.name) orelse return false;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
+    for (call.args) |arg| {
+        if (!isImplicitWholeDimRange(arg)) return false;
+    }
+    return true;
+}
+
+fn isImplicitWholeDimRange(arg: *ast.Expr) bool {
+    if (arg.* != .dim_range) return false;
+    const range = arg.dim_range;
+    if (range.stride != null) return false;
+    if (range.lower) |lower| {
+        if (!isIntegerLiteralOne(lower)) return false;
+    }
+    return switch (range.upper.*) {
+        .literal => |lit| lit.kind == .assumed_size and range.assumed_shape,
+        else => false,
+    };
+}
+
+fn isIntegerLiteralOne(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .literal => |lit| lit.kind == .integer and std.mem.eql(u8, lit.text, "1"),
+        else => false,
+    };
 }
 
 fn isArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) bool {
