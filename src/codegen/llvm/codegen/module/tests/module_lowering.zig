@@ -661,4 +661,31 @@ test "emitModuleToWriter lowers zero-argument type-bound function calls from use
     try testing.expect(std.mem.indexOf(u8, output, "@b_mod__sizeReturn") != null);
 }
 
+test "emitModuleToWriter lowers automatic character length from LEN(dummy)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine lecligne(ligne)\n" ++
+        "  character(len=*), intent(out) :: ligne\n" ++
+        "  character(len=len(ligne)) :: comment\n" ++
+        "  comment = ligne\n" ++
+        "end subroutine lecligne\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "spec_expr_2.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "alloca i8, i64") != null);
+}
+
 

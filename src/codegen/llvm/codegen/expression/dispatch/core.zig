@@ -65,6 +65,13 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
     return emitExprImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len);
 }
 
+fn canFallbackToIntrinsicCall(sym: ast.sema.Symbol) bool {
+    return sym.dims.len == 0 and
+        !sym.is_external and
+        !sym.is_intrinsic and
+        sym.kind == .variable;
+}
+
 fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!ValueRef {
     const prev_source = ctx.current_source;
     ctx.setCurrentSource(ctx.sourceForExpr(expr));
@@ -255,6 +262,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     value = try casting.coerce(ctx, builder, value, ty);
                 }
                 return value;
+            }
+            if (kind == .unknown and canFallbackToIntrinsicCall(sym)) {
+                if (intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args)) |value| {
+                    return value;
+                } else |err| switch (err) {
+                    error.UnknownIntrinsic => {},
+                    else => return err,
+                }
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             if (ctx.lookupKnownProcedureSig(call_or_sub.name)) |proc_sig| {

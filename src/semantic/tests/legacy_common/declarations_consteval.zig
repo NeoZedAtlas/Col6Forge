@@ -504,3 +504,31 @@ test "semantic rejects CHARACTER*(*) for non-dummy declaration" {
     try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*(*) A"));
 }
 
+test "semantic rejects external character declarator with non-constant length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "character(len=10) function a()\n" ++
+        "  a = ''\n" ++
+        "end function a\n" ++
+        "subroutine s(n)\n" ++
+        "  integer :: n\n" ++
+        "  character(len=n), external :: a\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidCharLen, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "constant character length") != null);
+}
+

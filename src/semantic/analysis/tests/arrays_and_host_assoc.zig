@@ -464,6 +464,34 @@ test "contained procedure local derived type may shadow host-associated derived 
     _ = try split_api.analyzeProgram(arena.allocator(), program);
 }
 
+test "contained procedure sees host-associated external character function declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "function is_ok(ch)\n" ++
+        "  character(*) is_ok, ch\n" ++
+        "  is_ok = ch\n" ++
+        "end function is_ok\n" ++
+        "program main\n" ++
+        "  character(4), external :: is_ok\n" ++
+        "contains\n" ++
+        "  function also_ok(ch)\n" ++
+        "    character(4) also_ok\n" ++
+        "    character(*) ch\n" ++
+        "    also_ok = is_ok(ch)\n" ++
+        "  end function also_ok\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "derived assignment accepts renamed host type identity and sequence-equivalent local type" {
     const testing = std.testing;
     const allocator = testing.allocator;

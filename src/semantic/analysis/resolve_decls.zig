@@ -6,8 +6,10 @@ const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const constants = @import("resolve_const.zig");
+const resolve_expr = @import("resolve_expr.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 const procedure_interfaces = @import("check_statements/procedure_interfaces.zig");
+const decl_diag = @import("resolve_decls_diag_helpers.zig");
 
 const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
@@ -33,6 +35,7 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         if (decl.external) {
             self.symbols.items[idx].is_external = true;
+            try validateExternalCharacterDeclarator(self, self.symbols.items[idx], item);
         }
         try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
         try validateDeclaratorInitializer(self, item.init);
@@ -244,13 +247,14 @@ pub fn applyDeclarator(
             sym.applyTypeSpec(sym.type_spec.withCharacterLength(.assumed, null));
             return;
         }
+        try validateRestrictedSpecExpr(self, len_expr);
         if (try constants.evalConst(self, len_expr)) |value| {
             switch (value) {
                 .integer => |int_val| {
                     length = if (int_val < 0) 0 else @as(usize, @intCast(int_val));
                 },
                 .real, .complex, .logical, .string => {
-                    if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
+                    if (decl_diag.emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
                     return error.InvalidCharLen;
                 },
             }
@@ -261,7 +265,7 @@ pub fn applyDeclarator(
                 sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
                 return;
             }
-            if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
+            if (decl_diag.emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
             return error.InvalidCharLen;
         }
     } else if (!explicit_type and sym.effectiveCharLenKind() != .constant) {
@@ -413,19 +417,23 @@ fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.Ty
     return error.UnexpectedTypeDecl;
 }
 
-fn emitCharacterLenTypingDiagnostic(self: *context.Context, expr: *ast.Expr) bool {
-    if (!exprHasIdentifier(expr)) return false;
-    const decl_source = self.current_decl_source orelse ast.DeclSource{};
-    self.setDiagnosticDetailed(
-        if (decl_source.line == 0) 1 else decl_source.line,
-        if (decl_source.column == 0) 1 else decl_source.column,
-        catalog.semantic.invalid_char_len.code,
-        "used before it is typed",
-        decl_source.text,
-        &.{.{ .text = "This CHARACTER length expression depends on an identifier whose type/constant value is not ready at this declaration point." }},
-        &.{.{ .text = "Declare or type the length parameter before using it in a CHARACTER length expression." }},
-    );
-    return true;
+fn validateExternalCharacterDeclarator(
+    self: *context.Context,
+    sym: symbols.Symbol,
+    item: ast.Declarator,
+) !void {
+    if (!sym.isCharacter()) return;
+    const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;
+    if (known_spec.lowered_kind != .character or known_spec.char_len_kind != .constant) return;
+    const len_expr = item.char_len orelse return;
+    if (item.char_len_deferred) {
+        decl_diag.emitExternalCharacterLenDiagnostic(self);
+        return error.InvalidCharLen;
+    }
+    if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) return;
+    if (try constants.evalConst(self, len_expr)) |_| return;
+    decl_diag.emitExternalCharacterLenDiagnostic(self);
+    return error.InvalidCharLen;
 }
 
 fn validateDeclaratorDimensionExprs(self: *context.Context, dims: []*ast.Expr) !void {
@@ -439,18 +447,22 @@ fn validateRestrictedSpecExpr(self: *context.Context, expr: *ast.Expr) !void {
         .identifier => |name| {
             if (symbols_mod.findSymbolIndex(self, name)) |idx| {
                 const sym = self.symbols.items[idx];
-                if (sym.kind == .parameter or sym.storage == .dummy) return;
-                emitRestrictedSpecExprDiagnostic(self, name);
+                if (sym.storage == .dummy and isOptionalDummy(self, name)) {
+                    decl_diag.emitOptionalSpecExprDiagnostic(self, name);
+                    return error.InvalidArgumentCount;
+                }
+                if (sym.kind == .parameter or sym.storage == .dummy or sym.storage == .common) return;
+                decl_diag.emitRestrictedSpecExprDiagnostic(self, name);
                 return error.InvalidArgumentCount;
             }
             if (!declaresNameLaterInCurrentUnit(self, name)) return;
             if (implicitTypingDisabled(self)) {
                 if (currentDeclDeclaresFunctionResult(self)) {
-                    emitCurrentFunctionNoImplicitDiagnostic(self);
+                    decl_diag.emitCurrentFunctionNoImplicitDiagnostic(self);
                 }
-                emitUsedBeforeTypedDiagnostic(self);
+                decl_diag.emitUsedBeforeTypedDiagnostic(self);
             } else {
-                emitRestrictedSpecExprDiagnostic(self, name);
+                decl_diag.emitRestrictedSpecExprDiagnostic(self, name);
             }
             return error.InvalidArgumentCount;
         },
@@ -463,12 +475,14 @@ fn validateRestrictedSpecExpr(self: *context.Context, expr: *ast.Expr) !void {
             for (call.args) |arg| {
                 try validateRestrictedSpecExpr(self, arg);
             }
+            try validateRestrictedSpecProcedureCall(self, call);
         },
         .component => |comp| {
             try validateRestrictedSpecExpr(self, comp.base);
             for (comp.args) |arg| {
                 try validateRestrictedSpecExpr(self, arg);
             }
+            try validateRestrictedSpecProcedureComponent(self, comp);
         },
         .substring => |sub| {
             for (sub.args) |arg| {
@@ -501,57 +515,6 @@ fn validateRestrictedSpecExpr(self: *context.Context, expr: *ast.Expr) !void {
         },
         else => {},
     }
-}
-
-fn emitRestrictedSpecExprDiagnostic(self: *context.Context, name: []const u8) void {
-    const decl_source = self.current_decl_source orelse ast.DeclSource{};
-    const line = if (decl_source.line == 0) 1 else decl_source.line;
-    const column = if (decl_source.column == 0) 1 else decl_source.column;
-    const message = std.fmt.allocPrint(self.arena, "'{s}' cannot appear in the expression", .{name}) catch "cannot appear in the expression";
-    self.setDiagnostic(
-        line,
-        column,
-        catalog.semantic.unexpected_type_decl.code,
-        message,
-        decl_source.text,
-    );
-}
-
-fn emitUsedBeforeTypedDiagnostic(self: *context.Context) void {
-    const decl_source = self.current_decl_source orelse ast.DeclSource{};
-    self.setDiagnostic(
-        if (decl_source.line == 0) 1 else decl_source.line,
-        if (decl_source.column == 0) 1 else decl_source.column,
-        catalog.semantic.invalid_char_len.code,
-        "used before it is typed",
-        decl_source.text,
-    );
-}
-
-fn emitCurrentFunctionNoImplicitDiagnostic(self: *context.Context) void {
-    const source = inferredCurrentFunctionHeaderSource(self) orelse return;
-    self.setDiagnostic(
-        source.line,
-        source.column,
-        catalog.semantic.invalid_char_len.code,
-        "has no IMPLICIT type",
-        source.text,
-    );
-}
-
-fn inferredCurrentFunctionHeaderSource(self: *context.Context) ?struct { line: usize, column: usize, text: []const u8 } {
-    if (self.unit.kind != .function) return null;
-    var first_decl_line: ?usize = null;
-    for (self.unit.decl_sources) |source| {
-        if (source.line == 0) continue;
-        first_decl_line = source.line;
-        break;
-    }
-    const line = if (first_decl_line) |decl_line|
-        if (decl_line > 1) decl_line - 1 else decl_line
-    else
-        return null;
-    return .{ .line = line, .column = 1, .text = "" };
 }
 
 fn implicitTypingDisabled(self: *context.Context) bool {
@@ -619,49 +582,80 @@ fn currentDeclDeclaresFunctionResult(self: *context.Context) bool {
     return false;
 }
 
-fn exprHasIdentifier(expr: *ast.Expr) bool {
-    return switch (expr.*) {
-        .identifier => true,
-        .unary => |un| exprHasIdentifier(un.expr),
-        .binary => |bin| exprHasIdentifier(bin.left) or exprHasIdentifier(bin.right),
-        .call_or_subscript => |call| blk: {
-            for (call.args) |arg| {
-                if (exprHasIdentifier(arg)) break :blk true;
-            }
-            break :blk false;
-        },
-        .component => |comp| exprHasIdentifier(comp.base),
-        .substring => |sub| blk: {
-            for (sub.args) |arg| {
-                if (exprHasIdentifier(arg)) break :blk true;
-            }
-            if (sub.start != null and exprHasIdentifier(sub.start.?)) break :blk true;
-            if (sub.end != null and exprHasIdentifier(sub.end.?)) break :blk true;
-            break :blk false;
-        },
-        .dim_range => |range| blk: {
-            if (range.lower != null and exprHasIdentifier(range.lower.?)) break :blk true;
-            if (exprHasIdentifier(range.upper)) break :blk true;
-            if (range.stride != null and exprHasIdentifier(range.stride.?)) break :blk true;
-            break :blk false;
-        },
-        .array_constructor => |ctor| blk: {
-            for (ctor.items) |item| {
-                if (exprHasIdentifier(item)) break :blk true;
-            }
-            break :blk false;
-        },
-        .complex_literal => |lit| exprHasIdentifier(lit.real) or exprHasIdentifier(lit.imag),
-        .implied_do => |ido| blk: {
-            for (ido.items) |item| {
-                if (exprHasIdentifier(item)) break :blk true;
-            }
-            if (exprHasIdentifier(ido.start) or exprHasIdentifier(ido.end)) break :blk true;
-            if (ido.step != null and exprHasIdentifier(ido.step.?)) break :blk true;
-            break :blk false;
-        },
-        else => false,
-    };
+fn validateRestrictedSpecProcedureCall(self: *context.Context, call: ast.CallOrSubscript) !void {
+    if (symbols_mod.isIntrinsicName(call.name)) return;
+
+    if (symbols_mod.lookupKnownProcedureSig(self, call.name)) |sig| {
+        if (sig.pure) return;
+        decl_diag.emitPureSpecExprDiagnostic(self);
+        return error.InvalidArgumentCount;
+    }
+
+    if (symbols_mod.findSymbolIndex(self, call.name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.storage == .dummy and isOptionalDummy(self, call.name)) {
+            decl_diag.emitOptionalSpecExprDiagnostic(self, call.name);
+            return error.InvalidArgumentCount;
+        }
+        if (sym.dims.len != 0) return;
+        decl_diag.emitPureSpecExprDiagnostic(self);
+        return error.InvalidArgumentCount;
+    }
+}
+
+fn validateRestrictedSpecProcedureComponent(self: *context.Context, comp: ast.ComponentExpr) !void {
+    if (!comp.has_parens) return;
+    const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch return;
+    if (base_spec.lowered_kind != .derived) return;
+    const derived_name = base_spec.derived_type_name orelse return;
+
+    if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+        if (!component.procedure) return;
+        const sig = component.procedure_sig orelse
+            (if (component.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null);
+        if (sig) |proc_sig| {
+            if (proc_sig.pure) return;
+            decl_diag.emitPureSpecExprDiagnostic(self);
+            return error.InvalidArgumentCount;
+        }
+        decl_diag.emitPureSpecExprDiagnostic(self);
+        return error.InvalidArgumentCount;
+    }
+
+    const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return;
+    const impl_name = binding.implementation_name orelse binding.name;
+    const sig = symbols_mod.lookupKnownProcedureSig(self, impl_name) orelse
+        (if (binding.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null) orelse
+        symbols_mod.lookupKnownProcedureSig(self, binding.name) orelse return;
+    if (sig.pure) return;
+    decl_diag.emitPureSpecExprDiagnostic(self);
+    return error.InvalidArgumentCount;
+}
+
+fn isOptionalDummy(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                if (!type_decl.optional) continue;
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .procedure => |procedure_decl| {
+                if (!procedure_decl.optional) continue;
+                for (procedure_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .optional => |optional_decl| {
+                for (optional_decl.names) |opt_name| {
+                    if (std.ascii.eqlIgnoreCase(opt_name, name)) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn validateKnownFunctionResultDeclaration(

@@ -13,7 +13,7 @@ pub fn collectHostSymbols(
 ) !void {
     for (sem_symbols) |sym| {
         const normalized = sym.normalized();
-        if (sym.kind == .function or sym.kind == .subroutine) continue;
+        if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) continue;
         if (shouldSkipSyntheticConstructorSymbol(normalized, derived_types)) continue;
         var key_buf: [128]u8 = undefined;
         if (normalized.name.len <= key_buf.len) {
