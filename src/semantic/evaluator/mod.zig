@@ -21,6 +21,7 @@ pub const ConstResolver = struct {
     exprMeasureFn: ?*const fn (ctx: *anyopaque, expr: *const ast.Expr, measure: ExprMeasureKind) ?i64 = null,
     exprTypeSpecFn: ?*const fn (ctx: *anyopaque, expr: *const ast.Expr) ?symbols.TypeSpec = null,
     derivedExtendsFn: ?*const fn (ctx: *anyopaque, candidate: []const u8, base: []const u8) bool = null,
+    componentConstFn: ?*const fn (ctx: *anyopaque, base: *const ast.Expr, name: []const u8) ?ConstValue = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
@@ -50,6 +51,11 @@ pub const ConstResolver = struct {
     pub fn derivedExtends(self: ConstResolver, candidate: []const u8, base: []const u8) bool {
         if (self.derivedExtendsFn) |extends_fn| return extends_fn(self.ctx, candidate, base);
         return false;
+    }
+
+    pub fn resolveComponentConst(self: ConstResolver, base: *const ast.Expr, name: []const u8) ?ConstValue {
+        if (self.componentConstFn) |component_fn| return component_fn(self.ctx, base, name);
+        return null;
     }
 };
 
@@ -114,10 +120,22 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                     const base_spec = res.exprTypeSpec(comp.base) orelse return null;
                     return .{ .integer = typeSpecKindValue(base_spec) orelse return null };
                 }
+                if (res.resolveComponentConst(comp.base, comp.name)) |value| return value;
             }
             return null;
         },
-        .call_or_subscript => |call| return intrinsics.evalConstCall(call, resolver, evalConst, unary_binary.toReal),
+        .call_or_subscript => |call| blk: {
+            if (try intrinsics.evalConstCall(call, resolver, evalConst, unary_binary.toReal)) |value| break :blk value;
+            const res = resolver orelse return null;
+            const spec = res.exprTypeSpec(expr) orelse return null;
+            if (spec.lowered_kind != .derived or call.args.len != 0) return null;
+            const bytes = res.exprMeasure(expr, .sizeof_bytes) orelse return null;
+            const alloc = res.allocator orelse return null;
+            const len = std.math.cast(usize, bytes) orelse return null;
+            const out = try alloc.alloc(u8, len);
+            @memset(out, 0);
+            break :blk .{ .string = out };
+        },
         .dim_range => return null,
         .implied_do => return null,
     }
