@@ -1,4 +1,5 @@
 const std = @import("std");
+const source_index = @import("source_index.zig");
 
 pub const ImportLiteral = struct {
     literal: []const u8,
@@ -25,49 +26,8 @@ pub const Index = struct {
 };
 
 pub fn buildIndex(allocator: std.mem.Allocator, text: []const u8) !?Index {
-    const source = try allocator.dupeZ(u8, text);
-    defer allocator.free(source);
-
-    var tree = try std.zig.Ast.parse(allocator, source, .zig);
-    defer tree.deinit(allocator);
-
-    if (tree.errors.len != 0) return null;
-
-    var out: Index = .{};
-    errdefer out.deinit(allocator);
-
-    const node_tags = tree.nodes.items(.tag);
-    for (node_tags, 0..) |tag, idx| {
-        const node: std.zig.Ast.Node.Index = @enumFromInt(idx);
-        switch (tag) {
-            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => try maybeAppendImportLiteral(allocator, &out, tree, node),
-            else => {},
-        }
-    }
-
-    return out;
-}
-
-fn maybeAppendImportLiteral(
-    allocator: std.mem.Allocator,
-    out: *Index,
-    tree: std.zig.Ast,
-    node: std.zig.Ast.Node.Index,
-) !void {
-    if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@import")) return;
-    var param_buffer: [2]std.zig.Ast.Node.Index = undefined;
-    const params = tree.builtinCallParams(&param_buffer, node) orelse return;
-    if (params.len != 1) return;
-
-    const param_source = tree.getNodeSource(params[0]);
-    if (param_source.len < 2 or param_source[0] != '"' or param_source[param_source.len - 1] != '"') return;
-
-    const owned = try allocator.dupe(u8, param_source[1 .. param_source.len - 1]);
-    try out.owned_strings.append(allocator, owned);
-    try out.import_literals.append(allocator, .{
-        .literal = owned,
-        .start_idx = tree.tokenStart(tree.nodeMainToken(node)),
-    });
+    var combined = (try source_index.buildIndex(allocator, text)) orelse return null;
+    return combined.intoImports(allocator);
 }
 
 test "builds AST-backed import literal index" {

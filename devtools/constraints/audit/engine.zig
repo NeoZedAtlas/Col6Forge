@@ -10,13 +10,11 @@ const zig_ast = @import("zig_ast/mod.zig");
 
 const CombinedSymbolIndex = struct {
     lexical: symbols.Index,
-    ast: ?symbols.Index = null,
-    ast_imports: ?zig_ast.imports.Index = null,
+    ast_source: ?zig_ast.source_index.Index = null,
 
     fn deinit(self: *CombinedSymbolIndex, allocator: std.mem.Allocator) void {
         self.lexical.deinit(allocator);
-        if (self.ast) |*index| index.deinit(allocator);
-        if (self.ast_imports) |*index| index.deinit(allocator);
+        if (self.ast_source) |*index| index.deinit(allocator);
         self.* = undefined;
     }
 
@@ -62,34 +60,43 @@ const CombinedSymbolIndex = struct {
         return firstNonNull(self.findAstImportLiteralContaining(fragment), findLexicalImportLiteralContaining(text, fragment));
     }
 
+    fn findOwnedSymbolDefinition(self: CombinedSymbolIndex, text: []const u8, symbol_name: []const u8, definition_kind: model.DefinitionKind) ?usize {
+        return firstNonNull(self.findAstOwnedSymbolDefinition(symbol_name, definition_kind), declarations.findOwnedSymbolDefinition(text, symbol_name, definition_kind));
+    }
+
     fn findAstFunctionCall(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
-        const index = self.ast orelse return null;
-        return index.findFunctionCall(symbol_name);
+        const index = self.ast_source orelse return null;
+        return index.symbols.findFunctionCall(symbol_name);
     }
 
     fn findAstFunctionCallOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
-        const index = self.ast orelse return null;
-        return index.findFunctionCallOutsidePath(symbol_name, required_path);
+        const index = self.ast_source orelse return null;
+        return index.symbols.findFunctionCallOutsidePath(symbol_name, required_path);
     }
 
     fn findAstAliasOutsidePath(self: CombinedSymbolIndex, symbol_name: []const u8, required_path: []const u8) ?usize {
-        const index = self.ast orelse return null;
-        return index.findAliasOutsidePath(symbol_name, required_path);
+        const index = self.ast_source orelse return null;
+        return index.symbols.findAliasOutsidePath(symbol_name, required_path);
     }
 
     fn findAstAnyAlias(self: CombinedSymbolIndex, symbol_name: []const u8) ?usize {
-        const index = self.ast orelse return null;
-        return index.findAnyAlias(symbol_name);
+        const index = self.ast_source orelse return null;
+        return index.symbols.findAnyAlias(symbol_name);
     }
 
     fn findAstMemberAccessPath(self: CombinedSymbolIndex, needle: []const u8) ?usize {
-        const index = self.ast orelse return null;
-        return index.findMemberAccessPath(needle);
+        const index = self.ast_source orelse return null;
+        return index.symbols.findMemberAccessPath(needle);
     }
 
     fn findAstImportLiteralContaining(self: CombinedSymbolIndex, fragment: []const u8) ?usize {
-        const index = self.ast_imports orelse return null;
-        return index.findLiteralContaining(fragment);
+        const index = self.ast_source orelse return null;
+        return index.imports.findLiteralContaining(fragment);
+    }
+
+    fn findAstOwnedSymbolDefinition(self: CombinedSymbolIndex, symbol_name: []const u8, definition_kind: model.DefinitionKind) ?usize {
+        const index = self.ast_source orelse return null;
+        return index.definitions.findOwnedSymbolDefinition(symbol_name, definition_kind);
     }
 };
 
@@ -150,10 +157,11 @@ fn scanFile(
 ) !void {
     var symbol_index: CombinedSymbolIndex = .{
         .lexical = try symbols.buildIndex(allocator, text),
-        .ast = try zig_ast.index.buildIndex(allocator, text),
-        .ast_imports = try zig_ast.imports.buildIndex(allocator, text),
+        .ast_source = null,
     };
     defer symbol_index.deinit(allocator);
+
+    symbol_index.ast_source = try zig_ast.source_index.buildIndex(allocator, text);
 
     for (registry.file_rules) |rule| {
         if (!registry.ruleAppliesToFile(rule, rel_path, domain)) continue;
@@ -205,7 +213,7 @@ fn applyFileRule(
             const owner_path = rule.owner_exact_path orelse return error.AuditRuleMissingOwnerPath;
             const definition_kind = rule.definition_kind orelse return error.AuditRuleMissingDefinitionKind;
             if (std.mem.eql(u8, rel_path, owner_path)) return;
-            if (declarations.findOwnedSymbolDefinition(text, symbol_name, definition_kind)) |idx| {
+            if (symbol_index.findOwnedSymbolDefinition(text, symbol_name, definition_kind)) |idx| {
                 reportViolation(rel_path, idx, text, rule.id, rule.title, symbol_name);
                 failures.* += 1;
             }
