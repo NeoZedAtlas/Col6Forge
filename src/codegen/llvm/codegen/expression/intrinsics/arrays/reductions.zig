@@ -105,19 +105,23 @@ fn emitWholeArrayLogicalReduction(
     if (views.supportedConstructorView(bin.right)) |right_ctor| {
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
-            return if (require_all)
+            if (if (require_all)
                 try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor);
+                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor)) |reduced| {
+                return reduced;
+            }
         }
     }
     if (views.supportedConstructorView(bin.left)) |left_ctor| {
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
-            return if (require_all)
+            if (if (require_all)
                 try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual);
+                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual)) |reduced| {
+                return reduced;
+            }
         }
     }
 
@@ -185,10 +189,12 @@ fn emitWholeArrayLogicalReduction(
     if (views.supportedConstructorView(bin.left)) |left_ctor| {
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
-            return if (require_all)
+            if (if (require_all)
                 try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual);
+                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual)) |reduced| {
+                return reduced;
+            }
         }
         if (views.supportedConstructorView(bin.right)) |right_ctor| {
             if (left_ctor.count != right_ctor.count) return null;
@@ -205,10 +211,12 @@ fn emitWholeArrayLogicalReduction(
     if (views.supportedConstructorView(bin.right)) |right_ctor| {
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
-            return if (require_all)
+            if (if (require_all)
                 try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor);
+                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor)) |reduced| {
+                return reduced;
+            }
         }
         return if (require_all)
             try emitScalarConstructorReductionAll(ctx, builder, bin.op, bin.left, right_ctor)
