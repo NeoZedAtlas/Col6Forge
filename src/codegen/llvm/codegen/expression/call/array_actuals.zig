@@ -5,7 +5,6 @@ const common = @import("../../common.zig");
 const memory = @import("../memory.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const resolution = @import("../dispatch/resolution.zig");
-const evaluator = @import("../../../../../semantic/evaluator.zig");
 const binary = @import("../binary.zig");
 const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
@@ -20,7 +19,10 @@ const io_utils = @import("../../../stmts/io/utils.zig");
 const elemental_char_intrinsics = @import("elemental_char_intrinsics.zig");
 const shared = @import("shared.zig");
 const array_actuals_support = @import("array_actuals_support.zig");
+const analysis_dispatch = @import("array_actuals/analysis_dispatch.zig");
+const runtime_utils = @import("array_actuals/runtime_utils.zig");
 const constructors = @import("array_actuals/constructors.zig");
+const substrings = @import("array_actuals/substrings.zig");
 const known_functions = @import("array_actuals/known_functions.zig");
 const reductions_intrinsics = @import("array_actuals/intrinsics/reductions.zig");
 const shape_intrinsics = @import("array_actuals/intrinsics/shape_ops.zig");
@@ -252,37 +254,6 @@ fn materializeDescriptorValues(
     return base_ptr;
 }
 
-fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
-    const value = evaluator.evalConst(expr, .{
-        .ctx = ctx,
-        .resolveFn = resolveCodegenConstValue,
-        .arrayExtentFn = resolveCodegenArrayExtent,
-    }) catch return null;
-    return switch (value orelse return null) {
-        .integer => |v| v,
-        else => null,
-    };
-}
-
-fn resolveCodegenConstValue(raw_ctx: *anyopaque, name: []const u8) ?ast.sema.ConstValue {
-    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
-    const sym = ctx.findSymbol(name) orelse return null;
-    if (sym.kind != .parameter) return null;
-    return sym.const_value;
-}
-
-fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
-    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
-    const sym = ctx.findSymbol(name) orelse return null;
-    if (sym.dims.len == 0) return null;
-    const dims = if (dim) |dim_index|
-        sym.dims[dim_index .. dim_index + 1]
-    else
-        sym.dims;
-    const count = common.arrayElementCount(ctx.sem, dims) catch return null;
-    return std.math.cast(i64, count);
-}
-
 pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     return switch (expr.*) {
         .unary => |un| switch (un.op) {
@@ -382,202 +353,27 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
             break :blk null;
         },
         .substring => |sub| blk: {
-            if (try lowerSubstringArraySectionToCall(ctx, sub)) |lowered_call| {
+            if (try substrings.lowerSubstringArraySectionToCall(ctx, sub)) |lowered_call| {
                 var call_expr = ast.Expr{ .call_or_subscript = lowered_call };
                 try ctx.ref_kinds.put(@as(usize, @intFromPtr(&call_expr)), .subscript);
                 break :blk try analyzeAddressableArrayActual(ctx, builder, &call_expr);
             }
-            if (try materializeCharacterSubstringSectionActual(ctx, builder, sub)) |actual| break :blk actual;
+            if (try substrings.materializeCharacterSubstringSectionActual(ctx, builder, sub, .{
+                .analyzeAddressableArrayActual = analyzeAddressableArrayActual,
+                .emitIndexI64 = emitIndexI64,
+                .emitSubI64 = emitSubI64,
+                .emitExtentProductI64 = emitExtentProductI64,
+                .emitHeapArrayTempPointerScaled = emitHeapArrayTempPointerScaled,
+                .emitContiguousMultipliers = emitContiguousMultipliers,
+                .emitArrayActualElementPtr = emitArrayActualElementPtr,
+                .emitAddI64 = emitAddI64,
+                .emitMaybeFreeOwnedArrayActual = emitMaybeFreeOwnedArrayActual,
+                .i64Const = i64Const,
+            })) |actual| break :blk actual;
             break :blk null;
         },
         else => null,
     };
-}
-
-fn lowerSubstringArraySectionToCall(
-    ctx: *Context,
-    sub: ast.SubstringExpr,
-) !?ast.CallOrSubscript {
-    const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (sym.dims.len == 0) return null;
-
-    if (sub.args.len != 0 and substringCoversWholeElements(ctx, sym, sub)) {
-        return .{
-            .name = sub.name,
-            .args = try normalizeWholeSubstringArraySectionArgs(ctx, sub.args),
-        };
-    }
-    if (sub.args.len != 0 or sym.dims.len != 1) return null;
-
-    const upper_expr = if (sub.end) |end_expr|
-        end_expr
-    else blk_upper: {
-        const assumed = try ctx.allocator.create(Expr);
-        assumed.* = .{ .literal = .{
-            .kind = .assumed_size,
-            .text = "*",
-        } };
-        break :blk_upper assumed;
-    };
-    const range = try ctx.allocator.create(Expr);
-    range.* = .{ .dim_range = .{
-        .lower = sub.start,
-        .upper = upper_expr,
-        .stride = null,
-        .assumed_shape = sub.end == null,
-    } };
-    const args = try ctx.allocator.alloc(*Expr, 1);
-    args[0] = range;
-    return .{
-        .name = sub.name,
-        .args = args,
-    };
-}
-
-fn materializeCharacterSubstringSectionActual(
-    ctx: *Context,
-    builder: anytype,
-    sub: ast.SubstringExpr,
-) !?ArrayActualPlan {
-    const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (!sym.isCharacter() or sym.dims.len == 0) return null;
-    if (sub.args.len == 0) return null;
-
-    const section_args = try normalizeWholeSubstringArraySectionArgs(ctx, sub.args);
-    var whole_section_expr = ast.Expr{ .call_or_subscript = .{
-        .name = sub.name,
-        .args = section_args,
-    } };
-    try ctx.ref_kinds.put(@as(usize, @intFromPtr(&whole_section_expr)), .subscript);
-    const source_actual = (try analyzeAddressableArrayActual(ctx, builder, &whole_section_expr)) orelse return null;
-    if (source_actual.elem_ty != .i8) return null;
-
-    var start_val = if (sub.start) |start_expr|
-        try emitIndexI64(ctx, builder, start_expr)
-    else
-        i64Const(ctx, 1);
-    start_val = try emitSubI64(ctx, builder, start_val, i64Const(ctx, 1));
-
-    var substring_expr = ast.Expr{ .substring = sub };
-    var result_char_len = (try dispatch.emitCharacterLenValue(ctx, builder, &substring_expr)) orelse return null;
-    if (result_char_len.ty != .i64) result_char_len = try casting.coerce(ctx, builder, result_char_len, .i64);
-
-    const elem_count = try emitExtentProductI64(ctx, builder, source_actual.extents);
-    const dst_ptr = try emitHeapArrayTempPointerScaled(ctx, builder, .i8, elem_count, result_char_len);
-    const result_multipliers = try emitContiguousMultipliers(ctx, builder, source_actual.extents);
-
-    const idx_ptr_name = try ctx.nextTemp();
-    try builder.alloca(idx_ptr_name, .i64);
-    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
-    try builder.store(i64Const(ctx, 0), idx_ptr);
-
-    const cond_label = try ctx.nextLabel("substring_arr_cond");
-    const body_label = try ctx.nextLabel("substring_arr_body");
-    const inc_label = try ctx.nextLabel("substring_arr_inc");
-    const exit_label = try ctx.nextLabel("substring_arr_exit");
-    try builder.br(cond_label);
-    try builder.label(cond_label);
-    const idx_name = try ctx.nextTemp();
-    try builder.load(idx_name, .i64, idx_ptr);
-    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
-    const cmp_name = try ctx.nextTemp();
-    try builder.compare(cmp_name, "icmp", "slt", .i64, idx_val, elem_count);
-    try builder.brCond(.{ .name = cmp_name, .ty = .i1, .is_ptr = false }, body_label, exit_label);
-
-    try builder.label(body_label);
-    const src_elem_ptr = try emitArrayActualElementPtr(
-        ctx,
-        builder,
-        source_actual.base_ptr,
-        source_actual.elem_ty,
-        source_actual.extents,
-        source_actual.multipliers,
-        source_actual.address_scale,
-        source_actual.contiguous,
-        idx_val,
-    );
-    const src_sub_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_sub_ptr_name, .i8, src_elem_ptr, start_val);
-    const src_sub_ptr = ValueRef{ .name = src_sub_ptr_name, .ty = .ptr, .is_ptr = true };
-    const dst_elem_ptr = try character_buffers.emitContiguousCharacterElementPtr(ctx, builder, dst_ptr, result_char_len, idx_val);
-    try character_buffers.emitCopyCharacterBytesPadded(ctx, builder, dst_elem_ptr, result_char_len, src_sub_ptr, result_char_len);
-    try builder.br(inc_label);
-
-    try builder.label(inc_label);
-    const next_idx = try emitAddI64(ctx, builder, idx_val, i64Const(ctx, 1));
-    try builder.store(next_idx, idx_ptr);
-    try builder.br(cond_label);
-
-    try builder.label(exit_label);
-    try emitMaybeFreeOwnedArrayActual(ctx, builder, source_actual);
-    return .{
-        .base_ptr = dst_ptr,
-        .elem_ty = .i8,
-        .extents = source_actual.extents,
-        .multipliers = result_multipliers,
-        .address_scale = result_char_len,
-        .storage = .materialized_temp,
-        .owned_heap_ptr = dst_ptr,
-        .contiguous = true,
-    };
-}
-
-fn normalizeWholeSubstringArraySectionArgs(
-    ctx: *Context,
-    args: []*Expr,
-) ![]*Expr {
-    const normalized = try ctx.allocator.alloc(*Expr, args.len);
-    for (args, 0..) |arg, idx| {
-        if (arg.* != .dim_range) {
-            normalized[idx] = arg;
-            continue;
-        }
-        if (arg.dim_range.assumed_shape or
-            (arg.dim_range.upper.* == .literal and arg.dim_range.upper.literal.kind == .assumed_size))
-        {
-            normalized[idx] = arg;
-            continue;
-        }
-        const assumed = try ctx.allocator.create(Expr);
-        assumed.* = .{ .literal = .{
-            .kind = .assumed_size,
-            .text = "*",
-        } };
-        const range = try ctx.allocator.create(Expr);
-        range.* = .{ .dim_range = .{
-            .lower = arg.dim_range.lower,
-            .upper = assumed,
-            .stride = arg.dim_range.stride,
-            .assumed_shape = true,
-        } };
-        normalized[idx] = range;
-    }
-    return normalized;
-}
-
-fn substringCoversWholeElements(
-    ctx: *Context,
-    sym: ast.sema.Symbol,
-    sub: ast.SubstringExpr,
-) bool {
-    if (sub.start == null and sub.end == null) return true;
-    const char_len = common.constantCharacterLen(sym) orelse return false;
-    const start_ok = if (sub.start) |start_expr|
-        integerLiteralEquals(ctx, start_expr, 1)
-    else
-        true;
-    const end_ok = if (sub.end) |end_expr|
-        integerLiteralEquals(ctx, end_expr, @intCast(char_len))
-    else
-        true;
-    return start_ok and end_ok;
-}
-
-fn integerLiteralEquals(ctx: *Context, expr: *Expr, expected: i64) bool {
-    if (expr.* != .literal or expr.literal.kind != .integer) return false;
-    const normalized = utils.normalizeIntLiteral(ctx.allocator, expr.literal.text) catch return false;
-    const parsed = std.fmt.parseInt(i64, normalized, 10) catch return false;
-    return parsed == expected;
 }
 
 fn analyzeAddressableDataComponentArrayActual(
@@ -970,7 +766,7 @@ fn analyzeKnownArrayFunctionActual(
     builder: anytype,
     call: ast.CallOrSubscript,
 ) !?ArrayActualPlan {
-    return known_functions.analyzeKnownArrayFunctionActual(ctx, builder, call, .{
+    return analysis_dispatch.analyzeKnownArrayFunctionActual(ctx, builder, call, .{
         .resolveArrayActual = resolveArrayActual,
         .emitRequireSameArrayShape = emitRequireSameArrayShape,
         .emitExtentProductI64 = emitExtentProductI64,
@@ -994,7 +790,7 @@ fn analyzeElementalArrayFunctionActual(
     builder: anytype,
     call: ast.CallOrSubscript,
 ) !?ArrayActualPlan {
-    return known_functions.analyzeElementalArrayFunctionActual(ctx, builder, call, .{
+    return analysis_dispatch.analyzeElementalArrayFunctionActual(ctx, builder, call, .{
         .resolveArrayActual = resolveArrayActual,
         .emitRequireSameArrayShape = emitRequireSameArrayShape,
         .emitExtentProductI64 = emitExtentProductI64,
@@ -1015,7 +811,7 @@ fn analyzeKnownArrayProcedureComponentActual(
     comp: ast.ComponentExpr,
     component: context.DerivedComponentLayout,
 ) !?ArrayActualPlan {
-    return known_functions.analyzeKnownArrayProcedureComponentActual(ctx, builder, comp, component, .{
+    return analysis_dispatch.analyzeKnownArrayProcedureComponentActual(ctx, builder, comp, component, .{
         .resolveArrayActual = resolveArrayActual,
         .emitExtentProductI64 = emitExtentProductI64,
         .emitHeapArrayTempPointer = emitHeapArrayTempPointer,
@@ -1034,7 +830,9 @@ fn analyzeKnownArrayProcedureComponentActual(
 pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return try validatedArrayActual(actual);
     if (expr.* == .array_constructor) {
-        if (try analyzeSingleItemArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
+        if (try analysis_dispatch.analyzeSingleItemArrayConstructorActual(ctx, builder, expr.array_constructor, .{
+            .resolveArrayActual = resolveArrayActual,
+        })) |actual| {
             return try validatedArrayActual(actual);
         }
         if (try constructors.analyzeStaticZeroSizedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
@@ -1132,70 +930,27 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
     return null;
 }
 
-fn analyzeSingleItemArrayConstructorActual(
-    ctx: *Context,
-    builder: anytype,
-    ctor: ast.ArrayConstructor,
-) !?ArrayActualPlan {
-    if (ctor.items.len != 1) return null;
-    if (ctor.items[0].* == .implied_do) return null;
-    return try resolveArrayActual(ctx, builder, ctor.items[0]);
-}
-
 // Array constructor and symbol-dimension helpers now live in array_actuals/constructors.zig.
 
 pub fn shapeSubjectExtents(ctx: *Context, builder: anytype, expr_node: *Expr) !?[]ValueRef {
-    return shape_intrinsics.shapeSubjectExtents(ctx, builder, expr_node, .{
+    return runtime_utils.shapeSubjectExtents(ctx, builder, expr_node, .{
         .analyzeAddressableArrayActual = analyzeAddressableArrayActual,
         .analyzeKnownArrayProcedureComponentActual = analyzeKnownArrayProcedureComponentActual,
-        .staticIntExprValue = constructors.staticIntExprValue,
     });
 }
 
-pub fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: []const ValueRef) !void {
-    if (owned_heap_args.len == 0) return;
-    const free_name = try ctx.ensureDeclRaw("free", .void, &[_]IRType{.ptr}, false);
-    for (owned_heap_args) |ptr| {
-        try builder.callTyped(null, .void, free_name, &.{ptr});
-    }
-}
+pub const emitOwnedHeapArgFrees = runtime_utils.emitOwnedHeapArgFrees;
 
-pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
-    return dispatch.isCharacterExpr(ctx, expr);
-}
+pub const isCharacterActualArg = runtime_utils.isCharacterActualArg;
 
-pub fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueRef {
-    return (try dispatch.emitAbiCharacterLenValue(ctx, builder, expr)) orelse null;
-}
+pub const emitCharacterLengthArg = runtime_utils.emitCharacterLengthArg;
 
-pub fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
-    const ptr_name = try ctx.nextTemp();
-    if (len <= 1) {
-        try builder.alloca(ptr_name, .i8);
-    } else {
-        try builder.allocaArray(ptr_name, .i8, len);
-    }
-    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
-}
-
-fn charSymbolLengthValueI64(
-    ctx: *Context,
-    builder: anytype,
-    name: []const u8,
-    sym: ast.sema.Symbol,
-) !ValueRef {
-    _ = sym;
-    return dispatch.emitCharacterSymbolLenValueI64(ctx, builder, name, ctx.findSymbol(name) orelse return error.UnknownSymbol);
-}
+pub const allocaCharBuffer = runtime_utils.allocaCharBuffer;
 
 pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
-    return transfer_intrinsics.emitIntrinsicArrayConversionArgPointer(ctx, builder, call, .{
+    return runtime_utils.emitIntrinsicArrayConversionArgPointer(ctx, builder, call, .{
         .resolveArrayActual = resolveArrayActual,
     });
-}
-
-fn intrinsicArrayConversionType(name: []const u8) ?IRType {
-    return transfer_intrinsics.intrinsicArrayConversionType(name);
 }
 
 pub const emitMulI64 = array_actuals_support.emitMulI64;
@@ -1226,6 +981,7 @@ const emitNegatedArrayActualLoop = array_actuals_support.emitNegatedArrayActualL
 const actualAddressScaleForSymbol = array_actuals_support.actualAddressScaleForSymbol;
 pub const isIntrinsicArrayConversionArg = array_actuals_support.isIntrinsicArrayConversionArg;
 pub const unpackComplexF32Return = array_actuals_support.unpackComplexF32Return;
+const evalConstIntArg = analysis_dispatch.evalConstIntArg;
 const emitIndexI64 = array_actuals_support.emitIndexI64;
 const isArrayValuedExpr = array_actuals_support.isArrayValuedExpr;
 const i64Const = array_actuals_support.i64Const;
