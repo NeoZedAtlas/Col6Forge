@@ -19,6 +19,7 @@ pub fn shapeSubjectExtents(
     comptime hooks: anytype,
 ) !?[]ValueRef {
     return shape_intrinsics.shapeSubjectExtents(ctx, builder, expr_node, .{
+        .resolveArrayActual = hooks.resolveArrayActual,
         .analyzeAddressableArrayActual = hooks.analyzeAddressableArrayActual,
         .analyzeKnownArrayProcedureComponentActual = hooks.analyzeKnownArrayProcedureComponentActual,
         .staticIntExprValue = constructors.staticIntExprValue,

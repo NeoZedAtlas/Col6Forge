@@ -220,13 +220,17 @@ pub fn shapeSubjectExtents(
     const actual = switch (expr_node.*) {
         .component => |comp| blk: {
             if (!comp.has_parens) {
+                if (try hooks.resolveArrayActual(ctx, builder, expr_node)) |actual| break :blk actual;
                 break :blk (try hooks.analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return null;
             }
             const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return null;
             const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return null;
             break :blk (try hooks.analyzeKnownArrayProcedureComponentActual(ctx, builder, comp, component)) orelse return null;
         },
-        else => (try hooks.analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return null,
+        else => blk: {
+            if (try hooks.resolveArrayActual(ctx, builder, expr_node)) |actual| break :blk actual;
+            break :blk (try hooks.analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return null;
+        },
     };
     try actual.validate();
     return actual.extents;

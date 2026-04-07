@@ -292,6 +292,7 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
             }
             if (kind == .call) {
                 if (try shape_intrinsics.analyzeIntrinsicBoundsActual(ctx, builder, call, .{
+                    .resolveArrayActual = resolveArrayActual,
                     .evalConstIntArg = evalConstIntArg,
                     .analyzeAddressableArrayActual = analyzeAddressableArrayActual,
                     .analyzeKnownArrayProcedureComponentActual = analyzeKnownArrayProcedureComponentActual,
@@ -874,6 +875,7 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         (std.ascii.eqlIgnoreCase(expr.call_or_subscript.name, "lbound") or std.ascii.eqlIgnoreCase(expr.call_or_subscript.name, "ubound")))
     {
         if (try shape_intrinsics.analyzeIntrinsicBoundsActual(ctx, builder, expr.call_or_subscript, .{
+            .resolveArrayActual = resolveArrayActual,
             .evalConstIntArg = evalConstIntArg,
             .analyzeAddressableArrayActual = analyzeAddressableArrayActual,
             .analyzeKnownArrayProcedureComponentActual = analyzeKnownArrayProcedureComponentActual,
@@ -942,6 +944,7 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
 
 pub fn shapeSubjectExtents(ctx: *Context, builder: anytype, expr_node: *Expr) !?[]ValueRef {
     return runtime_utils.shapeSubjectExtents(ctx, builder, expr_node, .{
+        .resolveArrayActual = resolveArrayActual,
         .analyzeAddressableArrayActual = analyzeAddressableArrayActual,
         .analyzeKnownArrayProcedureComponentActual = analyzeKnownArrayProcedureComponentActual,
     });
