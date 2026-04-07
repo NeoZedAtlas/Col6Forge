@@ -420,3 +420,54 @@ test "contained procedure does not revalidate imported derived binding prelude" 
     try testing.expectEqual(@as(usize, 0), diag_bag.count());
 }
 
+test "recursive function name without RESULT is rejected as recursive call target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "contains\n" ++
+        "  recursive function f(n)\n" ++
+        "    integer :: f\n" ++
+        "    integer :: n\n" ++
+        "    f = 1\n" ++
+        "    if (n < 5) f = f + f(n + 1)\n" ++
+        "  end function f\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &program.units,
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, got.code);
+    try testing.expect(std.mem.indexOf(u8, got.message, "name of a recursive function") != null);
+}
+

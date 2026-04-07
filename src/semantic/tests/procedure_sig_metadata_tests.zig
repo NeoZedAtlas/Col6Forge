@@ -363,6 +363,36 @@ test "inferFunctionResultShapeSignature preserves component-based specification 
     try testing.expectEqualStrings("size(element%numbering%number2count,1)", shape[0]);
 }
 
+test "inferFunctionResultShapeSignature derives deferred allocatable result shape from allocate" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module x\n" ++
+        "contains\n" ++
+        "  pure function myfunc(x) result(y)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "    integer, dimension(:), allocatable :: y\n" ++
+        "    allocate(y(3))\n" ++
+        "    y = [x, 2*x, 3*x]\n" ++
+        "  end function myfunc\n" ++
+        "end module x\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].contains.len);
+
+    const shape = try function_type.inferFunctionResultShapeSignature(arena.allocator(), program.units[0].contains[0]);
+    try testing.expectEqual(@as(usize, 1), shape.len);
+    try testing.expectEqualStrings("3", shape[0]);
+}
+
 test "inferProcedureArgSigs infers subroutine dummy kind from CALL usage" {
     const testing = std.testing;
     const allocator = testing.allocator;

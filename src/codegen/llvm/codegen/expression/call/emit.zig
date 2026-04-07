@@ -193,8 +193,10 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     if (try resolveArrayActual(ctx, builder, expr)) |actual| {
         return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
     }
-    if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
-        return .{ .ptr = char_value.ptr };
+    if (!isArraySubstringActualExpr(expr)) {
+        if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
+            return .{ .ptr = char_value.ptr };
+        }
     }
     switch (expr.*) {
         .identifier => |name| {
@@ -302,6 +304,13 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
     try builder.store(stored, ptr);
     return .{ .ptr = ptr };
+}
+
+fn isArraySubstringActualExpr(expr: *Expr) bool {
+    return switch (expr.*) {
+        .substring => |sub| sub.args.len != 0,
+        else => false,
+    };
 }
 
 fn emitPointerLikeArrayCallActual(

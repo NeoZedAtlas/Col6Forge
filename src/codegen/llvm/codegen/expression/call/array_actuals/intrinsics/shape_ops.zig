@@ -163,10 +163,41 @@ pub fn analyzeIntrinsicReshapeActual(
 
     const source_actual = (try hooks.resolveArrayActual(ctx, builder, call.args[0])) orelse return null;
     try source_actual.validate();
-    if (!source_actual.contiguous) return null;
     const source_count = try support.emitExtentProductI64(ctx, builder, source_actual.extents);
     const result_count = try support.emitExtentProductI64(ctx, builder, extents);
     try support.emitRequireEqualI64(ctx, builder, source_count, result_count, "reshape_count");
+
+    if (!source_actual.contiguous) {
+        if (!support.isMaterializableArrayElementType(source_actual.elem_ty)) return null;
+        if (!support.valueRefEquals(source_actual.address_scale, support.i64Const(ctx, 1))) return null;
+
+        const dst_ptr = try support.emitHeapArrayTempPointer(ctx, builder, source_actual.elem_ty, result_count);
+        try support.emitIntrinsicArrayConversionLoop(
+            ctx,
+            builder,
+            source_actual.base_ptr,
+            source_actual.elem_ty,
+            source_actual.extents,
+            source_actual.multipliers,
+            source_actual.address_scale,
+            source_actual.contiguous,
+            dst_ptr,
+            source_actual.elem_ty,
+            result_count,
+        );
+        try support.emitMaybeFreeOwnedArrayActual(ctx, builder, source_actual);
+
+        return .{
+            .base_ptr = dst_ptr,
+            .elem_ty = source_actual.elem_ty,
+            .extents = extents,
+            .multipliers = try support.emitContiguousMultipliers(ctx, builder, extents),
+            .address_scale = support.i64Const(ctx, 1),
+            .storage = .materialized_temp,
+            .owned_heap_ptr = dst_ptr,
+            .contiguous = true,
+        };
+    }
 
     return .{
         .base_ptr = source_actual.base_ptr,

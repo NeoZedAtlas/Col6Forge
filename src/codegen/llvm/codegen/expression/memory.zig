@@ -466,6 +466,54 @@ fn emitDerivedArrayBaseView(
                 .elem_stride_bytes = component.elem_size,
             };
         },
+        .call_or_subscript => |call| blk: {
+            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            if (sym.loweredKind() != .derived or sym.dims.len == 0) break :blk null;
+            if (call.args.len != sym.dims.len) break :blk null;
+
+            var saw_range = false;
+            for (call.args) |arg| {
+                switch (arg.*) {
+                    .dim_range => saw_range = true,
+                    else => {},
+                }
+            }
+            if (!saw_range) break :blk null;
+
+            const type_name = sym.type_spec.derived_type_name orelse break :blk null;
+            const layout = ctx.findDerivedTypeLayout(type_name) orelse return error.UnknownSymbol;
+
+            var base_ptr = try ctx.getPointer(call.name);
+            if (sym.is_pointer) {
+                const loaded_name = try ctx.nextTemp();
+                try builder.load(loaded_name, .ptr, base_ptr);
+                base_ptr = .{ .name = loaded_name, .ty = .ptr, .is_ptr = true };
+            }
+
+            var offset = utils.zeroValue(index_ty);
+            for (call.args, 0..) |arg, dim_idx| {
+                const idx_val = switch (arg.*) {
+                    .dim_range => |range| if (range.lower) |lower_expr|
+                        try emitIndex(ctx, builder, lower_expr)
+                    else
+                        try emitSymbolDimLower(ctx, builder, sym, dim_idx),
+                    else => try emitIndex(ctx, builder, arg),
+                };
+                const lb = try emitSymbolDimLower(ctx, builder, sym, dim_idx);
+                const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
+                const stride = try emitSymbolDimMultiplier(ctx, builder, sym, dim_idx);
+                const term = try binary.emitMul(ctx, builder, idx_adj, stride);
+                offset = try binary.emitAdd(ctx, builder, offset, term);
+            }
+
+            const gep_name = try ctx.nextTemp();
+            try builder.gep(gep_name, .ptr, base_ptr, offset);
+            break :blk .{
+                .base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true },
+                .count = null,
+                .elem_stride_bytes = layout.size,
+            };
+        },
         else => null,
     };
 }

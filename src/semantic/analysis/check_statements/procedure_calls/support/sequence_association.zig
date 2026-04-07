@@ -104,8 +104,8 @@ pub fn sequenceAssociationAvailableElements(self: *context.Context, expr: *ast.E
                 if (sectionIsDefinitelyNoncontiguous(self, sym.dims, call.args)) return null;
                 return sectionElementCount(self, sym.dims, call.args) orelse unknown_sequence_association_elements;
             }
-            const total = arrayElementCountForDims(self, sym.dims) orelse return null;
-            const offset = linearSubscriptOffset(self, sym.dims, call.args) orelse return null;
+            const total = arrayElementCountForDims(self, sym.dims) orelse return unknown_sequence_association_elements;
+            const offset = linearSubscriptOffset(self, sym.dims, call.args) orelse return unknown_sequence_association_elements;
             return total -% offset;
         },
         .component => |comp| {
@@ -119,8 +119,8 @@ pub fn sequenceAssociationAvailableElements(self: *context.Context, expr: *ast.E
                 if (sectionIsDefinitelyNoncontiguous(self, component.dims, comp.args)) return null;
                 return sectionElementCount(self, component.dims, comp.args) orelse unknown_sequence_association_elements;
             }
-            const total = arrayElementCountForDims(self, component.dims) orelse return null;
-            const offset = linearSubscriptOffset(self, component.dims, comp.args) orelse return null;
+            const total = arrayElementCountForDims(self, component.dims) orelse return unknown_sequence_association_elements;
+            const offset = linearSubscriptOffset(self, component.dims, comp.args) orelse return unknown_sequence_association_elements;
             return total -% offset;
         },
         else => return null,

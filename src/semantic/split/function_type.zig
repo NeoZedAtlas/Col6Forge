@@ -127,7 +127,13 @@ pub fn inferFunctionResultShapeSignature(arena: std.mem.Allocator, unit: ast.Pro
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (matchesResultName(explicit_result_name, unit.name, item.name)) {
-                        return procedure_inference.shapeSignatureForDims(arena, item.dims);
+                        const shape = try procedure_inference.shapeSignatureForDims(arena, item.dims);
+                        if (allDeferredShapeSignature(shape)) {
+                            if (try inferAllocatedResultShapeSignature(arena, unit, explicit_result_name)) |allocated_shape| {
+                                return allocated_shape;
+                            }
+                        }
+                        return shape;
                     }
                 }
             },
@@ -141,7 +147,13 @@ pub fn inferFunctionResultShapeSignature(arena: std.mem.Allocator, unit: ast.Pro
             .dimension => |dimension_decl| {
                 for (dimension_decl.items) |item| {
                     if (matchesResultName(explicit_result_name, unit.name, item.name)) {
-                        return procedure_inference.shapeSignatureForDims(arena, item.dims);
+                        const shape = try procedure_inference.shapeSignatureForDims(arena, item.dims);
+                        if (allDeferredShapeSignature(shape)) {
+                            if (try inferAllocatedResultShapeSignature(arena, unit, explicit_result_name)) |allocated_shape| {
+                                return allocated_shape;
+                            }
+                        }
+                        return shape;
                     }
                 }
             },
@@ -200,6 +212,41 @@ fn matchesResultName(explicit_result_name: ?[]const u8, unit_name: []const u8, c
         std.ascii.eqlIgnoreCase(candidate_name, result_name)
     else
         std.ascii.eqlIgnoreCase(candidate_name, unit_name);
+}
+
+fn allDeferredShapeSignature(shape: []const []const u8) bool {
+    if (shape.len == 0) return false;
+    for (shape) |dim| {
+        if (!std.mem.eql(u8, std.mem.trim(u8, dim, " \t"), ":")) return false;
+    }
+    return true;
+}
+
+fn inferAllocatedResultShapeSignature(
+    arena: std.mem.Allocator,
+    unit: ast.ProgramUnit,
+    explicit_result_name: ?[]const u8,
+) !?[]const []const u8 {
+    const result_name = explicit_result_name orelse unit.name;
+    for (unit.stmts) |stmt| {
+        switch (stmt.node) {
+            .allocate => |allocate| {
+                for (allocate.items) |item| {
+                    if (!allocateTargetMatchesResult(item.target, result_name)) continue;
+                    return try procedure_inference.shapeSignatureForDims(arena, item.dims);
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn allocateTargetMatchesResult(expr: *ast.Expr, result_name: []const u8) bool {
+    return switch (expr.*) {
+        .identifier => |name| std.ascii.eqlIgnoreCase(name, result_name),
+        else => false,
+    };
 }
 
 fn applyDeclaratorLen(type_spec: symbols.TypeSpec, item: ast.Declarator) symbols.TypeSpec {

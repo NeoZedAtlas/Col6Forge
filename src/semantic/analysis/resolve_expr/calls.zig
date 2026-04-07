@@ -40,6 +40,14 @@ pub fn resolveCallOrSubscriptExpr(
 
     const idx = try symbols_mod.ensureSymbol(self, call.name);
     var sym = self.symbols.items[idx];
+    if (shouldRejectImplicitRecursiveFunctionResultReference(self, call.name, sym, call.args.len)) {
+        return emitInvalidArgumentDiagnostic(
+            self,
+            expr_node,
+            catalog.semantic.invalid_argument_count.code,
+            "Function name is the name of a recursive function result; use RESULT for recursive calls",
+        );
+    }
     var kind: ResolvedRefKind = .unknown;
     var resolved_spec = sym.type_spec;
     const visible_generic_sig = try effectiveVisibleGenericSig(self, call.name, call.args, deps);
@@ -196,6 +204,21 @@ pub fn resolveCallOrSubscriptExpr(
     }
     try deps.recordResolvedRef(self, expr_node, call.name, kind, idx);
     try deps.cacheExprType(self, expr_node, resolved_spec);
+}
+
+fn shouldRejectImplicitRecursiveFunctionResultReference(
+    self: *context.Context,
+    name: []const u8,
+    sym: symbols.Symbol,
+    arg_count: usize,
+) bool {
+    if (arg_count == 0) return false;
+    if (self.unit.kind != .function) return false;
+    if (!self.unit.recursive) return false;
+    if (self.unit.result_name != null) return false;
+    if (!std.ascii.eqlIgnoreCase(self.unit.name, name)) return false;
+    if (sym.dims.len != 0) return false;
+    return true;
 }
 
 pub fn resolveSubstringExpr(

@@ -486,7 +486,7 @@ fn wholeActualView(
     expr_node: *Expr,
 ) EmitError!?WholeArrayView {
     const actual = (try array_actuals.resolveArrayActual(ctx, builder, expr_node)) orelse return null;
-    if (!actual.contiguous) {
+    if (!supportsLinearWholeActualView(actual)) {
         try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
         return null;
     }
@@ -509,6 +509,16 @@ fn wholeActualView(
         .stride_bytes = 0,
         .owned_heap_ptr = actual.owned_heap_ptr,
     };
+}
+
+fn supportsLinearWholeActualView(actual: anytype) bool {
+    if (actual.contiguous) return true;
+    if (actual.extents.len != 1 or actual.multipliers.len != 1) return false;
+    return valueRefEquals(actual.multipliers[0], .{ .name = "1", .ty = .i64, .is_ptr = false });
+}
+
+fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
 pub fn supportedWholeArrayView(

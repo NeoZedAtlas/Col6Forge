@@ -102,6 +102,25 @@ fn emitWholeArrayLogicalReduction(
         else => return null,
     }
 
+    if (views.supportedConstructorView(bin.right)) |right_ctor| {
+        if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
+            defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
+            return if (require_all)
+                try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
+            else
+                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor);
+        }
+    }
+    if (views.supportedConstructorView(bin.left)) |left_ctor| {
+        if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
+            defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
+            return if (require_all)
+                try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
+            else
+                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual);
+        }
+    }
+
     if (try views.supportedWholeArrayView(ctx, builder, bin.left)) |left_view| {
         if (views.supportedConstructorView(bin.right)) |right_ctor| {
             const reduced = if (require_all)
@@ -164,6 +183,13 @@ fn emitWholeArrayLogicalReduction(
         return reduced;
     }
     if (views.supportedConstructorView(bin.left)) |left_ctor| {
+        if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
+            defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
+            return if (require_all)
+                try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
+            else
+                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual);
+        }
         if (views.supportedConstructorView(bin.right)) |right_ctor| {
             if (left_ctor.count != right_ctor.count) return null;
             return if (require_all)
@@ -177,6 +203,13 @@ fn emitWholeArrayLogicalReduction(
             try emitConstructorScalarReduction(ctx, builder, bin.op, left_ctor, bin.right);
     }
     if (views.supportedConstructorView(bin.right)) |right_ctor| {
+        if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
+            defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
+            return if (require_all)
+                try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
+            else
+                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor);
+        }
         return if (require_all)
             try emitScalarConstructorReductionAll(ctx, builder, bin.op, bin.left, right_ctor)
         else
@@ -384,6 +417,91 @@ fn emitMergeViewElement(
     const select_name = try ctx.nextTemp();
     try builder.select(select_name, plan.elem_ty, mask, when_true, when_false);
     return .{ .name = select_name, .ty = plan.elem_ty, .is_ptr = false };
+}
+
+fn emitActualConstructorReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ArrayActualPlan,
+    right: ConstructorView,
+) EmitError!?ValueRef {
+    if (!supportsConstructorActualReduction(left, right)) return null;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < right.count) : (idx += 1) {
+        const lhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), left);
+        const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitConstructorActualReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ConstructorView,
+    right: ArrayActualPlan,
+) EmitError!?ValueRef {
+    if (!supportsConstructorActualReduction(right, left)) return null;
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
+        const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), right);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitActualConstructorReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ArrayActualPlan,
+    right: ConstructorView,
+) EmitError!?ValueRef {
+    if (!supportsConstructorActualReduction(left, right)) return null;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < right.count) : (idx += 1) {
+        const lhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), left);
+        const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitConstructorActualReductionAll(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ConstructorView,
+    right: ArrayActualPlan,
+) EmitError!?ValueRef {
+    if (!supportsConstructorActualReduction(right, left)) return null;
+    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
+        const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), right);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
+    }
+    return acc;
+}
+
+fn supportsConstructorActualReduction(actual: ArrayActualPlan, ctor: ConstructorView) bool {
+    if (actual.elem_ty == .i8) return false;
+    if (actual.extents.len != 1) return false;
+    if (std.fmt.parseInt(usize, actual.extents[0].name, 10) catch null) |count| {
+        return count == ctor.count;
+    }
+    return true;
 }
 
 fn emitIndexedCompareReduction(
