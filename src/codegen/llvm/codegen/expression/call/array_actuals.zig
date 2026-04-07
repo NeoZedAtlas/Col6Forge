@@ -400,10 +400,10 @@ fn lowerSubstringArraySectionToCall(
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.dims.len == 0) return null;
 
-    if (sub.start == null and sub.end == null and sub.args.len != 0) {
+    if (sub.args.len != 0 and substringCoversWholeElements(ctx, sym, sub)) {
         return .{
             .name = sub.name,
-            .args = sub.args,
+            .args = try normalizeWholeSubstringArraySectionArgs(ctx, sub.args),
         };
     }
     if (sub.args.len != 0 or sym.dims.len != 1) return null;
@@ -433,6 +433,64 @@ fn lowerSubstringArraySectionToCall(
     };
 }
 
+fn normalizeWholeSubstringArraySectionArgs(
+    ctx: *Context,
+    args: []*Expr,
+) ![]*Expr {
+    const normalized = try ctx.allocator.alloc(*Expr, args.len);
+    for (args, 0..) |arg, idx| {
+        if (arg.* != .dim_range) {
+            normalized[idx] = arg;
+            continue;
+        }
+        if (arg.dim_range.assumed_shape or
+            (arg.dim_range.upper.* == .literal and arg.dim_range.upper.literal.kind == .assumed_size))
+        {
+            normalized[idx] = arg;
+            continue;
+        }
+        const assumed = try ctx.allocator.create(Expr);
+        assumed.* = .{ .literal = .{
+            .kind = .assumed_size,
+            .text = "*",
+        } };
+        const range = try ctx.allocator.create(Expr);
+        range.* = .{ .dim_range = .{
+            .lower = arg.dim_range.lower,
+            .upper = assumed,
+            .stride = arg.dim_range.stride,
+            .assumed_shape = true,
+        } };
+        normalized[idx] = range;
+    }
+    return normalized;
+}
+
+fn substringCoversWholeElements(
+    ctx: *Context,
+    sym: ast.sema.Symbol,
+    sub: ast.SubstringExpr,
+) bool {
+    if (sub.start == null and sub.end == null) return true;
+    const char_len = common.constantCharacterLen(sym) orelse return false;
+    const start_ok = if (sub.start) |start_expr|
+        integerLiteralEquals(ctx, start_expr, 1)
+    else
+        true;
+    const end_ok = if (sub.end) |end_expr|
+        integerLiteralEquals(ctx, end_expr, @intCast(char_len))
+    else
+        true;
+    return start_ok and end_ok;
+}
+
+fn integerLiteralEquals(ctx: *Context, expr: *Expr, expected: i64) bool {
+    if (expr.* != .literal or expr.literal.kind != .integer) return false;
+    const normalized = utils.normalizeIntLiteral(ctx.allocator, expr.literal.text) catch return false;
+    const parsed = std.fmt.parseInt(i64, normalized, 10) catch return false;
+    return parsed == expected;
+}
+
 fn analyzeAddressableDataComponentArrayActual(
     ctx: *Context,
     builder: anytype,
@@ -442,7 +500,44 @@ fn analyzeAddressableDataComponentArrayActual(
     if (component.type_spec.lowered_kind == .character or component.dims.len == 0) return null;
     if (!(component.pointer or component.allocatable)) {
         if (comp.args.len == 0) return null;
-        return null;
+        if (comp.args.len != component.dims.len) return null;
+
+        var section_rank: usize = 0;
+        for (comp.args) |arg| {
+            if (arg.* == .dim_range) section_rank += 1;
+        }
+        if (section_rank == 0) return null;
+
+        const extents = try ctx.allocator.alloc(ValueRef, section_rank);
+        const multipliers = try ctx.allocator.alloc(ValueRef, section_rank);
+        var out_idx: usize = 0;
+        for (comp.args, 0..) |arg, idx| {
+            if (arg.* != .dim_range) continue;
+            const range = arg.dim_range;
+            const lower = if (range.lower) |lower_expr|
+                try emitIndexI64(ctx, builder, lower_expr)
+            else
+                try memory.emitDimLower(ctx, builder, component.dims[idx]);
+            const upper = try emitStaticComponentSectionUpperI64(ctx, builder, component, idx, range);
+            const step = if (range.stride) |step_expr|
+                try emitIndexI64(ctx, builder, step_expr)
+            else
+                i64Const(ctx, 1);
+            extents[out_idx] = try emitTripletCountI64(ctx, builder, lower, upper, step);
+            const multiplier = try emitStaticComponentDimMultiplier(ctx, builder, component.dims, idx);
+            multipliers[out_idx] = try emitMulI64(ctx, builder, multiplier, step);
+            out_idx += 1;
+        }
+
+        return .{
+            .base_ptr = try emitStaticComponentSectionBasePtr(ctx, builder, comp, component),
+            .elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout),
+            .extents = extents,
+            .multipliers = multipliers,
+            .address_scale = i64Const(ctx, 1),
+            .storage = .direct,
+            .contiguous = false,
+        };
     }
 
     if (comp.args.len == 0) {
@@ -494,6 +589,78 @@ fn analyzeAddressableDataComponentArrayActual(
         .storage = .direct,
         .contiguous = false,
     };
+}
+
+fn emitStaticComponentSectionUpperI64(
+    ctx: *Context,
+    builder: anytype,
+    component: context.DerivedComponentLayout,
+    dim_index: usize,
+    range: ast.DimRange,
+) !ValueRef {
+    if (range.assumed_shape or (range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+        const lower = try memory.emitDimLower(ctx, builder, component.dims[dim_index]);
+        const extent = try emitStaticComponentDimExtent(ctx, builder, component.dims[dim_index]);
+        return try emitAddI64(ctx, builder, lower, try emitSubI64(ctx, builder, extent, i64Const(ctx, 1)));
+    }
+    return emitIndexI64(ctx, builder, range.upper);
+}
+
+fn emitStaticComponentDimExtent(
+    ctx: *Context,
+    builder: anytype,
+    dim: *Expr,
+) !ValueRef {
+    var extent = try memory.emitDimValue(ctx, builder, dim);
+    if (extent.ty != .i64) extent = try casting.coerce(ctx, builder, extent, .i64);
+    return extent;
+}
+
+fn emitStaticComponentDimMultiplier(
+    ctx: *Context,
+    builder: anytype,
+    dims: []*Expr,
+    dim_index: usize,
+) !ValueRef {
+    var stride = i64Const(ctx, 1);
+    var idx: usize = 0;
+    while (idx < dim_index) : (idx += 1) {
+        const extent = try emitStaticComponentDimExtent(ctx, builder, dims[idx]);
+        stride = try emitMulI64(ctx, builder, stride, extent);
+    }
+    return stride;
+}
+
+fn emitStaticComponentSectionBasePtr(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) !ValueRef {
+    var offset = i64Const(ctx, 0);
+    for (comp.args, 0..) |arg, idx| {
+        const idx_val = if (arg.* == .dim_range)
+            if (arg.dim_range.lower) |lower_expr|
+                try emitIndexI64(ctx, builder, lower_expr)
+            else
+                try memory.emitDimLower(ctx, builder, component.dims[idx])
+        else
+            try emitIndexI64(ctx, builder, arg);
+
+        const lower = try memory.emitDimLower(ctx, builder, component.dims[idx]);
+        const idx_adj = try emitSubI64(ctx, builder, idx_val, lower);
+        const stride = try emitStaticComponentDimMultiplier(ctx, builder, component.dims, idx);
+        const term = try emitMulI64(ctx, builder, idx_adj, stride);
+        offset = try emitAddI64(ctx, builder, offset, term);
+    }
+
+    if (component.elem_size != 1) {
+        offset = try emitMulI64(ctx, builder, offset, i64Const(ctx, @intCast(component.elem_size)));
+    }
+    const base_ptr = try memory.emitComponentStoragePtr(ctx, builder, comp);
+    const gep_name = try ctx.nextTemp();
+    try builder.gep(gep_name, .i8, base_ptr, offset);
+    return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
 }
 
 const VectorSubscriptArg = union(enum) {

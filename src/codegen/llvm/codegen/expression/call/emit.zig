@@ -5,6 +5,7 @@ const array_actuals = @import("array_actuals.zig");
 const common = @import("../../common.zig");
 const memory = @import("../memory.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const resolution = @import("../dispatch/resolution.zig");
 const casting = @import("../casting.zig");
 const utils = @import("../../utils.zig");
 
@@ -25,7 +26,7 @@ const analyzeAddressableArrayActual = array_actuals.analyzeAddressableArrayActua
 const allocaCharBuffer = array_actuals.allocaCharBuffer;
 const unpackComplexF32Return = array_actuals.unpackComplexF32Return;
 
-pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
+pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) anyerror!ValueRef {
     const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
 
@@ -74,7 +75,7 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
-pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
+pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_ty: IRType, args: []*Expr, discard: bool) anyerror!ValueRef {
     const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
 
@@ -246,7 +247,18 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             return .{ .ptr = try ctx.getPointer(name) };
         },
         .call_or_subscript => |call| {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                } else if (ctx.lookupKnownProcedureSig(call.name) != null) {
+                    kind = .call;
+                }
+            }
             if (kind == .call and isIntrinsicArrayConversionArg(ctx, call)) {
                 return try emitIntrinsicArrayConversionArgPointer(ctx, builder, call);
             }
@@ -255,6 +267,11 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             }
             if (kind == .subscript) {
                 return .{ .ptr = try memory.emitSubscriptPtr(ctx, builder, call) };
+            }
+            if (kind == .call) {
+                if (try emitPointerLikeArrayCallActual(ctx, builder, call)) |ptr| {
+                    return .{ .ptr = ptr };
+                }
             }
             // Non-subscript call expressions are not addressable.
         },
@@ -285,6 +302,18 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
     try builder.store(stored, ptr);
     return .{ .ptr = ptr };
+}
+
+fn emitPointerLikeArrayCallActual(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) !?ValueRef {
+    const sig = ctx.lookupKnownProcedureSig(call.name) orelse return null;
+    if (sig.result_rank == 0) return null;
+    if (!sig.is_pointer and !sig.result_allocatable) return null;
+    const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .ptr, call.args, false);
+    return try emitCall(ctx, builder, fn_name, .ptr, call.args, false);
 }
 
 fn procedureDefinedIRName(
@@ -347,7 +376,7 @@ fn appendAbiActualArgs(
     args: []*Expr,
     proc_sig: ?ast.sema.KnownProcedureSig,
     result_len: ?ValueRef,
-) !void {
+) anyerror!void {
     var resolved_args = std.array_list.Managed(ArgPointerResult).init(ctx.allocator);
     defer resolved_args.deinit();
     for (args) |arg| {

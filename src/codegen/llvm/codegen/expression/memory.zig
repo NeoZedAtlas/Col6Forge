@@ -579,7 +579,7 @@ pub fn emitSymbolDimMultiplier(ctx: *Context, builder: anytype, sym: ast.sema.Sy
     return stride;
 }
 
-fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+pub fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     if (expr.* == .dim_range) {
         const range = expr.dim_range;
         if (range.lower) |lower_expr| {

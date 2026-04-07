@@ -256,7 +256,7 @@ pub fn ensureExternalDeclForResolvedCall(
 ) ![]const u8 {
     if (ctx.defined.contains(mangled)) return mangled;
     const proc_sig = ctx.lookupKnownProcedureSig(lookup_name);
-    const decl_ret_ty = if (proc_sig != null and proc_sig.?.result_rank != 0)
+    const decl_ret_ty = if (proc_sig != null and usesHiddenArrayResultAbi(proc_sig.?))
         ir.IRType.void
     else
         ctx.abiFunctionReturnType(ret_ty);
@@ -463,7 +463,7 @@ fn buildAbiParamTypes(
     const proc_sig = ctx.lookupKnownProcedureSig(name);
     const has_hidden_result_ptr = has_character_result or
         ctx.abiUsesHiddenResultPtr(ret_ty) or
-        (proc_sig != null and proc_sig.?.result_rank != 0);
+        (proc_sig != null and usesHiddenArrayResultAbi(proc_sig.?));
     if (has_hidden_result_ptr) {
         try tys.append(.ptr);
     }
@@ -485,6 +485,10 @@ fn buildAbiParamTypes(
         }
     }
     return tys.toOwnedSlice();
+}
+
+fn usesHiddenArrayResultAbi(sig: ast.sema.KnownProcedureSig) bool {
+    return sig.result_rank != 0 and !sig.is_pointer and !sig.result_allocatable;
 }
 
 fn formatParamSig(ctx: *Context, param_types: []const llvm_types.IRType) ![]const u8 {

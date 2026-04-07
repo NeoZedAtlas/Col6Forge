@@ -118,7 +118,10 @@ fn installExplicitInterfaceProcedureSigs(
                 .args = try procedure_inference.inferInterfaceProcedureArgSigs(arena, unit, proc_header),
                 .pure = proc_header.pure,
                 .elemental = proc_header.elemental,
-                .is_pointer = false,
+                .is_pointer = if (proc_header.kind == .function)
+                    procedure_inference.interfaceProcedureResultAttrs(proc_header).pointer
+                else
+                    false,
                 .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
                 .result_type_spec = if (proc_header.kind == .function)
                     procedure_inference.interfaceProcedureResultTypeSpec(unit, proc_header)

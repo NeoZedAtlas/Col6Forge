@@ -70,7 +70,7 @@ pub fn installExplicitInterfaceProcedures(
                     .args = try infer.inferInterfaceProcedureArgSigs(arena, unit, proc_header),
                     .pure = proc_header.pure,
                     .elemental = proc_header.elemental,
-                    .is_pointer = false,
+                    .is_pointer = if (proc_header.kind == .function) infer.interfaceProcedureResultAttrs(proc_header).pointer else false,
                     .result_rank = infer.interfaceProcedureResultRank(proc_header),
                     .result_type_spec = if (proc_header.kind == .function) infer.interfaceProcedureResultTypeSpec(unit, proc_header) else null,
                     .result_shape_signature = if (proc_header.kind == .function) try infer.interfaceProcedureResultShapeSignature(arena, proc_header) else &.{},

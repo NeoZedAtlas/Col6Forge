@@ -480,7 +480,7 @@ fn interfaceProcedureSig(
         .args = args,
         .pure = proc_header.pure,
         .elemental = proc_header.elemental,
-        .is_pointer = false,
+        .is_pointer = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultAttrs(proc_header).pointer else false,
         .result_rank = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultRank(proc_header) else 0,
         .result_type_spec = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultTypeSpec(self.unit, proc_header) else null,
         .result_shape_signature = if (proc_header.kind == .function) procedure_inference.interfaceProcedureResultShapeSignature(self.arena, proc_header) catch return null else &.{},
