@@ -3,6 +3,7 @@ const ast = @import("../../../../input.zig");
 const runtime_fail = @import("../../runtime_fail.zig");
 const casting = @import("../casting.zig");
 const shared = @import("shared.zig");
+const primitives = @import("array_actuals/support/primitives.zig");
 
 const Context = shared.Context;
 const ArrayActualPlan = shared.ArrayActualPlan;
@@ -10,6 +11,8 @@ const Expr = shared.Expr;
 const IRType = shared.IRType;
 const ValueRef = shared.ValueRef;
 const validatedArrayActual = shared.validatedArrayActual;
+const emitContiguousMultipliers = primitives.emitContiguousMultipliers;
+const byteSizeForIRType = primitives.byteSizeForIRType;
 
 const IntrinsicKind = enum {
     ichar,
@@ -210,20 +213,6 @@ fn emitExtentProductI64(ctx: *Context, builder: anytype, extents: []const ValueR
     return total;
 }
 
-fn emitContiguousMultipliers(
-    ctx: *Context,
-    builder: anytype,
-    extents: []const ValueRef,
-) ![]ValueRef {
-    const multipliers = try ctx.allocator.alloc(ValueRef, extents.len);
-    var stride = i64Const(ctx, 1);
-    for (extents, 0..) |extent, idx| {
-        multipliers[idx] = stride;
-        stride = try emitMulI64(ctx, builder, stride, extent);
-    }
-    return multipliers;
-}
-
 fn emitHeapArrayTempPointer(
     ctx: *Context,
     builder: anytype,
@@ -275,20 +264,4 @@ fn emitHeapAllocBytes(
 
     try builder.label(alloc_ok);
     return heap_ptr;
-}
-
-fn byteSizeForIRType(ty: IRType) usize {
-    return switch (ty) {
-        .i1 => 1,
-        .i8 => 1,
-        .i32 => 4,
-        .i64 => 8,
-        .f32 => 4,
-        .f64 => 8,
-        .v2f32 => 8,
-        .complex_f32 => 8,
-        .complex_f64 => 16,
-        .ptr => @sizeOf(usize),
-        .void => 1,
-    };
 }

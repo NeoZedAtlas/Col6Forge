@@ -28,7 +28,6 @@ const reductions_intrinsics = @import("array_actuals/intrinsics/reductions.zig")
 const shape_intrinsics = @import("array_actuals/intrinsics/shape_ops.zig");
 const transfer_intrinsics = @import("array_actuals/intrinsics/transfer.zig");
 const numeric_unary_intrinsics = @import("array_actuals/intrinsics/numeric_unary.zig");
-
 const Expr = shared.Expr;
 const IRType = shared.IRType;
 const Context = shared.Context;
@@ -939,9 +938,7 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
     }
     return null;
 }
-
 // Array constructor and symbol-dimension helpers now live in array_actuals/constructors.zig.
-
 pub fn shapeSubjectExtents(ctx: *Context, builder: anytype, expr_node: *Expr) !?[]ValueRef {
     return runtime_utils.shapeSubjectExtents(ctx, builder, expr_node, .{
         .resolveArrayActual = resolveArrayActual,
@@ -949,15 +946,10 @@ pub fn shapeSubjectExtents(ctx: *Context, builder: anytype, expr_node: *Expr) !?
         .analyzeKnownArrayProcedureComponentActual = analyzeKnownArrayProcedureComponentActual,
     });
 }
-
 pub const emitOwnedHeapArgFrees = runtime_utils.emitOwnedHeapArgFrees;
-
 pub const isCharacterActualArg = runtime_utils.isCharacterActualArg;
-
 pub const emitCharacterLengthArg = runtime_utils.emitCharacterLengthArg;
-
 pub const allocaCharBuffer = runtime_utils.allocaCharBuffer;
-
 pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
     return runtime_utils.emitIntrinsicArrayConversionArgPointer(ctx, builder, call, .{
         .resolveArrayActual = resolveArrayActual,

@@ -31,6 +31,14 @@ fn evalConstUncached(self: *context.Context, expr: *ast.Expr) anyerror!?ConstVal
     return evaluator.evalConst(expr, resolver);
 }
 
+pub fn exprMeasure(
+    self: *context.Context,
+    expr: *ast.Expr,
+    measure: evaluator.ExprMeasureKind,
+) ?i64 {
+    return constExprMeasure(self, expr, measure);
+}
+
 fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
     const self: *context.Context = @ptrCast(@alignCast(ctx));
     if (symbols_mod.findSymbolIndex(self, name)) |idx| {

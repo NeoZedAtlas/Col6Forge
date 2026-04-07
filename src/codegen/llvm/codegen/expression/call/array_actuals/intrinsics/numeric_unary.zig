@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../../../input.zig");
 const intrinsics = @import("../../../intrinsics/mod.zig");
 const shared = @import("../../shared.zig");
+const primitives = @import("../support/primitives.zig");
 
 const Context = shared.Context;
 const Expr = shared.Expr;
@@ -9,6 +10,8 @@ const IRType = shared.IRType;
 const ValueRef = shared.ValueRef;
 const ArrayActualPlan = shared.ArrayActualPlan;
 const validatedArrayActual = shared.validatedArrayActual;
+const emitContiguousMultipliers = primitives.emitContiguousMultipliers;
+const byteSizeForIRType = primitives.byteSizeForIRType;
 
 pub fn analyzeElementalUnaryFloatIntrinsicActual(
     ctx: *Context,
@@ -108,20 +111,6 @@ fn emitExtentProductI64(ctx: *Context, builder: anytype, extents: []const ValueR
     return total;
 }
 
-fn emitContiguousMultipliers(
-    ctx: *Context,
-    builder: anytype,
-    extents: []const ValueRef,
-) ![]ValueRef {
-    const multipliers = try ctx.allocator.alloc(ValueRef, extents.len);
-    var stride = i64Const(ctx, 1);
-    for (extents, 0..) |extent, idx| {
-        multipliers[idx] = stride;
-        stride = try emitMulI64(ctx, builder, stride, extent);
-    }
-    return multipliers;
-}
-
 fn emitHeapArrayTempPointer(
     ctx: *Context,
     builder: anytype,
@@ -154,20 +143,4 @@ fn emitHeapAllocBytes(
     const heap_ptr_name = try ctx.nextTemp();
     try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{safe_bytes});
     return .{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
-}
-
-fn byteSizeForIRType(ty: IRType) usize {
-    return switch (ty) {
-        .i1 => 1,
-        .i8 => 1,
-        .i32 => 4,
-        .i64 => 8,
-        .f32 => 4,
-        .f64 => 8,
-        .v2f32 => 8,
-        .complex_f32 => 8,
-        .complex_f64 => 16,
-        .ptr => @sizeOf(usize),
-        .void => 1,
-    };
 }

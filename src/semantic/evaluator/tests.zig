@@ -57,6 +57,44 @@ fn testDerivedExtends(_: *anyopaque, candidate: []const u8, base: []const u8) bo
     return false;
 }
 
+const TransferConstTestCtx = struct {
+    s_value: symbols.ConstValue = .{ .string = "FG" },
+    m_value: symbols.ConstValue = .{ .string = "abcdefgh" },
+    x_value: ?symbols.ConstValue = null,
+
+    fn resolve(ctx: *anyopaque, name: []const u8) ?symbols.ConstValue {
+        const self: *TransferConstTestCtx = @ptrCast(@alignCast(ctx));
+        if (std.ascii.eqlIgnoreCase(name, "s")) return self.s_value;
+        if (std.ascii.eqlIgnoreCase(name, "m")) return self.m_value;
+        if (std.ascii.eqlIgnoreCase(name, "x")) return self.x_value;
+        return null;
+    }
+
+    fn exprTypeSpec(_: *anyopaque, expr: *const ast.Expr) ?symbols.TypeSpec {
+        return switch (expr.*) {
+            .identifier => |name| blk: {
+                if (std.ascii.eqlIgnoreCase(name, "s")) {
+                    var spec = symbols.TypeSpec.fromKind(.character).withCharacterLength(.constant, 2);
+                    spec.kind_value = 4;
+                    break :blk spec;
+                }
+                if (std.ascii.eqlIgnoreCase(name, "m")) {
+                    var spec = symbols.TypeSpec.fromKind(.character).withCharacterLength(.constant, 8);
+                    spec.kind_value = 1;
+                    break :blk spec;
+                }
+                if (std.ascii.eqlIgnoreCase(name, "x")) {
+                    var spec = symbols.TypeSpec.fromKind(.character).withCharacterLength(.constant, 8);
+                    spec.kind_value = 1;
+                    break :blk spec;
+                }
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+};
+
 test "const call dispatch recognizes DATAN alias" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -515,6 +553,90 @@ test "evalConst decodes doubled-quote string when allocator is provided" {
     const value = (try evalConst(&expr, resolver)) orelse return error.TestExpectedEqual;
     switch (value) {
         .string => |bytes| try testing.expectEqualStrings("A'B", bytes),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "character constant comparison pads shorter operand with blanks" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const left = try a.create(ast.Expr);
+    left.* = .{ .literal = .{ .kind = .string, .text = "'FG'" } };
+    const right = try a.create(ast.Expr);
+    right.* = .{ .literal = .{ .kind = .string, .text = "'FG  '" } };
+    const expr = try a.create(ast.Expr);
+    expr.* = .{ .binary = .{
+        .op = .eq,
+        .left = left,
+        .right = right,
+    } };
+
+    const value = (try evalConst(expr, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .logical => |v| try testing.expect(v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const TRANSFER folds character kind roundtrip" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var ctx = TransferConstTestCtx{};
+    const resolver = ConstResolver{
+        .ctx = &ctx,
+        .resolveFn = TransferConstTestCtx.resolve,
+        .allocator = testing.allocator,
+        .exprTypeSpecFn = TransferConstTestCtx.exprTypeSpec,
+    };
+
+    const source_s = try a.create(ast.Expr);
+    source_s.* = .{ .identifier = "s" };
+    const mold_m = try a.create(ast.Expr);
+    mold_m.* = .{ .identifier = "m" };
+    const x_args = try a.alloc(*ast.Expr, 2);
+    x_args[0] = source_s;
+    x_args[1] = mold_m;
+    const x_expr = try a.create(ast.Expr);
+    x_expr.* = .{ .call_or_subscript = .{ .name = "transfer", .args = x_args } };
+
+    const x_value = (try evalConst(x_expr, resolver)) orelse return error.TestExpectedEqual;
+    switch (x_value) {
+        .string => |bytes| try testing.expectEqualSlices(u8, &.{ 'F', 0, 0, 0, 'G', 0, 0, 0 }, bytes),
+        else => return error.TestExpectedEqual,
+    }
+    ctx.x_value = x_value;
+
+    const source_x = try a.create(ast.Expr);
+    source_x.* = .{ .identifier = "x" };
+    const mold_s = try a.create(ast.Expr);
+    mold_s.* = .{ .identifier = "s" };
+    const t_args = try a.alloc(*ast.Expr, 2);
+    t_args[0] = source_x;
+    t_args[1] = mold_s;
+    const t_expr = try a.create(ast.Expr);
+    t_expr.* = .{ .call_or_subscript = .{ .name = "transfer", .args = t_args } };
+
+    const t_value = (try evalConst(t_expr, resolver)) orelse return error.TestExpectedEqual;
+    switch (t_value) {
+        .string => |bytes| try testing.expectEqualStrings("FG", bytes),
+        else => return error.TestExpectedEqual,
+    }
+
+    const eq_expr = try a.create(ast.Expr);
+    eq_expr.* = .{ .binary = .{
+        .op = .eq,
+        .left = source_s,
+        .right = t_expr,
+    } };
+    const eq_value = (try evalConst(eq_expr, resolver)) orelse return error.TestExpectedEqual;
+    switch (eq_value) {
+        .logical => |value| try testing.expect(value),
         else => return error.TestExpectedEqual,
     }
 }

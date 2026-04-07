@@ -81,6 +81,9 @@ pub fn checkIntrinsicCallConstraintsForExprArgs(
 ) CheckError!void {
     if (leaf_helpers.lookupIntrinsicArity(self, name) == null) return;
     try checkIntrinsicSpecialActualRestrictionsForExprArgs(self, name, args);
+    if (std.ascii.eqlIgnoreCase(name, "transfer")) {
+        try checkTransferExprArgs(self, args);
+    }
 }
 
 fn checkIntrinsicSpecialActualRestrictionsForCallArgs(
@@ -132,6 +135,14 @@ fn checkIntrinsicSpecialActualRestriction(
         }
         return emitIntrinsicArgDiagnostic(self, expr_node, "Assumed-type argument at (1) is only permitted as actual argument to intrinsic inquiry functions");
     }
+}
+
+fn checkTransferExprArgs(self: *context.Context, args: []*ast.Expr) CheckError!void {
+    if (args.len < 2) return;
+    if (resolve_expr.exprRank(self, args[1]) == 0) return;
+    const mold_storage_bits = constants.exprMeasure(self, args[1], .storage_size_bits) orelse return;
+    if (mold_storage_bits != 0) return;
+    return emitIntrinsicArgDiagnostic(self, args[1], "MOLD argument at (1) to TRANSFER shall not have storage size 0");
 }
 
 fn intrinsicAllowsNoArgCheck(name: []const u8) bool {

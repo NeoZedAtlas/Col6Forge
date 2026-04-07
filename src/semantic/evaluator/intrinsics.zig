@@ -10,6 +10,7 @@ const ExprMeasureKind = evaluator.ExprMeasureKind;
 
 const ConstCallKind = enum {
     len,
+    transfer,
     achar,
     acos,
     sqrt,
@@ -44,6 +45,7 @@ const ConstCallKind = enum {
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "LEN", .len },
+    .{ "TRANSFER", .transfer },
     .{ "ACHAR", .achar },
     .{ "CHAR", .achar },
     .{ "ACOS", .acos },
@@ -96,6 +98,7 @@ pub fn evalConstCall(
                 ((try literals.evalConstCharLen(call.args[0], resolver, eval_const_fn)) orelse return null);
             return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
         },
+        .transfer => return evalConstTransfer(call.args, resolver, eval_const_fn),
         .achar => {
             if (call.args.len == 0 or call.args.len > 2) return null;
             const first = (try eval_const_fn(call.args[0], resolver)) orelse return null;
@@ -378,6 +381,146 @@ fn evalConstIndex(string_bytes: []const u8, substring_bytes: []const u8, back: b
         @intCast(value + 1)
     else
         0;
+}
+
+fn evalConstTransfer(
+    args: []const *ast.Expr,
+    resolver: anytype,
+    eval_const_fn: anytype,
+) !?ConstValue {
+    if (args.len < 2 or args.len > 3) return null;
+    if (args.len == 3) return null;
+
+    const res = resolver orelse return null;
+    const source_value = try eval_const_fn(args[0], resolver);
+    const source_spec = res.exprTypeSpec(args[0]) orelse return null;
+    const mold_spec = res.exprTypeSpec(args[1]) orelse return null;
+
+    if (source_spec.lowered_kind != .character or mold_spec.lowered_kind != .character) return null;
+    const raw = (try encodeCharacterTransferSourceBytes(args[0], source_value, source_spec, resolver, eval_const_fn, res)) orelse return null;
+    const result = (try decodeCharacterTransferBytes(res, raw, mold_spec)) orelse return null;
+    return .{ .string = result };
+}
+
+fn encodeCharacterTransferSourceBytes(
+    source_expr: *const ast.Expr,
+    maybe_source_value: ?ConstValue,
+    source_spec: symbols.TypeSpec,
+    resolver: anytype,
+    eval_const_fn: anytype,
+    const_resolver: evaluator.ConstResolver,
+) !?[]u8 {
+    if (maybe_source_value) |source_value| {
+        switch (source_value) {
+            .string => |bytes| return encodeCharacterTransferBytes(const_resolver, bytes, source_spec),
+            else => {},
+        }
+    }
+
+    return switch (source_expr.*) {
+        .array_constructor => |ctor| blk: {
+            const alloc = const_resolver.allocator orelse break :blk null;
+            var out: std.ArrayList(u8) = .empty;
+            defer out.deinit(alloc);
+            for (ctor.items) |item| {
+                const item_value = (try eval_const_fn(item, resolver)) orelse break :blk null;
+                const item_text = switch (item_value) {
+                    .string => |bytes| bytes,
+                    else => break :blk null,
+                };
+                const item_raw = (try encodeCharacterTransferBytes(const_resolver, item_text, source_spec)) orelse break :blk null;
+                try out.appendSlice(alloc, item_raw);
+            }
+            break :blk try out.toOwnedSlice(alloc);
+        },
+        else => null,
+    };
+}
+
+fn encodeCharacterTransferBytes(
+    resolver: evaluator.ConstResolver,
+    text: []const u8,
+    spec: symbols.TypeSpec,
+) !?[]u8 {
+    const alloc = resolver.allocator orelse return null;
+    const char_len = constantCharacterLen(spec) orelse return null;
+    const kind_value = spec.kind_value orelse 1;
+    switch (kind_value) {
+        1 => {
+            const out = try alloc.alloc(u8, char_len);
+            @memset(out, ' ');
+            const count = @min(out.len, text.len);
+            @memcpy(out[0..count], text[0..count]);
+            return out;
+        },
+        4 => {
+            const out = try alloc.alloc(u8, char_len * 4);
+            var offset: usize = 0;
+            var iter = std.unicode.Utf8View.init(text) catch return null;
+            var utf8 = iter.iterator();
+            var chars_written: usize = 0;
+            while (chars_written < char_len) : (chars_written += 1) {
+                const codepoint = utf8.nextCodepoint() orelse ' ';
+                var buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &buf, codepoint, .little);
+                @memcpy(out[offset .. offset + 4], &buf);
+                offset += 4;
+            }
+            return out;
+        },
+        else => return null,
+    }
+}
+
+fn decodeCharacterTransferBytes(
+    resolver: evaluator.ConstResolver,
+    raw: []const u8,
+    spec: symbols.TypeSpec,
+) !?[]const u8 {
+    const alloc = resolver.allocator orelse return null;
+    const char_len = constantCharacterLen(spec) orelse return null;
+    const kind_value = spec.kind_value orelse 1;
+    switch (kind_value) {
+        1 => {
+            const out = try alloc.alloc(u8, char_len);
+            @memset(out, 0);
+            const count = @min(out.len, raw.len);
+            @memcpy(out[0..count], raw[0..count]);
+            return out;
+        },
+        4 => {
+            var out: std.ArrayList(u8) = .empty;
+            defer out.deinit(alloc);
+            var index: usize = 0;
+            var chars_read: usize = 0;
+            while (chars_read < char_len) : (chars_read += 1) {
+                const remaining = raw.len -| index;
+                const codepoint = if (remaining >= 4)
+                    @as(u32, raw[index]) |
+                        (@as(u32, raw[index + 1]) << 8) |
+                        (@as(u32, raw[index + 2]) << 16) |
+                        (@as(u32, raw[index + 3]) << 24)
+                else
+                    0;
+                if (codepoint > std.math.maxInt(u21)) return null;
+                var utf8_buf: [4]u8 = undefined;
+                const utf8_len = std.unicode.utf8Encode(@intCast(codepoint), &utf8_buf) catch return null;
+                try out.appendSlice(alloc, utf8_buf[0..utf8_len]);
+                index += @min(@as(usize, 4), remaining);
+            }
+            return try out.toOwnedSlice(alloc);
+        },
+        else => return null,
+    }
+}
+
+fn constantCharacterLen(spec: symbols.TypeSpec) ?usize {
+    if (spec.lowered_kind != .character) return null;
+    return switch (spec.char_len_kind) {
+        .constant => spec.char_len,
+        .none => spec.char_len orelse 1,
+        .assumed, .deferred => null,
+    };
 }
 
 fn constValuePrefersDouble(value: ConstValue) bool {

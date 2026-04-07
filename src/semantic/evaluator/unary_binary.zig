@@ -30,7 +30,19 @@ pub fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolve
         if (resolver) |res| return .{ .string = try res.internString(joined) };
         return .{ .string = joined };
     }
-    if (left == .string or right == .string) return null;
+    if (left == .string or right == .string) {
+        if (!(left == .string and right == .string)) return null;
+        const ordering = compareCharacterConst(left.string, right.string);
+        return switch (op) {
+            .eq => .{ .logical = ordering == .eq },
+            .ne => .{ .logical = ordering != .eq },
+            .lt => .{ .logical = ordering == .lt },
+            .le => .{ .logical = ordering != .gt },
+            .gt => .{ .logical = ordering == .gt },
+            .ge => .{ .logical = ordering != .lt },
+            else => null,
+        };
+    }
 
     const left_is_logical = left == .logical;
     const right_is_logical = right == .logical;
@@ -198,4 +210,18 @@ fn constValueIsDoubleReal(value: ConstValue) bool {
         .logical => false,
         .string => false,
     };
+}
+
+const Ordering = enum { lt, eq, gt };
+
+fn compareCharacterConst(left: []const u8, right: []const u8) Ordering {
+    const max_len = @max(left.len, right.len);
+    var idx: usize = 0;
+    while (idx < max_len) : (idx += 1) {
+        const lhs = if (idx < left.len) left[idx] else ' ';
+        const rhs = if (idx < right.len) right[idx] else ' ';
+        if (lhs < rhs) return .lt;
+        if (lhs > rhs) return .gt;
+    }
+    return .eq;
 }
