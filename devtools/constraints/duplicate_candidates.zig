@@ -11,6 +11,7 @@ pub fn main() !void {
     var root: []const u8 = "src";
     var top: usize = 25;
     var min_normalized_len: usize = 96;
+    var fingerprint_mode: duplicates.FingerprintMode = .ast;
     var selected_domain: ?model.SourceDomain = null;
     var selected_path_prefix: ?[]const u8 = null;
 
@@ -27,6 +28,12 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--min-normalized-len")) {
             const value = args.next() orelse return error.MissingArgumentValue;
             min_normalized_len = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--fingerprint")) {
+            const value = args.next() orelse return error.MissingArgumentValue;
+            fingerprint_mode = parseFingerprintMode(value) orelse {
+                std.log.err("unknown fingerprint mode: {s}", .{value});
+                return error.InvalidArgument;
+            };
         } else if (std.mem.eql(u8, arg, "--domain")) {
             const value = args.next() orelse return error.MissingArgumentValue;
             selected_domain = parseDomainLabel(value) orelse {
@@ -41,7 +48,7 @@ pub fn main() !void {
         }
     }
 
-    const clusters = try duplicates.findDuplicateClusters(allocator, root, min_normalized_len);
+    const clusters = try duplicates.findDuplicateClustersWithMode(allocator, root, min_normalized_len, fingerprint_mode);
     defer {
         for (clusters) |*cluster| cluster.deinit(allocator);
         allocator.free(clusters);
@@ -86,6 +93,12 @@ pub fn main() !void {
         }
         if (printed == shown) break;
     }
+}
+
+fn parseFingerprintMode(value: []const u8) ?duplicates.FingerprintMode {
+    if (std.mem.eql(u8, value, "lexical")) return .lexical;
+    if (std.mem.eql(u8, value, "ast")) return .ast;
+    return null;
 }
 
 fn parseDomainLabel(label: []const u8) ?model.SourceDomain {
@@ -178,6 +191,12 @@ test "parseDomainLabel accepts canonical labels" {
     try std.testing.expectEqual(model.SourceDomain.codegen, parseDomainLabel("codegen").?);
     try std.testing.expectEqual(model.SourceDomain.root_entry, parseDomainLabel("root-entry").?);
     try std.testing.expect(parseDomainLabel("missing") == null);
+}
+
+test "parseFingerprintMode accepts canonical labels" {
+    try std.testing.expectEqual(duplicates.FingerprintMode.lexical, parseFingerprintMode("lexical").?);
+    try std.testing.expectEqual(duplicates.FingerprintMode.ast, parseFingerprintMode("ast").?);
+    try std.testing.expect(parseFingerprintMode("missing") == null);
 }
 
 test "clusterMatchesFilters honors path prefix" {

@@ -1,5 +1,10 @@
 const std = @import("std");
 
+pub const FingerprintMode = enum {
+    lexical,
+    ast,
+};
+
 pub const FunctionFingerprint = struct {
     path: []u8,
     name: []u8,
@@ -31,13 +36,22 @@ pub fn findDuplicateClusters(
     root: []const u8,
     min_normalized_len: usize,
 ) ![]Cluster {
+    return findDuplicateClustersWithMode(allocator, root, min_normalized_len, .lexical);
+}
+
+pub fn findDuplicateClustersWithMode(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    min_normalized_len: usize,
+    mode: FingerprintMode,
+) ![]Cluster {
     var functions = std.ArrayList(FunctionFingerprint).empty;
     defer {
         for (functions.items) |*item| item.deinit(allocator);
         functions.deinit(allocator);
     }
 
-    try scanTree(allocator, root, &functions);
+    try scanTree(allocator, root, &functions, mode);
     std.mem.sort(FunctionFingerprint, functions.items, {}, lessThanFunctionFingerprint);
 
     var clusters = std.ArrayList(Cluster).empty;
@@ -76,7 +90,12 @@ pub fn findDuplicateClusters(
     return clusters.toOwnedSlice(allocator);
 }
 
-fn scanTree(allocator: std.mem.Allocator, root: []const u8, out: *std.ArrayList(FunctionFingerprint)) !void {
+fn scanTree(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    out: *std.ArrayList(FunctionFingerprint),
+    mode: FingerprintMode,
+) !void {
     var dir = if (std.fs.path.isAbsolute(root))
         try std.fs.openDirAbsolute(root, .{ .iterate = true })
     else
@@ -99,7 +118,10 @@ fn scanTree(allocator: std.mem.Allocator, root: []const u8, out: *std.ArrayList(
         const text = try dir.readFileAlloc(allocator, entry.path, 16 * 1024 * 1024);
         defer allocator.free(text);
 
-        try scanFile(allocator, rel_path, text, out);
+        switch (mode) {
+            .lexical => try scanFileLexical(allocator, rel_path, text, out),
+            .ast => try scanFileAst(allocator, rel_path, text, out),
+        }
     }
 }
 
@@ -111,7 +133,7 @@ fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return out;
 }
 
-fn scanFile(
+fn scanFileLexical(
     allocator: std.mem.Allocator,
     rel_path: []const u8,
     text: []const u8,
@@ -138,6 +160,42 @@ fn scanFile(
             .name = try allocator.dupe(u8, name_token.lexeme),
             .normalized_body = normalized_body,
             .line = 1 + std.mem.count(u8, text[0..token.start_idx], "\n"),
+        });
+    }
+}
+
+fn scanFileAst(
+    allocator: std.mem.Allocator,
+    rel_path: []const u8,
+    text: []const u8,
+    out: *std.ArrayList(FunctionFingerprint),
+) !void {
+    const source = try allocator.dupeZ(u8, text);
+    defer allocator.free(source);
+
+    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return;
+
+    var fn_proto_buffer: [1]std.zig.Ast.Node.Index = undefined;
+    const node_tags = tree.nodes.items(.tag);
+    for (node_tags, 0..) |tag, idx| {
+        if (tag != .fn_decl) continue;
+        const node: std.zig.Ast.Node.Index = @enumFromInt(idx);
+        const node_data = tree.nodeData(node).node_and_node;
+        const proto_node = node_data[0];
+        const body_node = node_data[1];
+        const fn_proto = tree.fullFnProto(&fn_proto_buffer, proto_node) orelse continue;
+        const name_token = fn_proto.name_token orelse continue;
+
+        const normalized_body = try normalizeBodyAst(allocator, tree.getNodeSource(body_node));
+        errdefer allocator.free(normalized_body);
+
+        try out.append(allocator, .{
+            .path = try allocator.dupe(u8, rel_path),
+            .name = try allocator.dupe(u8, tree.tokenSlice(name_token)),
+            .normalized_body = normalized_body,
+            .line = 1 + std.mem.count(u8, text[0..tree.tokenStart(fn_proto.firstToken())], "\n"),
         });
     }
 }
@@ -254,6 +312,48 @@ fn normalizeBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+fn normalizeBodyAst(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    const source = try allocator.dupeZ(u8, body);
+    defer allocator.free(source);
+
+    var tokenizer = std.zig.Tokenizer.init(source);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    while (true) {
+        const token = tokenizer.next();
+        switch (token.tag) {
+            .eof => break,
+            .identifier => try out.appendSlice(allocator, "ID;"),
+            .builtin => try out.appendSlice(allocator, "BUILTIN;"),
+            .number_literal => try out.appendSlice(allocator, "NUM;"),
+            .char_literal,
+            .multiline_string_literal_line,
+            .string_literal,
+            .invalid_periodasterisks,
+            .invalid,
+            => try out.appendSlice(allocator, "STR;"),
+            .doc_comment,
+            .container_doc_comment,
+            => {},
+            else => {
+                if (isKeywordTag(token.tag)) {
+                    try out.appendSlice(allocator, @tagName(token.tag));
+                } else {
+                    try out.appendSlice(allocator, @tagName(token.tag));
+                }
+                try out.append(allocator, ';');
+            },
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn isKeywordTag(tag: std.zig.Token.Tag) bool {
+    return std.mem.startsWith(u8, @tagName(tag), "keyword_");
 }
 
 const Token = struct {
@@ -472,6 +572,42 @@ test "finds duplicate clusters across files" {
     defer std.testing.allocator.free(real_src);
 
     const clusters = try findDuplicateClusters(std.testing.allocator, real_src, 1);
+    defer {
+        for (clusters) |*cluster| cluster.deinit(std.testing.allocator);
+        std.testing.allocator.free(clusters);
+    }
+
+    try std.testing.expect(clusters.len >= 1);
+    try std.testing.expectEqual(@as(usize, 2), clusters[0].members.len);
+}
+
+test "AST mode finds duplicate clusters across files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("src/a");
+    try tmp.dir.makePath("src/b");
+    try tmp.dir.writeFile(.{
+        .sub_path = "src/a/one.zig",
+        .data =
+            "fn alpha(x: i32) i32 {\n" ++
+            "    const value = x + 1;\n" ++
+            "    return value;\n" ++
+            "}\n",
+    });
+    try tmp.dir.writeFile(.{
+        .sub_path = "src/b/two.zig",
+        .data =
+            "fn beta(y: i32) i32 {\n" ++
+            "    const other = y + 7;\n" ++
+            "    return other;\n" ++
+            "}\n",
+    });
+
+    const real_src = try tmp.dir.realpathAlloc(std.testing.allocator, "src");
+    defer std.testing.allocator.free(real_src);
+
+    const clusters = try findDuplicateClustersWithMode(std.testing.allocator, real_src, 1, .ast);
     defer {
         for (clusters) |*cluster| cluster.deinit(std.testing.allocator);
         std.testing.allocator.free(clusters);
