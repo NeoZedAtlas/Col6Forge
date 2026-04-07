@@ -183,6 +183,7 @@ pub fn applyDeclarator(
             return error.DuplicateDeclaration;
         }
         sym.dims = item.dims;
+        try validateDeclaratorDimensionExprs(self, item.dims);
     }
     if (storage == .common) {
         sym.storage = .common;
@@ -425,6 +426,197 @@ fn emitCharacterLenTypingDiagnostic(self: *context.Context, expr: *ast.Expr) boo
         &.{.{ .text = "Declare or type the length parameter before using it in a CHARACTER length expression." }},
     );
     return true;
+}
+
+fn validateDeclaratorDimensionExprs(self: *context.Context, dims: []*ast.Expr) !void {
+    for (dims) |dim_expr| {
+        try validateRestrictedSpecExpr(self, dim_expr);
+    }
+}
+
+fn validateRestrictedSpecExpr(self: *context.Context, expr: *ast.Expr) !void {
+    switch (expr.*) {
+        .identifier => |name| {
+            if (symbols_mod.findSymbolIndex(self, name)) |idx| {
+                const sym = self.symbols.items[idx];
+                if (sym.kind == .parameter or sym.storage == .dummy) return;
+                emitRestrictedSpecExprDiagnostic(self, name);
+                return error.InvalidArgumentCount;
+            }
+            if (!declaresNameLaterInCurrentUnit(self, name)) return;
+            if (implicitTypingDisabled(self)) {
+                if (currentDeclDeclaresFunctionResult(self)) {
+                    emitCurrentFunctionNoImplicitDiagnostic(self);
+                }
+                emitUsedBeforeTypedDiagnostic(self);
+            } else {
+                emitRestrictedSpecExprDiagnostic(self, name);
+            }
+            return error.InvalidArgumentCount;
+        },
+        .unary => |un| try validateRestrictedSpecExpr(self, un.expr),
+        .binary => |bin| {
+            try validateRestrictedSpecExpr(self, bin.left);
+            try validateRestrictedSpecExpr(self, bin.right);
+        },
+        .call_or_subscript => |call| {
+            for (call.args) |arg| {
+                try validateRestrictedSpecExpr(self, arg);
+            }
+        },
+        .component => |comp| {
+            try validateRestrictedSpecExpr(self, comp.base);
+            for (comp.args) |arg| {
+                try validateRestrictedSpecExpr(self, arg);
+            }
+        },
+        .substring => |sub| {
+            for (sub.args) |arg| {
+                try validateRestrictedSpecExpr(self, arg);
+            }
+            if (sub.start) |start| try validateRestrictedSpecExpr(self, start);
+            if (sub.end) |end| try validateRestrictedSpecExpr(self, end);
+        },
+        .dim_range => |range| {
+            if (range.lower) |lower| try validateRestrictedSpecExpr(self, lower);
+            try validateRestrictedSpecExpr(self, range.upper);
+            if (range.stride) |stride| try validateRestrictedSpecExpr(self, stride);
+        },
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                try validateRestrictedSpecExpr(self, item);
+            }
+        },
+        .complex_literal => |lit| {
+            try validateRestrictedSpecExpr(self, lit.real);
+            try validateRestrictedSpecExpr(self, lit.imag);
+        },
+        .implied_do => |ido| {
+            for (ido.items) |item| {
+                try validateRestrictedSpecExpr(self, item);
+            }
+            try validateRestrictedSpecExpr(self, ido.start);
+            try validateRestrictedSpecExpr(self, ido.end);
+            if (ido.step) |step| try validateRestrictedSpecExpr(self, step);
+        },
+        else => {},
+    }
+}
+
+fn emitRestrictedSpecExprDiagnostic(self: *context.Context, name: []const u8) void {
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    const line = if (decl_source.line == 0) 1 else decl_source.line;
+    const column = if (decl_source.column == 0) 1 else decl_source.column;
+    const message = std.fmt.allocPrint(self.arena, "'{s}' cannot appear in the expression", .{name}) catch "cannot appear in the expression";
+    self.setDiagnostic(
+        line,
+        column,
+        catalog.semantic.unexpected_type_decl.code,
+        message,
+        decl_source.text,
+    );
+}
+
+fn emitUsedBeforeTypedDiagnostic(self: *context.Context) void {
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    self.setDiagnostic(
+        if (decl_source.line == 0) 1 else decl_source.line,
+        if (decl_source.column == 0) 1 else decl_source.column,
+        catalog.semantic.invalid_char_len.code,
+        "used before it is typed",
+        decl_source.text,
+    );
+}
+
+fn emitCurrentFunctionNoImplicitDiagnostic(self: *context.Context) void {
+    const source = inferredCurrentFunctionHeaderSource(self) orelse return;
+    self.setDiagnostic(
+        source.line,
+        source.column,
+        catalog.semantic.invalid_char_len.code,
+        "has no IMPLICIT type",
+        source.text,
+    );
+}
+
+fn inferredCurrentFunctionHeaderSource(self: *context.Context) ?struct { line: usize, column: usize, text: []const u8 } {
+    if (self.unit.kind != .function) return null;
+    var first_decl_line: ?usize = null;
+    for (self.unit.decl_sources) |source| {
+        if (source.line == 0) continue;
+        first_decl_line = source.line;
+        break;
+    }
+    const line = if (first_decl_line) |decl_line|
+        if (decl_line > 1) decl_line - 1 else decl_line
+    else
+        return null;
+    return .{ .line = line, .column = 1, .text = "" };
+}
+
+fn implicitTypingDisabled(self: *context.Context) bool {
+    const limit = if (self.current_decl_index) |idx| idx else self.unit.decls.len;
+    var decl_idx: usize = 0;
+    while (decl_idx < limit and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        if (decl != .implicit) continue;
+        return decl.implicit.rules.len == 0;
+    }
+    return false;
+}
+
+fn declaresNameLaterInCurrentUnit(self: *context.Context, name: []const u8) bool {
+    const start_idx = if (self.current_decl_index) |idx| idx + 1 else 0;
+    var decl_idx = start_idx;
+    while (decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn currentDeclDeclaresFunctionResult(self: *context.Context) bool {
+    if (self.unit.kind != .function) return false;
+    const decl_idx = self.current_decl_index orelse return false;
+    if (decl_idx >= self.unit.decls.len) return false;
+    const result_name = self.unit.result_name orelse self.unit.name;
+    const decl = self.unit.decls[decl_idx];
+    switch (decl) {
+        .type_decl => |type_decl| {
+            for (type_decl.items) |item| {
+                if (std.ascii.eqlIgnoreCase(item.name, result_name)) return true;
+            }
+        },
+        .procedure => |procedure_decl| {
+            for (procedure_decl.items) |item| {
+                if (std.ascii.eqlIgnoreCase(item.name, result_name)) return true;
+            }
+        },
+        .dimension => |dimension_decl| {
+            for (dimension_decl.items) |item| {
+                if (std.ascii.eqlIgnoreCase(item.name, result_name)) return true;
+            }
+        },
+        else => {},
+    }
+    return false;
 }
 
 fn exprHasIdentifier(expr: *ast.Expr) bool {

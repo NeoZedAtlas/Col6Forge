@@ -588,6 +588,11 @@ fn emitStructureConstructorComponentStore(
         return;
     }
 
+    if (component.allocatable and component.dims.len != 0 and component.type_spec.lowered_kind != .character and component.type_spec.lowered_kind != .derived) {
+        try emitStructureConstructorAllocatableArrayComponentStore(ctx, builder, component_ptr, component, value_expr);
+        return;
+    }
+
     if (component.type_spec.lowered_kind == .character) {
         if (component.allocatable and component.type_spec.char_len == null) {
             if (component.dims.len != 0) return error.UnsupportedCharacterArgumentLength;
@@ -615,6 +620,73 @@ fn emitStructureConstructorComponentStore(
     const target_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
     const coerced = if (value.ty == target_ty) value else try casting.coerce(ctx, builder, value, target_ty);
     try builder.store(coerced, component_ptr);
+}
+
+fn emitStructureConstructorAllocatableArrayComponentStore(
+    ctx: *Context,
+    builder: anytype,
+    component_ptr: ValueRef,
+    component: context.DerivedComponentLayout,
+    value_expr: *Expr,
+) EmitError!void {
+    if (component.dims.len != 1) return error.UnsupportedArrayConstructor;
+
+    if (value_expr.* == .call_or_subscript and std.ascii.eqlIgnoreCase(value_expr.call_or_subscript.name, "null")) {
+        try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = true }, component_ptr);
+        try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .lower, 0, constI64(ctx, 1));
+        try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .extent, 0, constI64(ctx, 0));
+        try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .multiplier, 0, constI64(ctx, 1));
+        return;
+    }
+
+    const items = try flattenStructureConstructorArrayItems(ctx, value_expr) orelse return error.UnsupportedArrayConstructor;
+    const elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
+    const count = constI64(ctx, @intCast(items.len));
+    const alloc_count = if (items.len == 0) constI64(ctx, 1) else count;
+    const total_bytes = try binary.emitMul(ctx, builder, alloc_count, constI64(ctx, @intCast(component.elem_size)));
+
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
+    const data_ptr_name = try ctx.nextTemp();
+    try builder.callTyped(data_ptr_name, .ptr, malloc_name, &.{total_bytes});
+    const data_ptr = ValueRef{ .name = data_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(data_ptr, component_ptr);
+
+    try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .lower, 0, constI64(ctx, 1));
+    try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .extent, 0, count);
+    try storeStructureConstructorDescriptorSlot(ctx, builder, component_ptr, component, .multiplier, 0, constI64(ctx, 1));
+
+    for (items, 0..) |item, idx| {
+        const elem_ptr_name = try ctx.nextTemp();
+        try builder.gep(elem_ptr_name, elem_ty, data_ptr, constI64(ctx, @intCast(idx)));
+        const value = try emitExpr(ctx, builder, item);
+        const coerced = if (value.ty == elem_ty) value else try casting.coerce(ctx, builder, value, elem_ty);
+        try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    }
+}
+
+fn storeStructureConstructorDescriptorSlot(
+    ctx: *Context,
+    builder: anytype,
+    component_ptr: ValueRef,
+    component: context.DerivedComponentLayout,
+    comptime kind: memory.DescriptorSlotKind,
+    dim_index: usize,
+    value: ValueRef,
+) EmitError!void {
+    const ptr_size = @sizeOf(usize);
+    const char_len_slot_size: usize = if (component.type_spec.lowered_kind == .character and component.type_spec.char_len == null)
+        @sizeOf(i64)
+    else
+        0;
+    const dim_span = component.dims.len * @sizeOf(i64);
+    const base_offset: usize = switch (kind) {
+        .lower => ptr_size + char_len_slot_size + dim_index * @sizeOf(i64),
+        .extent => ptr_size + char_len_slot_size + dim_span + dim_index * @sizeOf(i64),
+        .multiplier => ptr_size + char_len_slot_size + dim_span * 2 + dim_index * @sizeOf(i64),
+    };
+    const slot_name = try ctx.nextTemp();
+    try builder.gep(slot_name, .i8, component_ptr, constI64(ctx, @intCast(base_offset)));
+    try builder.store(value, .{ .name = slot_name, .ty = .ptr, .is_ptr = true });
 }
 
 fn emitStructureConstructorDeferredCharacterAllocatableStore(
@@ -651,6 +723,10 @@ fn emitStructureConstructorDeferredCharacterAllocatableStore(
     const len_slot_name = try ctx.nextTemp();
     try builder.gep(len_slot_name, .i8, component_ptr, try ctx.constI64(@intCast(@sizeOf(usize))));
     try builder.store(len_i64, .{ .name = len_slot_name, .ty = .ptr, .is_ptr = true });
+}
+
+fn constI64(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
 }
 
 fn flattenStructureConstructorArrayItems(ctx: *Context, expr_node: *Expr) EmitError!?[]const *Expr {

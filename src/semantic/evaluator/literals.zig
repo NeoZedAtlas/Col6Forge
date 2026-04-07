@@ -102,7 +102,7 @@ pub fn evalConstCharLen(
     expr: *const ast.Expr,
     resolver: anytype,
     eval_const_fn: anytype,
-) !?usize {
+) anyerror!?usize {
     return switch (expr.*) {
         .literal => |lit| literalByteLen(lit),
         .binary => |bin| blk: {

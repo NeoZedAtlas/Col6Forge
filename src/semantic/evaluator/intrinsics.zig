@@ -89,7 +89,7 @@ pub fn evalConstCall(
     resolver: anytype,
     eval_const_fn: anytype,
     to_real_fn: anytype,
-) !?ConstValue {
+) anyerror!?ConstValue {
     const kind = constCallKind(call.name) orelse return null;
     switch (kind) {
         .len => {
@@ -396,10 +396,8 @@ fn evalConstTransfer(
     const source_spec = res.exprTypeSpec(args[0]) orelse return null;
     const mold_spec = res.exprTypeSpec(args[1]) orelse return null;
 
-    if (source_spec.lowered_kind != .character or mold_spec.lowered_kind != .character) return null;
     const raw = (try encodeCharacterTransferSourceBytes(args[0], source_value, source_spec, resolver, eval_const_fn, res)) orelse return null;
-    const result = (try decodeCharacterTransferBytes(res, raw, mold_spec)) orelse return null;
-    return .{ .string = result };
+    return (try decodeTransferResult(res, raw, args[1], mold_spec)) orelse return null;
 }
 
 fn encodeCharacterTransferSourceBytes(
@@ -412,7 +410,14 @@ fn encodeCharacterTransferSourceBytes(
 ) !?[]u8 {
     if (maybe_source_value) |source_value| {
         switch (source_value) {
-            .string => |bytes| return encodeCharacterTransferBytes(const_resolver, bytes, source_spec),
+            .string => |bytes| {
+                if (source_spec.lowered_kind == .character) {
+                    return encodeCharacterTransferBytes(const_resolver, bytes, source_spec);
+                }
+                return duplicateRawTransferBytes(const_resolver, bytes);
+            },
+            .integer => |value| return encodeIntegerTransferBytes(const_resolver, value, source_spec),
+            .logical => |value| return encodeIntegerTransferBytes(const_resolver, if (value) 1 else 0, source_spec),
             else => {},
         }
     }
@@ -433,6 +438,27 @@ fn encodeCharacterTransferSourceBytes(
             }
             break :blk try out.toOwnedSlice(alloc);
         },
+        else => null,
+    };
+}
+
+fn decodeTransferResult(
+    resolver: evaluator.ConstResolver,
+    raw: []const u8,
+    mold_expr: *const ast.Expr,
+    mold_spec: symbols.TypeSpec,
+) !?ConstValue {
+    return switch (mold_spec.lowered_kind) {
+        .character => .{ .string = (try decodeCharacterTransferBytes(resolver, raw, mold_spec)) orelse return null },
+        .integer, .logical => blk: {
+            const bytes = transferStorageBytesForExpr(resolver, mold_expr, mold_spec) orelse return null;
+            const int_value = decodeIntegerTransferBytes(raw, bytes);
+            break :blk if (mold_spec.lowered_kind == .logical)
+                .{ .logical = int_value != 0 }
+            else
+                .{ .integer = int_value };
+        },
+        .derived => .{ .string = (try decodeDerivedTransferBytes(resolver, raw, mold_expr, mold_spec)) orelse return null },
         else => null,
     };
 }
@@ -470,6 +496,32 @@ fn encodeCharacterTransferBytes(
         },
         else => return null,
     }
+}
+
+fn encodeIntegerTransferBytes(
+    resolver: evaluator.ConstResolver,
+    value: i64,
+    spec: symbols.TypeSpec,
+) !?[]u8 {
+    const alloc = resolver.allocator orelse return null;
+    const bytes = transferStorageBytesForType(spec) orelse return null;
+    const out = try alloc.alloc(u8, bytes);
+    @memset(out, 0);
+    var bits: u64 = @bitCast(value);
+    var index: usize = 0;
+    while (index < bytes) : (index += 1) {
+        out[index] = @truncate(bits & 0xff);
+        bits >>= 8;
+    }
+    return out;
+}
+
+fn duplicateRawTransferBytes(
+    resolver: evaluator.ConstResolver,
+    bytes: []const u8,
+) !?[]u8 {
+    const alloc = resolver.allocator orelse return null;
+    return try alloc.dupe(u8, bytes);
 }
 
 fn decodeCharacterTransferBytes(
@@ -514,12 +566,72 @@ fn decodeCharacterTransferBytes(
     }
 }
 
+fn decodeDerivedTransferBytes(
+    resolver: evaluator.ConstResolver,
+    raw: []const u8,
+    mold_expr: *const ast.Expr,
+    mold_spec: symbols.TypeSpec,
+) !?[]const u8 {
+    const alloc = resolver.allocator orelse return null;
+    const bytes = transferStorageBytesForExpr(resolver, mold_expr, mold_spec) orelse return null;
+    const out = try alloc.alloc(u8, bytes);
+    @memset(out, 0);
+    const count = @min(out.len, raw.len);
+    @memcpy(out[0..count], raw[0..count]);
+    return out;
+}
+
+fn decodeIntegerTransferBytes(raw: []const u8, bytes: usize) i64 {
+    var accum: u64 = 0;
+    const count = @min(bytes, @min(raw.len, @sizeOf(u64)));
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        accum |= @as(u64, raw[index]) << @intCast(index * 8);
+    }
+    if (bytes < 8 and bytes != 0) {
+        const sign_bit = @as(u64, 1) << @intCast(bytes * 8 - 1);
+        if ((accum & sign_bit) != 0) {
+            accum |= ~(@as(u64, 0)) << @intCast(bytes * 8);
+        }
+    }
+    return @bitCast(accum);
+}
+
 fn constantCharacterLen(spec: symbols.TypeSpec) ?usize {
     if (spec.lowered_kind != .character) return null;
     return switch (spec.char_len_kind) {
         .constant => spec.char_len,
         .none => spec.char_len orelse 1,
         .assumed, .deferred => null,
+    };
+}
+
+fn transferStorageBytesForExpr(
+    resolver: evaluator.ConstResolver,
+    expr: *const ast.Expr,
+    spec: symbols.TypeSpec,
+) ?usize {
+    if (transferStorageBytesForType(spec)) |bytes| return bytes;
+    const measured = resolver.exprMeasure(expr, .sizeof_bytes);
+    return std.math.cast(usize, measured orelse return null);
+}
+
+fn transferStorageBytesForType(spec: symbols.TypeSpec) ?usize {
+    return switch (spec.lowered_kind) {
+        .integer, .logical => blk: {
+            const kind_value = spec.kind_value orelse 4;
+            if (kind_value <= 0) break :blk 4;
+            if (kind_value <= 16) break :blk std.math.cast(usize, kind_value) orelse null;
+            break :blk std.math.cast(usize, @divExact(kind_value, 8)) orelse null;
+        },
+        .derived => blk: {
+            const name = spec.derived_type_name orelse break :blk null;
+            if (std.ascii.eqlIgnoreCase(name, "c_ptr") or std.ascii.eqlIgnoreCase(name, "c_funptr")) {
+                break :blk @sizeOf(usize);
+            }
+            break :blk null;
+        },
+        else => null,
     };
 }
 

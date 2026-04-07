@@ -446,11 +446,11 @@ fn bindIsoCBindingBuiltin(
         return true;
     }
     if (std.ascii.eqlIgnoreCase(remote_name, "c_null_ptr")) {
-        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_ptr_local), null);
+        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_ptr_local), try zeroHandleConstValue(self));
         return true;
     }
     if (std.ascii.eqlIgnoreCase(remote_name, "c_null_funptr")) {
-        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_funptr_local), null);
+        try bindIsoCBindingNamedConstant(self, local_name, symbols.TypeSpec.fromDerived(c_funptr_local), try zeroHandleConstValue(self));
         return true;
     }
     if (isoCBindingBuiltinConstant(remote_name, c_ptr_local, c_funptr_local)) |builtin| {
@@ -482,6 +482,12 @@ fn bindIsoCBindingNamedConstant(
     sym.storage = .local;
     sym.const_value = const_value;
     sym.type_explicit = true;
+}
+
+fn zeroHandleConstValue(self: *context.Context) !symbols.ConstValue {
+    const bytes = try self.arena.alloc(u8, @sizeOf(usize));
+    @memset(bytes, 0);
+    return .{ .string = bytes };
 }
 
 fn isoCBindingBuiltinConstant(

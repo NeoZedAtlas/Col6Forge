@@ -18,6 +18,17 @@ pub fn evalConst(self: *context.Context, expr: *ast.Expr) anyerror!?ConstValue {
 }
 
 fn evalConstUncached(self: *context.Context, expr: *ast.Expr) anyerror!?ConstValue {
+    if (expr.* == .call_or_subscript) {
+        const call = expr.call_or_subscript;
+        if (call.args.len == 0 and symbols_mod.lookupDerivedType(self, call.name) != null) {
+            const bytes_i64 = derivedTypeStorageBytes(self, call.name) orelse return null;
+            const bytes = std.math.cast(usize, bytes_i64) orelse return null;
+            const out = try self.arena.alloc(u8, bytes);
+            @memset(out, 0);
+            return .{ .string = out };
+        }
+    }
+
     const resolver = evaluator.ConstResolver{
         .ctx = @ptrCast(self),
         .resolveFn = resolveConstValue,
@@ -27,6 +38,7 @@ fn evalConstUncached(self: *context.Context, expr: *ast.Expr) anyerror!?ConstVal
         .exprMeasureFn = resolveConstExprMeasure,
         .exprTypeSpecFn = resolveConstExprTypeSpec,
         .derivedExtendsFn = resolveDerivedTypeExtends,
+        .componentConstFn = resolveConstComponentValue,
     };
     return evaluator.evalConst(expr, resolver);
 }
@@ -91,6 +103,20 @@ fn resolveConstExprTypeSpec(ctx: *anyopaque, expr: *const ast.Expr) ?symbols.Typ
 fn resolveDerivedTypeExtends(ctx: *anyopaque, candidate: []const u8, base: []const u8) bool {
     const self: *context.Context = @ptrCast(@alignCast(ctx));
     return symbols_mod.isSameOrExtension(self, candidate, base);
+}
+
+fn resolveConstComponentValue(raw_ctx: *anyopaque, base: *const ast.Expr, name: []const u8) ?ConstValue {
+    const self: *context.Context = @ptrCast(@alignCast(raw_ctx));
+    const base_value = evalConst(self, @constCast(base)) catch return null;
+    const base_bytes = switch (base_value orelse return null) {
+        .string => |bytes| bytes,
+        else => return null,
+    };
+    const base_spec = resolve_expr.exprTypeSpec(self, @constCast(base)) catch return null;
+    if (base_spec.lowered_kind != .derived) return null;
+    const derived_name = base_spec.derived_type_name orelse return null;
+    const slice = derivedComponentRawSlice(self, derived_name, name, base_bytes) orelse return null;
+    return .{ .string = slice };
 }
 
 fn constExprMeasure(
@@ -185,6 +211,7 @@ fn typeSpecStorageBytes(self: *context.Context, spec: symbols.TypeSpec) ?i64 {
             break :blk std.math.cast(i64, total) orelse null;
         },
         .derived => blk: {
+            if (isIsoCBindingHandleType(spec)) break :blk @sizeOf(usize);
             if (spec.polymorphic and spec.derived_type_name == null) break :blk @sizeOf(usize);
             const name = spec.derived_type_name orelse break :blk null;
             break :blk derivedTypeStorageBytes(self, name);
@@ -246,6 +273,42 @@ fn componentStorageInfo(
         .element_size = direct.element_size,
         .alignment = @max(@alignOf(usize), @alignOf(i64)),
     };
+}
+
+fn derivedComponentRawSlice(
+    self: *context.Context,
+    derived_name: []const u8,
+    component_name: []const u8,
+    raw: []const u8,
+) ?[]const u8 {
+    const derived = symbols_mod.lookupDerivedType(self, derived_name) orelse return null;
+    var offset: usize = 0;
+    var alignment: usize = 1;
+
+    if (derived.parent_name) |parent_name| {
+        const parent_size_i64 = derivedTypeStorageBytes(self, parent_name) orelse return null;
+        const parent_size = std.math.cast(usize, parent_size_i64) orelse return null;
+        const parent_alignment = derivedTypeAlignment(self, parent_name) orelse return null;
+        offset = alignForward(offset, parent_alignment);
+        alignment = @max(alignment, parent_alignment);
+        if (std.ascii.eqlIgnoreCase(parent_name, component_name)) {
+            if (offset + parent_size > raw.len) return null;
+            return raw[offset .. offset + parent_size];
+        }
+        offset += parent_size;
+    }
+
+    for (derived.components) |component| {
+        const info = componentStorageInfo(self, component) orelse return null;
+        offset = alignForward(offset, info.alignment);
+        if (std.ascii.eqlIgnoreCase(component.name, component_name)) {
+            if (offset + info.storage_size > raw.len) return null;
+            return raw[offset .. offset + info.storage_size];
+        }
+        offset += info.storage_size;
+    }
+
+    return null;
 }
 
 fn componentDirectStorageInfo(
@@ -316,6 +379,12 @@ fn characterStorageBytes(kind_value: ?i64) usize {
     const value = kind_value orelse return 1;
     if (value <= 1) return 1;
     return std.math.cast(usize, value) orelse 1;
+}
+
+fn isIsoCBindingHandleType(spec: symbols.TypeSpec) bool {
+    if (spec.lowered_kind != .derived) return false;
+    const name = spec.derived_type_name orelse return false;
+    return std.ascii.eqlIgnoreCase(name, "c_ptr") or std.ascii.eqlIgnoreCase(name, "c_funptr");
 }
 
 fn bitsToBytes(bits: i64) ?i64 {

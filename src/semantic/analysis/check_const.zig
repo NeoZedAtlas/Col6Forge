@@ -56,7 +56,10 @@ pub fn coerceParameterValue(
             .complex => |c| return .{ .complex = try checkedComplexForTarget(.complex_double, c.real, c.imag) },
             .logical, .string => return error.ParameterTypeMismatch,
         },
-        .derived => return error.ParameterTypeMismatch,
+        .derived => switch (value) {
+            .string => return value,
+            else => return error.ParameterTypeMismatch,
+        },
     }
 }
 

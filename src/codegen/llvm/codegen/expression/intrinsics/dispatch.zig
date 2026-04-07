@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("../../../../input.zig");
 const common = @import("../../common.zig");
 const utils = @import("../../utils.zig");
 const casting = @import("../casting.zig");
@@ -6,7 +7,9 @@ const call = @import("../call/mod.zig");
 const array_actuals = @import("../call/array_actuals.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const resolution = @import("../dispatch/resolution.zig");
+const const_components = @import("../../../shared/const_components.zig");
 const memory_intrinsics = @import("../../../shared/memory_intrinsics.zig");
+const evaluator = @import("../../../../../semantic/evaluator.zig");
 const shared = @import("shared.zig");
 const numeric = @import("numeric.zig");
 const libm = @import("libm.zig");
@@ -639,6 +642,16 @@ fn transferScalarResultInfo(ctx: *Context, mold: *Expr) EmitError!TransferScalar
 }
 
 fn transferSourceBytes(ctx: *Context, builder: anytype, expr: *Expr) EmitError!TransferSourceBytes {
+    if (evaluator.evalConst(expr, transferConstResolver(ctx)) catch null) |const_value| {
+        switch (const_value) {
+            .string => |bytes| {
+                const ptr = try emitConstTransferByteBuffer(ctx, builder, bytes);
+                return .{ .ptr = ptr, .size = try ctx.constI64(@intCast(bytes.len)) };
+            },
+            else => {},
+        }
+    }
+
     if (try array_actuals.resolveArrayActual(ctx, builder, expr)) |actual| {
         const elem_count = try array_actuals.emitExtentProductI64(ctx, builder, actual.extents);
         var total_bytes = try array_actuals.emitMulI64(ctx, builder, elem_count, try ctx.constI64(@intCast(byteSizeForIRType(actual.elem_ty))));
@@ -739,6 +752,38 @@ fn byteSizeForIRType(ty: IRType) usize {
         .ptr => @sizeOf(usize),
         .void => 0,
     };
+}
+
+fn transferConstResolver(ctx: *Context) evaluator.ConstResolver {
+    return .{
+        .ctx = ctx,
+        .resolveFn = resolveTransferConstValue,
+        .componentConstFn = resolveTransferComponentConstValue,
+    };
+}
+
+fn resolveTransferConstValue(raw_ctx: *anyopaque, name: []const u8) ?ast.sema.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    const sym = ctx.findSymbol(name) orelse return null;
+    return sym.const_value;
+}
+
+fn resolveTransferComponentConstValue(raw_ctx: *anyopaque, base: *const Expr, name: []const u8) ?ast.sema.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    return const_components.resolveDerivedComponentConstValue(ctx, transferConstResolver(ctx), base, name);
+}
+
+fn emitConstTransferByteBuffer(ctx: *Context, builder: anytype, bytes: []const u8) EmitError!ValueRef {
+    const ptr = try allocaByteBuffer(ctx, builder, if (bytes.len == 0) 1 else bytes.len);
+    for (bytes, 0..) |byte, idx| {
+        const elem_ptr = if (idx == 0) ptr else blk: {
+            const elem_ptr_name = try ctx.nextTemp();
+            try builder.gep(elem_ptr_name, .i8, ptr, try ctx.constI64(@intCast(idx)));
+            break :blk ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+        };
+        try builder.store(.{ .name = std.fmt.allocPrint(ctx.allocator, "{d}", .{byte}) catch "0", .ty = .i8, .is_ptr = false }, elem_ptr);
+    }
+    return ptr;
 }
 
 fn integerLiteralIRType(ctx: *Context, text: []const u8) IRType {

@@ -64,7 +64,7 @@ pub const parseInt = literals.parseInt;
 pub const parseReal = literals.parseReal;
 
 pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
-    switch (expr.*) {
+    return switch (expr.*) {
         .literal => |lit| {
             return switch (lit.kind) {
                 .integer => .{ .integer = try literals.parseInt(lit.text) },
@@ -129,16 +129,18 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             const res = resolver orelse return null;
             const spec = res.exprTypeSpec(expr) orelse return null;
             if (spec.lowered_kind != .derived or call.args.len != 0) return null;
+            const derived_name = spec.derived_type_name orelse return null;
+            if (!std.ascii.eqlIgnoreCase(call.name, derived_name)) return null;
             const bytes = res.exprMeasure(expr, .sizeof_bytes) orelse return null;
             const alloc = res.allocator orelse return null;
             const len = std.math.cast(usize, bytes) orelse return null;
             const out = try alloc.alloc(u8, len);
             @memset(out, 0);
-            break :blk .{ .string = out };
+            break :blk ConstValue{ .string = out };
         },
         .dim_range => return null,
         .implied_do => return null,
-    }
+    };
 }
 
 fn typeSpecKindValue(spec: symbols.TypeSpec) ?i64 {

@@ -5,6 +5,7 @@ const dispatch = @import("../../../dispatch/mod.zig");
 const casting = @import("../../../casting.zig");
 const utils = @import("../../../../utils.zig");
 const evaluator = @import("../../../../../../../semantic/evaluator.zig");
+const const_components = @import("../../../../../shared/const_components.zig");
 const shared = @import("../../shared.zig");
 const support = @import("../../array_actuals_support.zig");
 
@@ -216,6 +217,19 @@ fn materializeTransferSourceBytes(ctx: *Context, builder: anytype, expr: *Expr, 
         return .{ .ptr = actual.base_ptr, .size = total_bytes };
     }
 
+    if (evaluator.evalConst(expr, evaluatorResolver(ctx)) catch null) |const_value| {
+        switch (const_value) {
+            .string => |bytes| {
+                const ptr = try emitConstByteBuffer(ctx, builder, bytes);
+                return .{
+                    .ptr = ptr,
+                    .size = support.i64Const(ctx, @intCast(bytes.len)),
+                };
+            },
+            else => {},
+        }
+    }
+
     switch (expr.*) {
         .literal => |lit| switch (lit.kind) {
             .string => {
@@ -269,6 +283,7 @@ fn evaluatorResolver(ctx: *Context) evaluator.ConstResolver {
         .ctx = ctx,
         .resolveFn = resolveCodegenConstValue,
         .arrayExtentFn = resolveCodegenArrayExtent,
+        .componentConstFn = resolveCodegenComponentConstValue,
     };
 }
 
@@ -288,4 +303,23 @@ fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize)
     if (sym.dims.len == 0) return null;
     const extent = common.arrayElementCount(ctx.sem, if (dim) |dim_idx| sym.dims[dim_idx .. dim_idx + 1] else sym.dims) catch return null;
     return @intCast(extent);
+}
+
+fn resolveCodegenComponentConstValue(raw_ctx: *anyopaque, base: *const Expr, name: []const u8) ?ast.sema.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    return const_components.resolveDerivedComponentConstValue(ctx, evaluatorResolver(ctx), base, name);
+}
+
+fn emitConstByteBuffer(ctx: *Context, builder: anytype, bytes: []const u8) !ValueRef {
+    const alloc_len: usize = if (bytes.len == 0) 1 else bytes.len;
+    const ptr = try support.emitHeapAllocBytes(ctx, builder, support.i64Const(ctx, @intCast(alloc_len)));
+    for (bytes, 0..) |byte, idx| {
+        const elem_ptr = if (idx == 0) ptr else blk: {
+            const elem_ptr_name = try ctx.nextTemp();
+            try builder.gep(elem_ptr_name, .i8, ptr, support.i64Const(ctx, @intCast(idx)));
+            break :blk ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+        };
+        try builder.store(.{ .name = std.fmt.allocPrint(ctx.allocator, "{d}", .{byte}) catch "0", .ty = .i8, .is_ptr = false }, elem_ptr);
+    }
+    return ptr;
 }
