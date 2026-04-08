@@ -95,6 +95,84 @@ test "analyzeProgram installs single-target generic interface aliases with point
     try testing.expect(found_x);
 }
 
+test "analyzeProgram rejects assumed-length result in module procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module funcs\n" ++
+        "contains\n" ++
+        "  function assumed_len(x)\n" ++
+        "    character(*) :: assumed_len\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end function assumed_len\n" ++
+        "end module funcs\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidCharLen,
+        analyzeProgramWithKnownAndOptionsAndDiagnostics(
+            arena.allocator(),
+            program,
+            &.{},
+            &.{},
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag.code);
+    try testing.expect(std.mem.indexOf(u8, diag.message, "module procedure") != null);
+}
+
+test "analyzeProgram rejects assumed-length result in internal function" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "contains\n" ++
+        "  function assumed_len(x)\n" ++
+        "    character(*) :: assumed_len\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end function assumed_len\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidCharLen,
+        analyzeProgramWithKnownAndOptionsAndDiagnostics(
+            arena.allocator(),
+            program,
+            &.{},
+            &.{},
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag.code);
+    try testing.expect(std.mem.indexOf(u8, diag.message, "internal function") != null);
+}
+
 test "analyzeProgram accepts pointer assignment from single-target generic function result" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -164,6 +242,36 @@ test "inferProcedureArgSigs marks implicit dummy procedure arguments from call u
     try testing.expectEqual(@as(usize, 2), arg_sigs.len);
     try testing.expect(arg_sigs[0].is_procedure);
     try testing.expectEqual(ast.ProgramUnitKind.subroutine, arg_sigs[0].procedure_kind.?);
+    try testing.expect(!arg_sigs[1].is_procedure);
+}
+
+test "inferProcedureArgSigs infers typed scalar dummy as function from call syntax usage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "integer function test(charr, i)\n" ++
+        "  character(*) :: charr\n" ++
+        "  integer :: i\n" ++
+        "  print *, charr(i)\n" ++
+        "  test = 1\n" ++
+        "end function test\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    const arg_sigs = try procedure_inference.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+    try testing.expectEqual(@as(usize, 2), arg_sigs.len);
+    try testing.expect(arg_sigs[0].is_procedure);
+    try testing.expectEqual(ast.ProgramUnitKind.function, arg_sigs[0].procedure_kind.?);
+    try testing.expectEqual(ast.TypeKind.character, arg_sigs[0].procedure_result_type_spec.?.lowered_kind);
+    try testing.expectEqual(@as(?usize, null), arg_sigs[0].procedure_result_type_spec.?.char_len);
     try testing.expect(!arg_sigs[1].is_procedure);
 }
 

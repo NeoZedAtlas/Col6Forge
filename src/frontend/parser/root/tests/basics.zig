@@ -193,6 +193,39 @@ test "parseProgram skips END PROGRAM after internal procedures" {
     try testing.expectEqual(ast.ProgramUnitKind.subroutine, program.units[1].kind);
 }
 
+test "parseProgram clears pending host owner after bare END before external unit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  integer function ctest(i)\n" ++
+        "    integer :: i\n" ++
+        "    ctest = i\n" ++
+        "  end function ctest\n" ++
+        "end\n" ++
+        "\n" ++
+        "integer function test(i)\n" ++
+        "  integer :: i\n" ++
+        "  test = i\n" ++
+        "end function test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+    try testing.expectEqualStrings("P", program.units[0].name);
+    try testing.expectEqualStrings("CTEST", program.units[1].name);
+    try testing.expectEqualStrings("P", program.units[1].owner_name.?);
+    try testing.expectEqualStrings("TEST", program.units[2].name);
+    try testing.expect(program.units[2].owner_name == null);
+    try testing.expect(program.units[2].owner_kind == null);
+}
+
 test "parseProgram prepends host declarations into implicit main internal procedures" {
     const testing = std.testing;
     const allocator = testing.allocator;

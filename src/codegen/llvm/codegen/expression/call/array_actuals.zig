@@ -17,6 +17,7 @@ const character_buffers = @import("../../../shared/character_buffers.zig");
 const array_shape_checks = @import("../../../shared/array_shape_checks.zig");
 const io_utils = @import("../../../stmts/io/utils.zig");
 const elemental_char_intrinsics = @import("elemental_char_intrinsics.zig");
+const elemental_search_intrinsics = @import("elemental_search_intrinsics.zig");
 const shared = @import("shared.zig");
 const array_actuals_support = @import("array_actuals_support.zig");
 const analysis_dispatch = @import("array_actuals/analysis_dispatch.zig");
@@ -909,6 +910,13 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         return null;
     }
     if (expr.* == .call_or_subscript) {
+        if (try elemental_search_intrinsics.analyzeElementalSearchArrayActual(ctx, builder, expr.call_or_subscript, .{
+            .resolveArrayActual = resolveArrayActual,
+            .emitRequireSameArrayShape = emitRequireSameArrayShape,
+            .emitOwnedHeapActualFree = emitOwnedHeapActualFree,
+        })) |actual| {
+            return try validatedArrayActual(actual);
+        }
         if (try elemental_char_intrinsics.analyzeElementalCharCodeArrayActual(ctx, builder, expr.call_or_subscript, .{
             .resolveArrayActual = resolveArrayActual,
             .emitArrayActualElement = emitArrayActualElement,

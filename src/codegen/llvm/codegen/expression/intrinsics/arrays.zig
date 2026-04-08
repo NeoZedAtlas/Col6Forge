@@ -397,8 +397,73 @@ fn emitIntrinsicLogicalReduction(ctx: *Context, builder: anytype, args: []*Expr,
     if (array_reduced) |reduced| {
         return reduced;
     }
+    if (try array_actuals.resolveArrayActual(ctx, builder, args[0])) |actual| {
+        return emitScalarArrayLogicalReduction(ctx, builder, actual, require_all);
+    }
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLogicalCast(ctx, builder, value);
+}
+
+fn emitScalarArrayLogicalReduction(
+    ctx: *Context,
+    builder: anytype,
+    actual: ArrayActualPlan,
+    require_all: bool,
+) EmitError!ValueRef {
+    try actual.validate();
+
+    var elem_count = try ctx.constI64(1);
+    for (actual.extents) |extent| {
+        elem_count = try binary.emitMul(ctx, builder, elem_count, extent);
+    }
+
+    const init = if (require_all)
+        ValueRef{ .name = "1", .ty = .i1, .is_ptr = false }
+    else
+        ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
+    const acc_ptr_name = try ctx.nextTemp();
+    try builder.alloca(acc_ptr_name, .i1);
+    const acc_ptr = ValueRef{ .name = acc_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(init, acc_ptr);
+
+    const loop_preheader = try ctx.nextLabel(if (require_all) "all_actual_preheader" else "any_actual_preheader");
+    const loop_body = try ctx.nextLabel(if (require_all) "all_actual_body" else "any_actual_body");
+    const loop_exit = try ctx.nextLabel(if (require_all) "all_actual_exit" else "any_actual_exit");
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i64);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(.{ .name = "0", .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const elem = try array_actuals.emitArrayActualElement(ctx, builder, idx_val, actual);
+    const elem_logical = try emitLogicalCast(ctx, builder, elem);
+    const current_name = try ctx.nextTemp();
+    try builder.load(current_name, .i1, acc_ptr);
+    const current = ValueRef{ .name = current_name, .ty = .i1, .is_ptr = false };
+    const updated = if (require_all)
+        try binary.emitBinary(ctx, builder, .and_, current, elem_logical)
+    else
+        try binary.emitBinary(ctx, builder, .or_, current, elem_logical);
+    try builder.store(updated, acc_ptr);
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, .{ .name = "1", .ty = .i64, .is_ptr = false });
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, idx_ptr);
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_exit);
+    try array_actuals.emitOwnedHeapActualFree(ctx, builder, actual.owned_heap_ptr);
+    const out_name = try ctx.nextTemp();
+    try builder.load(out_name, .i1, acc_ptr);
+    return .{ .name = out_name, .ty = .i1, .is_ptr = false };
 }
 
 fn oneIndexValue(ctx: *Context) EmitError!ValueRef {

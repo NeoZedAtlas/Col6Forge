@@ -193,6 +193,14 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     if (try resolveArrayActual(ctx, builder, expr)) |actual| {
         return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
     }
+    switch (expr.*) {
+        .identifier => |name| {
+            if (try procedureDesignatorPointer(ctx, name)) |proc_ptr| {
+                return .{ .ptr = proc_ptr };
+            }
+        },
+        else => {},
+    }
     if (!isArraySubstringActualExpr(expr)) {
         if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
             return .{ .ptr = char_value.ptr };

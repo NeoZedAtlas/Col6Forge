@@ -21,8 +21,7 @@ pub fn inferProcedureArgSigsWithKnown(
     for (unit.args, 0..) |arg_name, idx| {
         const decl_info = findDummyArgDeclInfo(unit, arg_name);
         const declarator_sig = resolveProcedureDeclaratorKnownSig(known_procedure_sigs, decl_info.procedure_interface);
-        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
-            decl_info.declarator == null and !decl_info.explicit_type)
+        const inferred_proc_kind = if (dummyArgCanInferProcedureFromUsage(decl_info))
             inferDummyArgProcedureKind(unit, arg_name)
         else
             null;
@@ -63,6 +62,8 @@ pub fn inferProcedureArgSigsWithKnown(
                 interfaceProcedureResultTypeSpec(unit, proc)
             else if (declarator_sig) |sig|
                 sig.result_type_spec
+            else if (inferred_proc_kind == .function and decl_info.explicit_type)
+                type_spec
             else if (decl_info.external and decl_info.explicit_type)
                 type_spec
             else
@@ -124,6 +125,15 @@ const DummyArgDeclInfo = struct {
     interface_procedure: ?ast.InterfaceProcedure = null,
     procedure_interface: ast.ProcedureInterface = .none,
 };
+
+fn dummyArgCanInferProcedureFromUsage(info: DummyArgDeclInfo) bool {
+    if (info.interface_procedure != null or info.external) return false;
+    if (info.procedure_interface != .none) return false;
+    if (info.declarator) |decl| {
+        if (decl.dims.len != 0) return false;
+    }
+    return true;
+}
 
 fn findDummyArgDeclInfo(unit: ast.ProgramUnit, name: []const u8) DummyArgDeclInfo {
     return findDummyArgDeclInfoInDecls(unit.decls, name);
@@ -219,8 +229,7 @@ pub fn inferInterfaceProcedureArgSigs(
         const active_decls = if (proc_header.decls.len != 0) proc_header.decls else unit.decls;
         const decl_info = findDummyArgDeclInfoInDecls(active_decls, arg_name);
         const declarator_sig = resolveProcedureDeclaratorKnownSig(null, decl_info.procedure_interface);
-        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
-            decl_info.declarator == null and !decl_info.explicit_type)
+        const inferred_proc_kind = if (dummyArgCanInferProcedureFromUsage(decl_info))
             inferDummyArgProcedureKindInStmts(unit.stmts, arg_name)
         else
             null;
@@ -261,6 +270,8 @@ pub fn inferInterfaceProcedureArgSigs(
                 interfaceProcedureResultTypeSpec(unit, proc)
             else if (declarator_sig) |sig|
                 sig.result_type_spec
+            else if (inferred_proc_kind == .function and decl_info.explicit_type)
+                type_spec
             else if (decl_info.external and decl_info.explicit_type)
                 type_spec
             else

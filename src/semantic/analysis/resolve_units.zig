@@ -195,7 +195,24 @@ fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
         if (sym.effectiveCharLenKind() != .assumed) continue;
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
-        if (sym.kind == .function) continue;
+        if (sym.kind == .function) {
+            if (invalidAssumedCharacterResultOwner(ctx)) |owner_role| {
+                if (findTypeDeclSource(ctx, sym.name)) |decl_source| {
+                    ctx.setCurrentDeclSource(decl_source);
+                    ctx.setDiagnosticDetailed(
+                        if (decl_source.line == 0) 1 else decl_source.line,
+                        if (decl_source.column == 0) 1 else decl_source.column,
+                        catalog.semantic.invalid_char_len.code,
+                        try std.fmt.allocPrint(ctx.arena, "assumed character length is not valid for a {s} result", .{owner_role}),
+                        decl_source.text,
+                        &.{.{ .text = "Only external CHARACTER function results may use assumed length in this form." }},
+                        &.{.{ .text = "Declare a constant CHARACTER length for the contained procedure result, or move the function out as an external procedure." }},
+                    );
+                }
+                return error.InvalidCharLen;
+            }
+            continue;
+        }
         if (findTypeDeclSource(ctx, sym.name)) |decl_source| {
             ctx.setCurrentDeclSource(decl_source);
             ctx.setDiagnosticDetailed(
@@ -212,6 +229,14 @@ fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
         }
         return error.InvalidCharLen;
     }
+}
+
+fn invalidAssumedCharacterResultOwner(ctx: *context.Context) ?[]const u8 {
+    const owner_kind = ctx.unit.owner_kind orelse return null;
+    return switch (owner_kind) {
+        .module => "module procedure",
+        .procedure => "internal function",
+    };
 }
 
 fn findTypeDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclSource {

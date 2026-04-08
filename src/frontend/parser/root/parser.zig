@@ -153,6 +153,12 @@ pub const Parser = struct {
         while (self.index < self.lines.len) {
             root_diagnostics.noteFallbackForLine(self.diag_bag, self.lines[self.index]);
             if (self.isStandaloneEndAt(self.index)) {
+                if (self.pending_owner_name != null) {
+                    self.pending_owner_name = null;
+                    self.pending_owner_kind = null;
+                    self.pending_owner_decls = null;
+                    self.pending_owner_decl_sources = null;
+                }
                 self.index += 1;
                 continue;
             }
