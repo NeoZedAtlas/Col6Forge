@@ -15,6 +15,7 @@ const intrinsics = @import("../intrinsics/mod.zig");
 const memory = @import("../memory.zig");
 
 const character = @import("character.zig");
+const defined_operators = @import("defined_operators.zig");
 const int_eval = @import("int_eval.zig");
 const resolution = @import("resolution.zig");
 const shared = @import("shared.zig");
@@ -178,11 +179,8 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         },
         .unary => |un| {
             if (un.op == .not) {
-                if (emitDefinedUnaryOperatorCall(ctx, builder, expr, un)) |value| {
+                if (try defined_operators.emitDefinedUnaryOperatorExprCall(ctx, builder, expr, un)) |value| {
                     return value;
-                } else |err| switch (err) {
-                    error.NoDefinedOperatorMatch => {},
-                    else => return err,
                 }
             }
             const inner = try emitExprImpl(ctx, builder, un.expr, subst_depth);
@@ -204,11 +202,8 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
         },
         .binary => |bin| {
-            if (emitDefinedBinaryOperatorCall(ctx, builder, bin)) |value| {
+            if (try defined_operators.emitDefinedBinaryOperatorExprCall(ctx, builder, bin)) |value| {
                 return value;
-            } else |err| switch (err) {
-                error.NoDefinedOperatorMatch => {},
-                else => return err,
             }
             if (bin.op == .eq or bin.op == .ne or bin.op == .lt or bin.op == .le or bin.op == .gt or bin.op == .ge) {
                 if (try character.emitCharacterValuePlanImpl(ctx, builder, bin.left, subst_depth)) |lhs_char| {
@@ -466,50 +461,6 @@ fn buildProcedureComponentActuals(
         comp_idx += 1;
     }
     return actuals;
-}
-
-fn emitDefinedUnaryOperatorCall(
-    ctx: *Context,
-    builder: anytype,
-    expr: *Expr,
-    un: ast.UnaryExpr,
-) EmitError!ValueRef {
-    if (resolution.roughExprKind(ctx, un.expr) == .logical) return error.NoDefinedOperatorMatch;
-    const generic_name = resolution.unaryDefinedOperatorName(un.op) orelse return error.NoDefinedOperatorMatch;
-    const proc_name = resolution.resolveSingleTargetGenericProcedureName(ctx, generic_name) orelse return error.NoDefinedOperatorMatch;
-    var actuals = [_]*Expr{un.expr};
-    const ret_ty = resolution.definedUnaryOperatorResultType(ctx, expr, proc_name);
-    const fn_name = try resolution.ensureExternalDeclForCall(ctx, proc_name, ret_ty, &actuals, false);
-    return call.emitCall(ctx, builder, fn_name, ret_ty, &actuals, false);
-}
-
-fn emitDefinedBinaryOperatorCall(
-    ctx: *Context,
-    builder: anytype,
-    bin: ast.BinaryExpr,
-) EmitError!ValueRef {
-    const generic_name = resolution.binaryDefinedOperatorName(bin.op) orelse return error.NoDefinedOperatorMatch;
-    if (binaryUsesIntrinsicCodegen(ctx, bin.op, bin.left, bin.right)) return error.NoDefinedOperatorMatch;
-    const proc_name = resolution.resolveSingleTargetGenericProcedureName(ctx, generic_name) orelse return error.NoDefinedOperatorMatch;
-    var actuals = [_]*Expr{ bin.left, bin.right };
-    const fn_name = try resolution.ensureExternalDeclForCall(ctx, proc_name, .i1, &actuals, false);
-    return call.emitCall(ctx, builder, fn_name, .i1, &actuals, false);
-}
-
-fn binaryUsesIntrinsicCodegen(
-    ctx: *Context,
-    op: ast.BinaryOp,
-    left: *Expr,
-    right: *Expr,
-) bool {
-    switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge => {},
-        else => return true,
-    }
-    const left_kind = resolution.roughExprKind(ctx, left);
-    const right_kind = resolution.roughExprKind(ctx, right);
-    return (resolution.isNumericKind(left_kind) and resolution.isNumericKind(right_kind)) or
-        (left_kind == .logical and right_kind == .logical);
 }
 
 fn isStructureConstructorCall(ctx: *Context, sym: ast.sema.Symbol, ctor_call: ast.CallOrSubscript) bool {

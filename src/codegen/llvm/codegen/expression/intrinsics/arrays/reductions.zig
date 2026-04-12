@@ -81,6 +81,21 @@ fn freeMergeViewPlanOwnedActuals(ctx: *Context, builder: anytype, plan: MergeVie
     }
 }
 
+fn emitReductionCompare(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left_expr: *Expr,
+    lhs: ValueRef,
+    right_expr: *Expr,
+    rhs: ValueRef,
+) EmitError!ValueRef {
+    if (try dispatch.emitDefinedBinaryOperatorValueCall(ctx, builder, op, left_expr, lhs, right_expr, rhs)) |value| {
+        return value;
+    }
+    return binary.emitBinary(ctx, builder, op, lhs, rhs);
+}
+
 pub fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
     return emitWholeArrayLogicalReduction(ctx, builder, expr_node, false);
 }
@@ -106,9 +121,9 @@ fn emitWholeArrayLogicalReduction(
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
             if (if (require_all)
-                try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
+                try emitActualConstructorReductionAll(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor)) |reduced| {
+                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced| {
                 return reduced;
             }
         }
@@ -117,9 +132,9 @@ fn emitWholeArrayLogicalReduction(
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
             if (if (require_all)
-                try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
+                try emitConstructorActualReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual)) |reduced| {
+                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced| {
                 return reduced;
             }
         }
@@ -128,17 +143,17 @@ fn emitWholeArrayLogicalReduction(
     if (try views.supportedWholeArrayView(ctx, builder, bin.left)) |left_view| {
         if (views.supportedConstructorView(bin.right)) |right_ctor| {
             const reduced = if (require_all)
-                try emitWholeArrayConstructorReductionAll(ctx, builder, bin.op, left_view, right_ctor)
+                try emitWholeArrayConstructorReductionAll(ctx, builder, bin.op, bin.left, left_view, bin.right, right_ctor)
             else
-                try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
+                try emitWholeArrayConstructorReduction(ctx, builder, bin.op, bin.left, left_view, bin.right, right_ctor);
             try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
             return reduced;
         }
         if (try analyzeMergeViewPlan(ctx, builder, bin.right)) |right_merge| {
             const reduced = if (require_all)
-                try emitWholeArrayMergeViewReductionAll(ctx, builder, bin.op, left_view, right_merge)
+                try emitWholeArrayMergeViewReductionAll(ctx, builder, bin.op, bin.left, left_view, bin.right, right_merge)
             else
-                try emitWholeArrayMergeViewReduction(ctx, builder, bin.op, left_view, right_merge);
+                try emitWholeArrayMergeViewReduction(ctx, builder, bin.op, bin.left, left_view, bin.right, right_merge);
             try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
             try freeMergeViewPlanOwnedActuals(ctx, builder, right_merge);
             return reduced;
@@ -147,42 +162,42 @@ fn emitWholeArrayLogicalReduction(
             if (left_view.count == null or right_view.count == null) return null;
             if (left_view.count.? != right_view.count.?) return null;
             const reduced = if (require_all)
-                try emitWholeArrayWholeArrayReductionAll(ctx, builder, bin.op, left_view, right_view)
+                try emitWholeArrayWholeArrayReductionAll(ctx, builder, bin.op, bin.left, left_view, bin.right, right_view)
             else
-                try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, left_view, right_view);
+                try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, bin.left, left_view, bin.right, right_view);
             try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
             try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
             return reduced;
         }
         const reduced = if (require_all)
-            try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, left_view, bin.right)
+            try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, bin.left, left_view, bin.right)
         else
-            try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
+            try emitWholeArrayScalarReduction(ctx, builder, bin.op, bin.left, left_view, bin.right);
         try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
         return reduced;
     }
     if (try views.supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
         if (try analyzeMergeViewPlan(ctx, builder, bin.left)) |left_merge| {
             const reduced = if (require_all)
-                try emitMergeViewWholeArrayReductionAll(ctx, builder, bin.op, left_merge, right_view)
+                try emitMergeViewWholeArrayReductionAll(ctx, builder, bin.op, bin.left, left_merge, bin.right, right_view)
             else
-                try emitMergeViewWholeArrayReduction(ctx, builder, bin.op, left_merge, right_view);
+                try emitMergeViewWholeArrayReduction(ctx, builder, bin.op, bin.left, left_merge, bin.right, right_view);
             try freeMergeViewPlanOwnedActuals(ctx, builder, left_merge);
             try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
             return reduced;
         }
         if (views.supportedConstructorView(bin.left)) |left_ctor| {
             const reduced = if (require_all)
-                try emitConstructorWholeArrayReductionAll(ctx, builder, bin.op, left_ctor, right_view)
+                try emitConstructorWholeArrayReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_view)
             else
-                try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
+                try emitConstructorWholeArrayReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_view);
             try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
             return reduced;
         }
         const reduced = if (require_all)
-            try emitScalarWholeArrayReductionAll(ctx, builder, bin.op, bin.left, right_view)
+            try emitScalarWholeArrayReductionAll(ctx, builder, bin.op, bin.left, bin.right, right_view)
         else
-            try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, right_view);
+            try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, bin.right, right_view);
         try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
         return reduced;
     }
@@ -190,38 +205,38 @@ fn emitWholeArrayLogicalReduction(
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.right)) |right_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, right_actual.owned_heap_ptr) catch {};
             if (if (require_all)
-                try emitConstructorActualReductionAll(ctx, builder, bin.op, left_ctor, right_actual)
+                try emitConstructorActualReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, left_ctor, right_actual)) |reduced| {
+                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced| {
                 return reduced;
             }
         }
         if (views.supportedConstructorView(bin.right)) |right_ctor| {
             if (left_ctor.count != right_ctor.count) return null;
             return if (require_all)
-                try emitConstructorConstructorReductionAll(ctx, builder, bin.op, left_ctor, right_ctor)
+                try emitConstructorConstructorReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_ctor)
             else
-                try emitConstructorConstructorReduction(ctx, builder, bin.op, left_ctor, right_ctor);
+                try emitConstructorConstructorReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_ctor);
         }
         return if (require_all)
-            try emitConstructorScalarReductionAll(ctx, builder, bin.op, left_ctor, bin.right)
+            try emitConstructorScalarReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right)
         else
-            try emitConstructorScalarReduction(ctx, builder, bin.op, left_ctor, bin.right);
+            try emitConstructorScalarReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right);
     }
     if (views.supportedConstructorView(bin.right)) |right_ctor| {
         if (try array_actuals.resolveArrayActual(ctx, builder, bin.left)) |left_actual| {
             defer array_actuals.emitOwnedHeapActualFree(ctx, builder, left_actual.owned_heap_ptr) catch {};
             if (if (require_all)
-                try emitActualConstructorReductionAll(ctx, builder, bin.op, left_actual, right_ctor)
+                try emitActualConstructorReductionAll(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, left_actual, right_ctor)) |reduced| {
+                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced| {
                 return reduced;
             }
         }
         return if (require_all)
-            try emitScalarConstructorReductionAll(ctx, builder, bin.op, bin.left, right_ctor)
+            try emitScalarConstructorReductionAll(ctx, builder, bin.op, bin.left, bin.right, right_ctor)
         else
-            try emitScalarConstructorReduction(ctx, builder, bin.op, bin.left, right_ctor);
+            try emitScalarConstructorReduction(ctx, builder, bin.op, bin.left, bin.right, right_ctor);
     }
     return null;
 }
@@ -296,9 +311,12 @@ fn emitWholeArrayConstructorReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = right_expr;
     if (left.count) |count| {
         if (count != right.count) return error.UnsupportedIntrinsicType;
     }
@@ -307,7 +325,7 @@ fn emitWholeArrayConstructorReduction(
     while (idx < right.count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -317,9 +335,12 @@ fn emitConstructorWholeArrayReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
+    _ = left_expr;
     if (right.count) |count| {
         if (left.count != count) return error.UnsupportedIntrinsicType;
     }
@@ -328,7 +349,7 @@ fn emitConstructorWholeArrayReduction(
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -431,16 +452,19 @@ fn emitActualConstructorReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ArrayActualPlan,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!?ValueRef {
-    if (!supportsConstructorActualReduction(left, right)) return null;
+    _ = right_expr;
+    if (!(try ensureConstructorActualReductionShape(ctx, builder, left, right))) return null;
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
     while (idx < right.count) : (idx += 1) {
         const lhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), left);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -450,16 +474,19 @@ fn emitConstructorActualReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: ArrayActualPlan,
 ) EmitError!?ValueRef {
-    if (!supportsConstructorActualReduction(right, left)) return null;
+    _ = left_expr;
+    if (!(try ensureConstructorActualReductionShape(ctx, builder, right, left))) return null;
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), right);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -469,16 +496,19 @@ fn emitActualConstructorReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ArrayActualPlan,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!?ValueRef {
-    if (!supportsConstructorActualReduction(left, right)) return null;
+    _ = right_expr;
+    if (!(try ensureConstructorActualReductionShape(ctx, builder, left, right))) return null;
     var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
     var idx: usize = 0;
     while (idx < right.count) : (idx += 1) {
         const lhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), left);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -488,16 +518,19 @@ fn emitConstructorActualReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: ArrayActualPlan,
 ) EmitError!?ValueRef {
-    if (!supportsConstructorActualReduction(right, left)) return null;
+    _ = left_expr;
+    if (!(try ensureConstructorActualReductionShape(ctx, builder, right, left))) return null;
     var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), right);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -507,6 +540,21 @@ fn supportsConstructorActualReduction(actual: ArrayActualPlan, ctor: Constructor
     if (actual.elem_ty == .i8) return false;
     const count = staticActualElementCount(actual) orelse return false;
     return count == ctor.count;
+}
+
+fn ensureConstructorActualReductionShape(
+    ctx: *Context,
+    builder: anytype,
+    actual: ArrayActualPlan,
+    ctor: ConstructorView,
+) EmitError!bool {
+    if (actual.elem_ty == .i8) return false;
+    if (staticActualElementCount(actual)) |count| {
+        return count == ctor.count;
+    }
+    const actual_count = try array_actuals.emitExtentProductI64(ctx, builder, actual.extents);
+    try array_actuals.emitRequireEqualI64(ctx, builder, actual_count, try ctx.constI64(@intCast(ctor.count)), "ctor_actual_shape");
+    return true;
 }
 
 fn staticActualElementCount(actual: ArrayActualPlan) ?usize {
@@ -524,6 +572,8 @@ fn emitIndexedCompareReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
+    right_expr: *Expr,
     count: usize,
     initial: ValueRef,
     left: anytype,
@@ -537,7 +587,7 @@ fn emitIndexedCompareReduction(
     while (idx < count) : (idx += 1) {
         const lhs = try emitLeft(ctx, builder, left, idx);
         const rhs = try emitRight(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, reduce_op, acc, cmp);
     }
     return acc;
@@ -547,28 +597,34 @@ fn emitWholeArrayMergeViewReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: MergeViewPlan,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergeViewElement, .or_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergeViewElement, .or_);
 }
 
 fn emitMergeViewWholeArrayReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: MergeViewPlan,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitMergeViewElement, emitWholeArrayElement, .or_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitMergeViewElement, emitWholeArrayElement, .or_);
 }
 
 fn emitWholeArrayCompareReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
+    right_expr: *Expr,
     left: anytype,
     right: anytype,
     comptime whole_array_on_left: bool,
@@ -579,27 +635,31 @@ fn emitWholeArrayCompareReductionAll(
         left.count orelse return error.UnsupportedIntrinsicType
     else
         right.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, .{ .name = "1", .ty = .i1, .is_ptr = false }, left, right, emitLeft, emitRight, .and_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, .{ .name = "1", .ty = .i1, .is_ptr = false }, left, right, emitLeft, emitRight, .and_);
 }
 
 fn emitWholeArrayMergeViewReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: MergeViewPlan,
 ) EmitError!ValueRef {
-    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitMergeViewElement);
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, true, emitWholeArrayElement, emitMergeViewElement);
 }
 
 fn emitMergeViewWholeArrayReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: MergeViewPlan,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, false, emitMergeViewElement, emitWholeArrayElement);
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, false, emitMergeViewElement, emitWholeArrayElement);
 }
 
 fn analyzeMergeComparePlan(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?MergeComparePlan {
@@ -658,59 +718,70 @@ fn emitWholeArrayMergeReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: MergeComparePlan,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergePlanElement, .or_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitMergePlanElement, .or_);
 }
 
 fn emitMergeWholeArrayReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: MergeComparePlan,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitMergePlanElement, emitWholeArrayElement, .or_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitMergePlanElement, emitWholeArrayElement, .or_);
 }
 
 fn emitWholeArrayMergeReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: MergeComparePlan,
 ) EmitError!ValueRef {
-    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitMergePlanElement);
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, true, emitWholeArrayElement, emitMergePlanElement);
 }
 
 fn emitMergeWholeArrayReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: MergeComparePlan,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, false, emitMergePlanElement, emitWholeArrayElement);
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, false, emitMergePlanElement, emitWholeArrayElement);
 }
 
 fn emitWholeArrayWholeArrayReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = left.count orelse return error.UnsupportedIntrinsicType;
-    return emitIndexedCompareReduction(ctx, builder, op, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitWholeArrayElement, .or_);
+    return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitWholeArrayElement, .or_);
 }
 
 fn emitWholeArrayScalarReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
     right: *Expr,
 ) EmitError!ValueRef {
@@ -720,7 +791,7 @@ fn emitWholeArrayScalarReduction(
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -731,6 +802,7 @@ fn emitScalarWholeArrayReduction(
     builder: anytype,
     op: ast.BinaryOp,
     left: *Expr,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
@@ -739,7 +811,7 @@ fn emitScalarWholeArrayReduction(
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -749,15 +821,19 @@ fn emitConstructorConstructorReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = left_expr;
+    _ = right_expr;
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -767,15 +843,17 @@ fn emitConstructorScalarReduction(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
     right: *Expr,
 ) EmitError!ValueRef {
+    _ = left_expr;
     var acc = utils.zeroValue(.i1);
     const rhs = try dispatch.emitExpr(ctx, builder, right);
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -786,14 +864,16 @@ fn emitScalarConstructorReduction(
     builder: anytype,
     op: ast.BinaryOp,
     left: *Expr,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = right_expr;
     var acc = utils.zeroValue(.i1);
     const lhs = try dispatch.emitExpr(ctx, builder, left);
     var idx: usize = 0;
     while (idx < right.count) : (idx += 1) {
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
     }
     return acc;
@@ -803,9 +883,12 @@ fn emitWholeArrayConstructorReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = right_expr;
     if (left.count) |count| {
         if (count != right.count) return error.UnsupportedIntrinsicType;
     }
@@ -814,7 +897,7 @@ fn emitWholeArrayConstructorReductionAll(
     while (idx < right.count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -824,9 +907,12 @@ fn emitConstructorWholeArrayReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
+    _ = left_expr;
     if (right.count) |count| {
         if (left.count != count) return error.UnsupportedIntrinsicType;
     }
@@ -835,7 +921,7 @@ fn emitConstructorWholeArrayReductionAll(
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -845,16 +931,19 @@ fn emitWholeArrayWholeArrayReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
-    return emitWholeArrayCompareReductionAll(ctx, builder, op, left, right, true, emitWholeArrayElement, emitWholeArrayElement);
+    return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, true, emitWholeArrayElement, emitWholeArrayElement);
 }
 
 fn emitWholeArrayScalarReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: WholeArrayView,
     right: *Expr,
 ) EmitError!ValueRef {
@@ -864,7 +953,7 @@ fn emitWholeArrayScalarReductionAll(
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -875,6 +964,7 @@ fn emitScalarWholeArrayReductionAll(
     builder: anytype,
     op: ast.BinaryOp,
     left: *Expr,
+    right_expr: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
     const count = right.count orelse return error.UnsupportedIntrinsicType;
@@ -883,7 +973,7 @@ fn emitScalarWholeArrayReductionAll(
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right_expr, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -893,15 +983,19 @@ fn emitConstructorConstructorReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = left_expr;
+    _ = right_expr;
     var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -911,15 +1005,17 @@ fn emitConstructorScalarReductionAll(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
+    left_expr: *Expr,
     left: ConstructorView,
     right: *Expr,
 ) EmitError!ValueRef {
+    _ = left_expr;
     var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
     const rhs = try dispatch.emitExpr(ctx, builder, right);
     var idx: usize = 0;
     while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left.items[idx], lhs, right, rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;
@@ -930,14 +1026,16 @@ fn emitScalarConstructorReductionAll(
     builder: anytype,
     op: ast.BinaryOp,
     left: *Expr,
+    right_expr: *Expr,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    _ = right_expr;
     var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
     const lhs = try dispatch.emitExpr(ctx, builder, left);
     var idx: usize = 0;
     while (idx < right.count) : (idx += 1) {
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
-        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right.items[idx], rhs);
         acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
     }
     return acc;

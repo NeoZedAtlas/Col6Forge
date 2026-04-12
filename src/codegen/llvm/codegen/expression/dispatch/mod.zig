@@ -1,5 +1,6 @@
 const character = @import("character.zig");
 const core = @import("core.zig");
+const defined_operators = @import("defined_operators.zig");
 const shared = @import("shared.zig");
 
 pub const CharacterValueKind = shared.CharacterValueKind;
@@ -7,6 +8,7 @@ pub const CharacterValuePlan = shared.CharacterValuePlan;
 
 pub const emitLValue = core.emitLValue;
 pub const emitExpr = core.emitExpr;
+pub const emitDefinedBinaryOperatorValueCall = defined_operators.emitDefinedBinaryOperatorValueCall;
 
 pub const isCharacterExpr = character.isCharacterExpr;
 pub const constantCharacterLenForExpr = character.constantCharacterLenForExpr;
