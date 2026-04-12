@@ -25,6 +25,7 @@ const runtime_utils = @import("array_actuals/runtime_utils.zig");
 const constructors = @import("array_actuals/constructors.zig");
 const substrings = @import("array_actuals/substrings.zig");
 const known_functions = @import("array_actuals/known_functions.zig");
+const descriptors = @import("array_actuals/descriptors.zig");
 const reductions_intrinsics = @import("array_actuals/intrinsics/reductions.zig");
 const shape_intrinsics = @import("array_actuals/intrinsics/shape_ops.zig");
 const transfer_intrinsics = @import("array_actuals/intrinsics/transfer.zig");
@@ -48,21 +49,8 @@ pub fn materializeActualDescriptor(
     return materializeKnownActualDescriptor(ctx, builder, actual, arg_sig);
 }
 
-pub fn materializeKnownActualDescriptor(
-    ctx: *Context,
-    builder: anytype,
-    actual: ArrayActualPlan,
-    arg_sig: ast.sema.KnownProcedureSig.ArgSig,
-) !MaterializedDescriptor {
-    try actual.validate();
-    if (actual.extents.len != arg_sig.rank) return error.DescriptorActualRankMismatch;
-
-    const extent_ptr = try materializeDescriptorValues(ctx, builder, actual.extents);
-    const multiplier_ptr = try materializeDescriptorValues(ctx, builder, actual.multipliers);
-    return .{
-        .extent_ptr = extent_ptr,
-        .multiplier_ptr = multiplier_ptr,
-    };
+pub fn materializeKnownActualDescriptor(ctx: *Context, builder: anytype, actual: ArrayActualPlan, arg_sig: ast.sema.KnownProcedureSig.ArgSig) !MaterializedDescriptor {
+    return descriptors.materializeKnownActualDescriptor(ctx, builder, actual, arg_sig, i64Const);
 }
 
 pub fn emitMaterializedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
@@ -226,33 +214,6 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
             .contiguous = true,
         }),
     };
-}
-
-fn materializeDescriptorValues(
-    ctx: *Context,
-    builder: anytype,
-    values: []const ValueRef,
-) !ValueRef {
-    const rank = values.len;
-    const base_name = try ctx.nextTemp();
-    if (rank == 1) {
-        try builder.alloca(base_name, .i64);
-    } else {
-        try builder.allocaArray(base_name, .i64, rank);
-    }
-    const base_ptr = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
-
-    for (values, 0..) |value, dim_idx| {
-        const offset_ptr = if (dim_idx == 0)
-            base_ptr
-        else blk: {
-            const ptr_name = try ctx.nextTemp();
-            try builder.gep(ptr_name, .i64, base_ptr, i64Const(ctx, @intCast(dim_idx)));
-            break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
-        };
-        try builder.store(value, offset_ptr);
-    }
-    return base_ptr;
 }
 
 pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {

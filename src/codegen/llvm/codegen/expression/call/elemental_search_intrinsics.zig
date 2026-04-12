@@ -2,6 +2,8 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const casting = @import("../casting.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const analysis_dispatch = @import("array_actuals/analysis_dispatch.zig");
+const intrinsic_shared = @import("../intrinsics/shared.zig");
 const shared = @import("shared.zig");
 const primitives = @import("array_actuals/support/primitives.zig");
 const loops = @import("array_actuals/support/loops.zig");
@@ -22,6 +24,8 @@ const SearchKind = enum {
     scan,
     verify,
 };
+
+const evalConstIntArg = analysis_dispatch.evalConstIntArg;
 
 const CharacterOperand = union(enum) {
     scalar: dispatch.CharacterValuePlan,
@@ -59,9 +63,9 @@ pub fn analyzeElementalSearchArrayActual(
             result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
             continue;
         }
-        back_i1 = try emitLogicalLikeI1(ctx, builder, try dispatch.emitExpr(ctx, builder, call.args[idx]));
+        back_i1 = try intrinsic_shared.emitLogicalLikeI1(ctx, builder, try dispatch.emitExpr(ctx, builder, call.args[idx]));
     }
-    const back_i32 = if (back_i1) |value| try emitI1ToI32(ctx, builder, value) else try ctx.constI32(0);
+    const back_i32 = if (back_i1) |value| try intrinsic_shared.emitI1ToI32(ctx, builder, value) else try ctx.constI32(0);
     const result_elem_count = try emitExtentProductI64(ctx, builder, basis.extents);
     const result_ptr = try emitHeapArrayTempPointer(ctx, builder, result_ty, result_elem_count);
     const result_multipliers = try emitContiguousMultipliers(ctx, builder, basis.extents);
@@ -200,21 +204,6 @@ fn emitCharacterOperandRef(
     };
 }
 
-fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
-    return switch (expr.*) {
-        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
-        .unary => |un| {
-            const value = evalConstIntArg(ctx, un.expr) orelse return null;
-            return switch (un.op) {
-                .plus => value,
-                .minus => -value,
-                else => null,
-            };
-        },
-        else => null,
-    };
-}
-
 fn integerKindToIRType(kind_value: i64) ?IRType {
     if (kind_value <= 0) return null;
     if (kind_value >= 8) return .i64;
@@ -224,28 +213,4 @@ fn integerKindToIRType(kind_value: i64) ?IRType {
 fn coerceToI32(ctx: *Context, builder: anytype, value: ValueRef) !ValueRef {
     if (value.ty == .i32) return value;
     return casting.coerce(ctx, builder, value, .i32);
-}
-
-fn emitLogicalLikeI1(ctx: *Context, builder: anytype, value: ValueRef) !ValueRef {
-    return switch (value.ty) {
-        .i1 => value,
-        .i32, .i64 => blk: {
-            const cmp_name = try ctx.nextTemp();
-            try builder.compare(cmp_name, "icmp", "ne", value.ty, value, .{ .name = "0", .ty = value.ty, .is_ptr = false });
-            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
-        },
-        .f32, .f64 => blk: {
-            const cmp_name = try ctx.nextTemp();
-            try builder.compare(cmp_name, "fcmp", "une", value.ty, value, .{ .name = "0.0", .ty = value.ty, .is_ptr = false });
-            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
-        },
-        else => error.UnsupportedIntrinsicType,
-    };
-}
-
-fn emitI1ToI32(ctx: *Context, builder: anytype, value: ValueRef) !ValueRef {
-    if (value.ty != .i1) return error.UnsupportedIntrinsicType;
-    const tmp = try ctx.nextTemp();
-    try builder.cast(tmp, "zext", .i1, value, .i32);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
 }

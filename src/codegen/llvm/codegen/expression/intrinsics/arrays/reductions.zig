@@ -10,6 +10,7 @@ const dispatch = @import("../../dispatch/mod.zig");
 const memory = @import("../../memory.zig");
 const shared = @import("../shared.zig");
 const views = @import("views.zig");
+const shape_reductions = @import("reduction_shape.zig");
 
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -123,7 +124,8 @@ fn emitWholeArrayLogicalReduction(
             if (if (require_all)
                 try emitActualConstructorReductionAll(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced| {
+                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced|
+            {
                 return reduced;
             }
         }
@@ -134,7 +136,8 @@ fn emitWholeArrayLogicalReduction(
             if (if (require_all)
                 try emitConstructorActualReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced| {
+                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced|
+            {
                 return reduced;
             }
         }
@@ -169,10 +172,16 @@ fn emitWholeArrayLogicalReduction(
             try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
             return reduced;
         }
-        const reduced = if (require_all)
-            try emitWholeArrayScalarReductionAll(ctx, builder, bin.op, bin.left, left_view, bin.right)
-        else
-            try emitWholeArrayScalarReduction(ctx, builder, bin.op, bin.left, left_view, bin.right);
+        const reduced = try emitWholeArrayScalarReductionImpl(
+            ctx,
+            builder,
+            bin.op,
+            bin.left,
+            bin.right,
+            left_view,
+            true,
+            if (require_all) .and_ else .or_,
+        );
         try freeWholeArrayViewOwnedActual(ctx, builder, left_view);
         return reduced;
     }
@@ -194,10 +203,16 @@ fn emitWholeArrayLogicalReduction(
             try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
             return reduced;
         }
-        const reduced = if (require_all)
-            try emitScalarWholeArrayReductionAll(ctx, builder, bin.op, bin.left, bin.right, right_view)
-        else
-            try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, bin.right, right_view);
+        const reduced = try emitWholeArrayScalarReductionImpl(
+            ctx,
+            builder,
+            bin.op,
+            bin.left,
+            bin.right,
+            right_view,
+            false,
+            if (require_all) .and_ else .or_,
+        );
         try freeWholeArrayViewOwnedActual(ctx, builder, right_view);
         return reduced;
     }
@@ -207,7 +222,8 @@ fn emitWholeArrayLogicalReduction(
             if (if (require_all)
                 try emitConstructorActualReductionAll(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)
             else
-                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced| {
+                try emitConstructorActualReduction(ctx, builder, bin.op, bin.left, left_ctor, bin.right, right_actual)) |reduced|
+            {
                 return reduced;
             }
         }
@@ -229,7 +245,8 @@ fn emitWholeArrayLogicalReduction(
             if (if (require_all)
                 try emitActualConstructorReductionAll(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)
             else
-                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced| {
+                try emitActualConstructorReduction(ctx, builder, bin.op, bin.left, left_actual, bin.right, right_ctor)) |reduced|
+            {
                 return reduced;
             }
         }
@@ -241,71 +258,8 @@ fn emitWholeArrayLogicalReduction(
     return null;
 }
 
-pub fn emitShapeCompareAllReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
-    if (expr_node.* != .binary) return null;
-    const bin = expr_node.binary;
-    switch (bin.op) {
-        .eq, .ne, .lt, .le, .gt, .ge => {},
-        else => return null,
-    }
-    const left_subject = shapeIntrinsicSubject(bin.left) orelse return null;
-    const right_subject = shapeIntrinsicSubject(bin.right) orelse return null;
-    const left_extents = try shapeSubjectExtents(ctx, builder, left_subject) orelse return null;
-    const right_extents = try shapeSubjectExtents(ctx, builder, right_subject) orelse return null;
-    if (left_extents.len != right_extents.len) {
-        return switch (bin.op) {
-            .eq => .{ .name = "0", .ty = .i1, .is_ptr = false },
-            .ne => .{ .name = "1", .ty = .i1, .is_ptr = false },
-            else => null,
-        };
-    }
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    for (left_extents, right_extents) |lhs, rhs| {
-        const cmp = try binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
-}
-
-pub fn emitShapeCompareAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
-    if (expr_node.* != .binary) return null;
-    const bin = expr_node.binary;
-    switch (bin.op) {
-        .eq, .ne, .lt, .le, .gt, .ge => {},
-        else => return null,
-    }
-
-    const shape_side = shapeIntrinsicSubject(bin.left) orelse shapeIntrinsicSubject(bin.right) orelse return null;
-    const vector_side = if (shapeIntrinsicSubject(bin.left) != null) bin.right else bin.left;
-    const shape_on_left = shapeIntrinsicSubject(bin.left) != null;
-
-    const extents = try shapeSubjectExtents(ctx, builder, shape_side) orelse return null;
-    const vector_actual = (try array_actuals.resolveArrayActual(ctx, builder, vector_side)) orelse return null;
-    defer array_actuals.emitOwnedHeapActualFree(ctx, builder, vector_actual.owned_heap_ptr) catch {};
-    try vector_actual.validate();
-    if (vector_actual.extents.len != 1) return null;
-
-    var acc = ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
-    for (extents, 0..) |extent, idx| {
-        const rhs = try array_actuals.emitArrayActualElement(ctx, builder, try ctx.constI64(@intCast(idx)), vector_actual);
-        const lhs_cmp = if (shape_on_left) extent else rhs;
-        const rhs_cmp = if (shape_on_left) rhs else extent;
-        const cmp = try binary.emitBinary(ctx, builder, bin.op, lhs_cmp, rhs_cmp);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
-}
-
-fn shapeIntrinsicSubject(expr_node: *Expr) ?*Expr {
-    return switch (expr_node.*) {
-        .call_or_subscript => |call| blk: {
-            if (!std.ascii.eqlIgnoreCase(call.name, "shape")) break :blk null;
-            if (call.args.len != 1) break :blk null;
-            break :blk call.args[0];
-        },
-        else => null,
-    };
-}
+pub const emitShapeCompareAllReduction = shape_reductions.emitShapeCompareAllReduction;
+pub const emitShapeCompareAnyReduction = shape_reductions.emitShapeCompareAnyReduction;
 
 fn emitWholeArrayConstructorReduction(
     ctx: *Context,
@@ -777,42 +731,30 @@ fn emitWholeArrayWholeArrayReduction(
     return emitIndexedCompareReduction(ctx, builder, op, left_expr, right_expr, count, utils.zeroValue(.i1), left, right, emitWholeArrayElement, emitWholeArrayElement, .or_);
 }
 
-fn emitWholeArrayScalarReduction(
+fn emitWholeArrayScalarReductionImpl(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
     left_expr: *Expr,
-    left: WholeArrayView,
-    right: *Expr,
-) EmitError!ValueRef {
-    const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    const rhs = try dispatch.emitExpr(ctx, builder, right);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
-    }
-    return acc;
-}
-
-fn emitScalarWholeArrayReduction(
-    ctx: *Context,
-    builder: anytype,
-    op: ast.BinaryOp,
-    left: *Expr,
     right_expr: *Expr,
-    right: WholeArrayView,
+    whole_array_view: WholeArrayView,
+    whole_array_on_left: bool,
+    reduce_op: ast.BinaryOp,
 ) EmitError!ValueRef {
-    const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = utils.zeroValue(.i1);
-    const lhs = try dispatch.emitExpr(ctx, builder, left);
+    const count = whole_array_view.count orelse return error.UnsupportedIntrinsicType;
+    var acc = if (reduce_op == .and_)
+        ValueRef{ .name = "1", .ty = .i1, .is_ptr = false }
+    else
+        utils.zeroValue(.i1);
+    const scalar_expr = if (whole_array_on_left) right_expr else left_expr;
+    const scalar = try dispatch.emitExpr(ctx, builder, scalar_expr);
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right_expr, rhs);
-        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+        const array_value = try emitWholeArrayElement(ctx, builder, whole_array_view, idx);
+        const lhs = if (whole_array_on_left) array_value else scalar;
+        const rhs = if (whole_array_on_left) scalar else array_value;
+        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right_expr, rhs);
+        acc = try binary.emitBinary(ctx, builder, reduce_op, acc, cmp);
     }
     return acc;
 }
@@ -939,46 +881,6 @@ fn emitWholeArrayWholeArrayReductionAll(
     return emitWholeArrayCompareReductionAll(ctx, builder, op, left_expr, right_expr, left, right, true, emitWholeArrayElement, emitWholeArrayElement);
 }
 
-fn emitWholeArrayScalarReductionAll(
-    ctx: *Context,
-    builder: anytype,
-    op: ast.BinaryOp,
-    left_expr: *Expr,
-    left: WholeArrayView,
-    right: *Expr,
-) EmitError!ValueRef {
-    const count = left.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    const rhs = try dispatch.emitExpr(ctx, builder, right);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
-        const cmp = try emitReductionCompare(ctx, builder, op, left_expr, lhs, right, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
-}
-
-fn emitScalarWholeArrayReductionAll(
-    ctx: *Context,
-    builder: anytype,
-    op: ast.BinaryOp,
-    left: *Expr,
-    right_expr: *Expr,
-    right: WholeArrayView,
-) EmitError!ValueRef {
-    const count = right.count orelse return error.UnsupportedIntrinsicType;
-    var acc = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    const lhs = try dispatch.emitExpr(ctx, builder, left);
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
-        const cmp = try emitReductionCompare(ctx, builder, op, left, lhs, right_expr, rhs);
-        acc = try binary.emitBinary(ctx, builder, .and_, acc, cmp);
-    }
-    return acc;
-}
-
 fn emitConstructorConstructorReductionAll(
     ctx: *Context,
     builder: anytype,
@@ -1040,5 +942,3 @@ fn emitScalarConstructorReductionAll(
     }
     return acc;
 }
-
-

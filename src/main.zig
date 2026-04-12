@@ -1,6 +1,7 @@
 const std = @import("std");
 const Col6Forge = @import("Col6Forge");
 const cc_driver = @import("driver/cc_driver.zig");
+const pause_mode_shared = @import("driver/shared/pause_mode.zig");
 
 pub fn main() void {
     runMain() catch |err| {
@@ -246,12 +247,12 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         if (std.mem.eql(u8, arg, "-fpause-mode")) {
             if (i + 1 >= args.len) return .{ .failure = .missing_pause_mode };
             i += 1;
-            pause_mode = parsePauseMode(args[i]) orelse return .{ .failure = .{ .invalid_pause_mode = args[i] } };
+            pause_mode = pause_mode_shared.parsePauseMode(args[i]) orelse return .{ .failure = .{ .invalid_pause_mode = args[i] } };
             continue;
         }
         if (std.mem.startsWith(u8, arg, "-fpause-mode=")) {
             const value = arg["-fpause-mode=".len..];
-            pause_mode = parsePauseMode(value) orelse return .{ .failure = .{ .invalid_pause_mode = value } };
+            pause_mode = pause_mode_shared.parsePauseMode(value) orelse return .{ .failure = .{ .invalid_pause_mode = value } };
             continue;
         }
         if (std.mem.eql(u8, arg, "-ftime-report") or std.mem.eql(u8, arg, "--time-report")) {
@@ -310,13 +311,6 @@ fn parseDialect(value: []const u8) ?Col6Forge.Dialect {
     if (std.ascii.eqlIgnoreCase(value, "f95")) return .default;
     if (std.ascii.eqlIgnoreCase(value, "f77")) return .f77_legacy;
     if (std.ascii.eqlIgnoreCase(value, "legacy")) return .f77_legacy;
-    return null;
-}
-
-fn parsePauseMode(value: []const u8) ?Col6Forge.PauseMode {
-    if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
-    if (std.ascii.eqlIgnoreCase(value, "continue")) return .continue_;
-    if (std.ascii.eqlIgnoreCase(value, "stop")) return .stop;
     return null;
 }
 

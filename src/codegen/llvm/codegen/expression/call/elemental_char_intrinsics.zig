@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
+const analysis_dispatch = @import("array_actuals/analysis_dispatch.zig");
 const runtime_fail = @import("../../runtime_fail.zig");
 const casting = @import("../casting.zig");
 const shared = @import("shared.zig");
@@ -18,6 +19,8 @@ const IntrinsicKind = enum {
     ichar,
     achar,
 };
+
+const evalConstIntArg = analysis_dispatch.evalConstIntArg;
 
 pub fn analyzeElementalCharCodeArrayActual(
     ctx: *Context,
@@ -172,21 +175,6 @@ fn emitAcharArrayActual(
         .owned_heap_ptr = dst_ptr,
         .contiguous = true,
     });
-}
-
-fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
-    return switch (expr.*) {
-        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
-        .unary => |un| {
-            const value = evalConstIntArg(ctx, un.expr) orelse return null;
-            return switch (un.op) {
-                .plus => value,
-                .minus => -value,
-                else => null,
-            };
-        },
-        else => null,
-    };
 }
 
 fn integerKindToIRType(kind_value: i64) ?IRType {

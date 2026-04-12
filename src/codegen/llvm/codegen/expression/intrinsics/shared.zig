@@ -259,7 +259,7 @@ fn integerKindToIRType(kind_value: i64) ?IRType {
     return .i32;
 }
 
-fn emitLogicalLikeI1(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+pub fn emitLogicalLikeI1(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
     return switch (value.ty) {
         .i1 => value,
         .i32, .i64 => blk: {
@@ -276,13 +276,12 @@ fn emitLogicalLikeI1(ctx: *Context, builder: anytype, value: ValueRef) EmitError
     };
 }
 
-fn emitI1ToI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+pub fn emitI1ToI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
     if (value.ty != .i1) return error.UnsupportedIntrinsicType;
     const tmp = try ctx.nextTemp();
     try builder.cast(tmp, "zext", .i1, value, .i32);
     return .{ .name = tmp, .ty = .i32, .is_ptr = false };
 }
-
 
 pub fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
     return .{ .name = utils.formatFloatValue(ctx.allocator, value, ty), .ty = ty, .is_ptr = false };
