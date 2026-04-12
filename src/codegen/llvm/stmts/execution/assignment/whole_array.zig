@@ -593,6 +593,51 @@ pub fn emitWholeArrayExprAssignment(ctx: *Context, builder: anytype, assign: ast
     return true;
 }
 
+pub fn emitDirectArrayActualAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target_actual_resolved = (resolveArrayActual(ctx, builder, assign.target) catch |err| switch (err) {
+        error.UnsupportedArrayConstructor => null,
+        else => return err,
+    }) orelse return false;
+    const source_actual = (resolveArrayActual(ctx, builder, assign.value) catch |err| switch (err) {
+        error.UnsupportedArrayConstructor => null,
+        else => return err,
+    }) orelse return false;
+
+    var target_actual = target_actual_resolved;
+    try target_actual.validate();
+    try source_actual.validate();
+    if (target_actual.extents.len == 0 or target_actual.extents.len != source_actual.extents.len) return false;
+    if (target_actual.storage == .materialized_temp or target_actual.owned_heap_ptr != null) return false;
+
+    switch (assign.target.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return false;
+            if (sym.dims.len == 0 or sym.isCharacter()) return false;
+            target_actual.base_ptr = try wholeArrayBasePtr(ctx, builder, name, sym);
+        },
+        .component => |comp| {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return false;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return false;
+            if (component.type_spec.lowered_kind == .character) return false;
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return false;
+            if (sym.isCharacter()) return false;
+        },
+        else => return false,
+    }
+
+    try emitRequireActualArrayShape(ctx, builder, target_actual.extents, source_actual.extents);
+    const elem_count = try emitExtentProductI64(ctx, builder, source_actual.extents);
+    if (target_actual.elem_ty == source_actual.elem_ty) {
+        try emitSectionArrayActualAssignmentLoop(ctx, builder, target_actual, source_actual, elem_count);
+    } else {
+        try emitSectionArrayActualCoerceAssignmentLoop(ctx, builder, target_actual, source_actual, elem_count);
+    }
+    try emitOwnedHeapActualFree(ctx, builder, source_actual.owned_heap_ptr);
+    return true;
+}
+
 fn isIsoCPointerArray(sym: ast.sema.Symbol) bool {
     if (sym.loweredKind() != .derived) return false;
     const derived_name = sym.type_spec.derived_type_name orelse return false;

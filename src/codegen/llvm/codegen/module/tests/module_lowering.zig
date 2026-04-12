@@ -453,6 +453,48 @@ test "emitModuleToWriter does not treat type-bound function calls as whole-array
     try testing.expect(std.mem.indexOf(u8, output, "llvm.memmove") == null);
 }
 
+test "emitModuleToWriter lowers direct array-actual assignment for pointer array target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod1\n" ++
+        "  type t1\n" ++
+        "    real :: f1\n" ++
+        "  end type t1\n" ++
+        "  type t2\n" ++
+        "    type(t1), pointer :: f2(:)\n" ++
+        "  end type t2\n" ++
+        "end module mod1\n" ++
+        "module mod2\n" ++
+        "  use mod1\n" ++
+        "  type(t1), pointer, save :: v(:)\n" ++
+        "contains\n" ++
+        "  subroutine foo(x)\n" ++
+        "    use mod1\n" ++
+        "    implicit none\n" ++
+        "    type(t2) :: x\n" ++
+        "    v = x%f2(:)\n" ++
+        "  end subroutine foo\n" ++
+        "end module mod2\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "direct_array_actual_pointer_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "section_array_assign_body") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "load ptr, ptr @save_mod_mod2__foo_v") != null);
+}
+
 test "emitModuleToWriter preserves pointer declarator initializer semantics for null()" {
     const testing = std.testing;
     const allocator = testing.allocator;
